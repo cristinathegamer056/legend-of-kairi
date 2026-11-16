@@ -14,6 +14,24 @@
 //   SAVAGEWIND_SORA_FOVY=<deg>      without a projection found: this fovy (default 50), the game image's aspect
 //   SAVAGEWIND_SORA_OCCLUDE=0       no test against BotW's scene depth (exec.c vk_scene_depth): Sora over everything
 //   SAVAGEWIND_SORA_DEPTH_DEBUG=1   Sora painted grey = scene depth / his depth * 0.5 (0.5: the world at his depth)
+//                              =2   (s232 amdtest2) colour steps: R = scene depth vs his (0 / 0.5 / 1), G = the RAW depth
+//                                   sample (0 / 0.5 / 1), B = the pd block's occlusion mode (leaf 1 / near cut 0.5 / none 0)
+//                              =3   (s232) R / G = the sample point uv.x / uv.y in 4 steps, B = the test says hidden;
+//                                   checker = uv outside 0..1, yellow stripes = pd block / push constants not as sent
+//   SAVAGEWIND_SORA_DEPTH_GUARD=1   (s232 candidate fix 1, default off) a scene depth sample within 0.3 m of the camera (or
+//                                   not a depth at all) counts as no data: it does not hide the bodies
+//   SAVAGEWIND_SORA_DEPTH_COPY=1    (s232 candidate fix 2, default off) the bodies sample a fresh copy of the scene depth
+//                                   (exec.c vk_scene_depth_copy) instead of the live target
+//                             =2    (s233 amdtest3 candidate) the same copy, the scene depth moved GENERAL -> DEPTH_STENCIL_
+//                                   ATTACHMENT_OPTIMAL (+ an empty pass) -> TRANSFER_SRC_OPTIMAL for it, then back to GENERAL
+//   SAVAGEWIND_VK_DEPTH_FEEDBACK_USAGE=1  (s233 candidate, textures.c, at launch) depth images made with the feedback-loop usage
+//   SAVAGEWIND_SORA_DEPTH_DIAG=1    (s232/s233) diag lines every ~300 passes + (s233) the depth self-test twice a run
+//   SAVAGEWIND_SORA_DEPTH_LAYOUT=1  (s233 amdtest3 candidate, default off) the scene depth GENERAL -> DEPTH_STENCIL_READ_
+//                                   ONLY_OPTIMAL before the pass, sampled in that layout, back to GENERAL after it
+//                               =2  the same with SHADER_READ_ONLY_OPTIMAL
+//                               =3  GENERAL -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL, an empty pass with it attached (LOAD /
+//                                   STORE), -> DEPTH_STENCIL_READ_ONLY_OPTIMAL; back to GENERAL after the pass
+//                                   (exec.c vk_scene_depth_layout_begin / _end; with a depth copy in use: nothing done)
 //   SAVAGEWIND_SORA_SHADOW=0        no blob shadow (the KH2-style dark disc on the floor under him, see "the shadow")
 //   SAVAGEWIND_SORA_SHADOW_DROP=0   no scene-depth decal for the disc (s39 option B): a flat disc at sora.c's floor
 //   SAVAGEWIND_SORA_UI_ORDER=0      (s57) the old order: actors over the window image at present, over BotW's HUD and
@@ -53,6 +71,8 @@ static inline void mod_update_set(const VkWriteDescriptorSet *w) {
 #include <errno.h>
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include "sora_win.h"  // (s238 Deck port: LONG + Interlocked* / MemoryBarrier shims for the draw-fail note)
 #endif
 #include <time.h>
 #include "sora_draw.h"
@@ -69,6 +89,13 @@ bool linkpos_camera_proj(float p[4]);
 VkImageView vk_frame_view(void);
 VkExtent2D vk_frame_extent(void);
 bool vk_scene_depth(VkImageView *view, float uv[4], uint32_t *w, uint32_t *h, uint32_t *draws);
+void vk_scene_depth_describe(char *out, size_t n);  // (s232 amdtest2, exec.c: log only)
+VkImageView vk_scene_depth_copy(int mode);          // (s232 amdtest2, exec.c: SAVAGEWIND_SORA_DEPTH_COPY=1 / (s233) =2 only)
+VkImageLayout vk_scene_depth_layout_begin(int mode, VkImageView view);  // (s233 amdtest3, exec.c: SAVAGEWIND_SORA_DEPTH_LAYOUT only)
+void vk_scene_depth_layout_end(void);                                   // (s233)
+void vk_scene_depth_describe3(char *out, size_t n);                     // (s233 amdtest3, exec.c: log only)
+void vk_scene_depth_selftest(void);                                     // (s233 amdtest3, exec.c: SAVAGEWIND_SORA_DEPTH_DIAG only)
+void sora_fx_sdepth_layout(VkImageLayout l);                            // (s233, sora_fx.c: the layout its sdepth is in)
 bool vk_sun_cascade(VkImageView *view, float m[16], uint32_t *w, uint32_t *h);  // (s124 b, exec.c)
 bool renderer_origin_lower_left(void);
 uint32_t nvn_depth_mode(void);
@@ -148,7 +175,11 @@ void sora_draw_set_sync(int mode, int off, int diag) {  // (DLL, looked up by na
 // (mp2-perf) Remote avatar perf cuts (DLL "set drawperf N", sora_draw_set_perf): bit 1 = C1 (bones blended once per publish),
 // 2 = C2 (static index buffer per actor), 4 = C3 (one vertex-buffer copy fewer per side), 8 = C4 (cached descriptor sets),
 // 16 = verify (one-shot, not kept: the old and the new path on the same input, memcmp logged). A cleared cut bit = the old
-// path. Default all four cuts on. Timers (smoothed 0.98/0.02 + max, ms) go into the 300-frame "[sora-draw]   perf" line:
+// path. Default (s241): C1-C3 on, C4 OFF = set 1 (scene depth + sun cascade) is a fresh set bound right before every body draw.
+// AMD's own Windows driver (RX 6700 XT, 26.10.2, GitHub issue 2) loses the per-pass set-1 binding before the draw: the bodies
+// then sampled a BotW set and were hidden. The player verified the per-draw path (AMD test 4b F). Cost on the RTX: not
+// measurable (uncapped, 3 bodies, 20 alternating pairs: -0.9 +/- 1.6 fps of 76; rec +0.008 ms a pass), so it is on for every
+// card. "set drawperf 15" = the cached per-pass set again. Timers (smoothed 0.98/0.02 + max, ms) go into the 300-frame "[sora-draw]   perf" line:
 // game thread (skin_publish): skin = bone blend + vertex skinning, norm = skin_normals, pub = the copies under g_lock
 // (lock wait included); render thread (draw_pass): snap = snapshot copy under g_lock, up = vertex / index buffer uploads,
 // rec = draw recording. [0] = the body actor, [1] = the other shown actors (game thread: per call, avg and max of one call;
@@ -158,7 +189,7 @@ void sora_draw_set_sync(int mode, int off, int diag) {  // (DLL, looked up by na
 #define PERF_C3 4
 #define PERF_C4 8
 #define PERF_VERIFY 16
-#define PERF_DEFAULT 15
+#define PERF_DEFAULT 7  // (s241: C4 off for every card, see above; was 15)
 typedef struct { double avg, mx; } PerfT;
 static volatile int g_perf = PERF_DEFAULT, g_perf_verify, g_perf_verify_r;  // (_r: the render thread's one-shot check, set by the game side)
 static struct { PerfT skin[2], norm[2], pub[2], snap[2], up[2], rec[2]; unsigned others; } g_pf;
@@ -1433,6 +1464,13 @@ static const char *FRAG_SRC =
     "layout(set = 0, binding = 0) uniform sampler2D tex;\n"
     "layout(set = 1, binding = 0) uniform sampler2D sdepth;\n"
     "layout(set = 1, binding = 1) uniform sampler2D sdw;\n"  // (s124 b) BotW's sun cascade layer 0 (depth)
+    // (s236 amdtest4a) every scene depth read goes through SD(): as before, or (SAVAGEWIND_SORA_DEPTH_FETCH=1 -> SD_FETCH)
+    // texelFetch of the same texel (no sampler state, no LOD, no derivatives)
+    "#ifdef SD_FETCH\n"
+    "#define SD(uv) texelFetch(sdepth, clamp(ivec2((uv) * vec2(textureSize(sdepth, 0))), ivec2(0), textureSize(sdepth, 0) - 1), 0).r\n"
+    "#else\n"
+    "#define SD(uv) texture(sdepth, uv).r\n"
+    "#endif\n"
     PC_DECL
     "layout(location = 0) in vec2 v_uv;\n"
     "layout(location = 1) in float v_a;\n"
@@ -1495,7 +1533,7 @@ static const char *FRAG_SRC =
     "    return pc.k.z < 1.5 ? 2.0 * n * f / (f + n - (2.0 * d - 1.0) * (f - n)) : n * f / (f - d * (f - n));\n"
     "}\n"
     "float scene_z(vec2 s) {\n"  // the scene's eye depth at viewport point s (0..1)
-    "    return lin_z(texture(sdepth, pc.duv.xy + s * pc.duv.zw).r);\n"
+    "    return lin_z(SD(pc.duv.xy + s * pc.duv.zw));\n"
     "}\n"
     "void main() {\n"
     "    vec2 s = (gl_FragCoord.xy - pc.vp.xy) / pc.vp.zw;\n"
@@ -1528,24 +1566,74 @@ static const char *FRAG_SRC =
     "        float tn = max(max(min(t1.x, t2.x), min(t1.y, t2.y)), min(t1.z, t2.z)), tf = min(min(max(t1.x, t2.x), max(t1.y, t2.y)), max(t1.z, t2.z));\n"
     "        if (tn <= tf && tf > 0.0 && tn < 1.0) discard;\n"
     "    }\n"
-    "    float ze = 1.0 / gl_FragCoord.w, zs = 1e30;\n"
+    // (s232 amdtest2) raw / suv / hid outside the block for the debug views 2 / 3: zs = lin_z(raw) = scene_z(s), as before
+    "    float ze = 1.0 / gl_FragCoord.w, zs = 1e30, raw = -1.0;\n"
+    "    vec2 suv = pc.duv.xy + s * pc.duv.zw;\n"
+    "    bool hid = false;\n"
     "    if (pc.k.z > 0.5) {\n"
-    "        zs = scene_z(s);\n"
+    "        raw = SD(suv);\n"
+    "        zs = lin_z(raw);\n"
     "        float lim = pc.z.z + ze * 0.002;\n"
-    "        bool hid = ze > zs + lim && !(zs < pd.s2.w && zs < ze * 0.6);\n"
+    "        hid = ze > zs + lim && !(zs < pd.s2.w && zs < ze * 0.6);\n"
     "        if (pd.s2.x > 0.0 && pc.z.w < 0.5 && hid && zs < pd.s2.z) {\n"  // (s105 leafmode 1: 4x4 neighbourhood)
     "            vec2 base = pc.duv.xy + s * pc.duv.zw, ts = pd.s2.x / vec2(textureSize(sdepth, 0));\n"
     "            vec2 lo = min(pc.duv.xy, pc.duv.xy + pc.duv.zw), hi = max(pc.duv.xy, pc.duv.xy + pc.duv.zw);\n"
     "            int cnt = 0;\n"
     "            for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++) {\n"
     "                vec2 q = clamp(base + (vec2(float(i), float(j)) - 1.5) * ts, lo, hi);\n"
-    "                if (ze > lin_z(texture(sdepth, q).r) + lim) cnt++;\n"
+    "                if (ze > lin_z(SD(q)) + lim) cnt++;\n"
     "            }\n"
     "            hid = float(cnt) >= pd.s1.x * 16.0 - 0.001;\n"  // s1.x = thr fraction on the bodies' pass
     "        }\n"
+    // (s232 candidate fix 1, SAVAGEWIND_SORA_DEPTH_GUARD=1 -> k.w = -1; never with k.w >= 0): a sample within 0.3 m of the
+    // camera (3 near planes at the least) or no depth at all (NaN, outside 0..1) = no data: it does not hide him
+    "        if (pc.k.w < -0.5 && (zs < max(3.0 * pc.z.x, 0.3) || !(raw >= 0.0 && raw <= 1.0))) hid = false;\n"
     "        if (pc.k.w < 0.5 && hid != (pd.s1.y > 0.0)) discard;\n"
     "    }\n"
-    "    if (pc.k.w > 0.5) { o = vec4(vec3(clamp(zs / ze * 0.5, 0.0, 1.0)), 1.0); return; }\n"
+    "    if (pc.k.w > 0.5) {\n"
+    "        if (pc.k.w < 1.5) { o = vec4(vec3(clamp(zs / ze * 0.5, 0.0, 1.0)), 1.0); return; }\n"  // view 1, as before
+    // (s232 amdtest2) views 2 / 3 in flat colour steps (a JPEG of them stays readable); checker cells / stripes 12 px
+    "        bool odd = mod(floor(gl_FragCoord.x / 12.0) + floor(gl_FragCoord.y / 12.0), 2.0) > 0.5;\n"
+    "        bool stripe = mod(floor((gl_FragCoord.x + gl_FragCoord.y) / 12.0), 2.0) > 0.5;\n"
+    "        vec3 col;\n"
+    // (s236 amdtest4a) view 4: 16 px bands down the screen, in this order: cyan marker | sdepth's size: green = the scene
+    // depth's (k.y = w * 4096 + h), red = binding 1's size, blue = the body texture's, yellow = 1 px or less, magenta = other
+    // | sdepth's size as a colour (w, h) / 4096 | binding 1's size the same way with blue 1 | the texelFetch value | the
+    // texture() value (both: black < 0.001, dark < 0.5, light < 0.9, white; magenta = not in 0..1)
+    "        if (pc.k.w > 3.5) {\n"
+    "            ivec2 sz = textureSize(sdepth, 0), sz1 = textureSize(sdw, 0), sz0 = textureSize(tex, 0);\n"
+    "            int band = int(mod(floor(gl_FragCoord.y / 16.0), 6.0));\n"
+    "            float vf = texelFetch(sdepth, clamp(ivec2(suv * vec2(sz)), ivec2(0), sz - 1), 0).r;\n"
+    "            float vt = texture(sdepth, suv).r, v = band == 4 ? vf : vt;\n"
+    "            if (band == 0) col = vec3(0.0, 1.0, 1.0);\n"
+    "            else if (band == 1) col = abs(float(sz.x) * 4096.0 + float(sz.y) - pc.k.y) < 0.5 ? vec3(0.0, 1.0, 0.0)\n"
+    "                : sz == sz1 ? vec3(1.0, 0.0, 0.0) : sz == sz0 ? vec3(0.0, 0.0, 1.0)\n"
+    "                : (sz.x <= 1 || sz.y <= 1) ? vec3(1.0, 1.0, 0.0) : vec3(1.0, 0.0, 1.0);\n"
+    "            else if (band == 2) col = vec3(vec2(sz) / 4096.0, 0.0);\n"
+    "            else if (band == 3) col = vec3(vec2(sz1) / 4096.0, 1.0);\n"
+    "            else col = !(v >= 0.0 && v <= 1.0) ? vec3(1.0, 0.0, 1.0) : vec3(v < 0.001 ? 0.0 : v < 0.5 ? 0.33 : v < 0.9 ? 0.66 : 1.0);\n"
+    "            o = vec4(col, 1.0);\n"
+    "            return;\n"
+    "        }\n"
+    "        if (pc.k.w < 2.5) {\n"  // view 2: R = scene depth vs his, G = the raw sample, B = the pd block's occlusion mode
+    "            float r = zs >= ze ? 1.0 : zs >= ze * 0.5 ? 0.5 : 0.0;\n"
+    "            float g = raw < 0.001 ? 0.0 : raw < 0.9 ? 0.5 : 1.0;\n"
+    "            float b = pd.s2.x > 0.0 ? 1.0 : pd.s2.w > 0.0 ? 0.5 : 0.0;\n"
+    "            col = vec3(r, g, b);\n"
+    "            if (!(raw >= 0.0 && raw <= 1.0) && odd) col = vec3(1.0, 0.0, 1.0);\n"
+    "        } else {\n"  // view 3: R / G = the sample point in 4 steps, B = hidden; pd checksum (CPU: k.y) + push constants
+    "            vec2 q = floor(clamp(suv, 0.0, 0.9999) * 4.0) / 3.0;\n"
+    "            col = vec3(q, hid ? 1.0 : 0.0);\n"
+    "            float chk = pd.s1.x + 2.0 * pd.s1.y + 3.0 * pd.s2.x + 0.25 * pd.s2.z + 5.0 * pd.s2.w + 7.0 * pd.oa.w + 11.0 * pd.s0.w;\n"
+    "            bool cok = abs(chk - pc.k.y) <= 0.001 * max(1.0, abs(pc.k.y)) && pc.k.z > 0.5 && pc.k.z < 2.5\n"
+    "                       && pc.z.x > 0.0 && pc.z.x < 1.0 && pc.z.y > 100.0;\n"
+    "            if (!cok && stripe) col = vec3(1.0, 1.0, 0.0);\n"
+    "            if ((any(lessThan(suv, vec2(0.0))) || any(greaterThan(suv, vec2(1.0)))) && odd) col = vec3(1.0, 0.0, 1.0);\n"
+    "        }\n"
+    "        if (pc.k.z < 0.5) col = vec3(0.25);\n"  // (no scene depth this frame: dark grey)
+    "        o = vec4(col, 1.0);\n"
+    "        return;\n"
+    "    }\n"
     "    vec3 rgb = c.rgb;\n"  // (s54 tint: toward the glow colour by its luminance, plus a little added light)
     // (s121 light) the bodies only (not the disc / decal / depth view); style 0 or no normal = the old look
     // (s126 lflat, v_sk.w) a cancelled normal (0: two-sided cards) = this triangle's camera-facing side, flat
@@ -1585,7 +1673,22 @@ static struct {  // (s54: shared by every actor; the textures + vb copy are per 
 static VkPipeline make_pipeline(VkFormat fmt, bool blend, bool depth_only) {
     static VkShaderModule vs, fs;
     if (!vs) vs = vk_compile_glsl(VERT_SRC, STAGE_VERTEX, "sora_draw.vert");
-    if (!fs) fs = vk_compile_glsl(FRAG_SRC, STAGE_FRAGMENT, "sora_draw.frag");
+    if (!fs) {
+        // (s236 amdtest4a) SAVAGEWIND_SORA_DEPTH_FETCH=1: the same shader with SD_FETCH defined (see FRAG_SRC)
+        const char *fe = getenv("SAVAGEWIND_SORA_DEPTH_FETCH");
+        static const char ver[] = "#version 450\n", def[] = "#define SD_FETCH 1\n";
+        const bool fetch = fe && *fe && atoi(fe) == 1 && !strncmp(FRAG_SRC, ver, sizeof ver - 1);
+        char *src = fetch ? malloc(strlen(FRAG_SRC) + sizeof def) : NULL;
+        if (src) {
+            memcpy(src, ver, sizeof ver - 1), memcpy(src + sizeof ver - 1, def, sizeof def - 1);
+            strcpy(src + sizeof ver - 1 + sizeof def - 1, FRAG_SRC + sizeof ver - 1);
+        }
+        fs = vk_compile_glsl(src ? src : FRAG_SRC, STAGE_FRAGMENT, src ? "sora_draw_fetch.frag" : "sora_draw.frag");
+        if (fe && *fe)
+            LOG("[sora-draw] amdtest4a: scene depth read by %s (SAVAGEWIND_SORA_DEPTH_FETCH=%s), shader %s\n",
+                src ? "texelFetch" : "texture()", fe, fs ? "compiled" : "FAILED");
+        free(src);
+    }
     if (!vs || !fs) {
         dg_latch("D3 Sora's shader did not compile (%s shader, GPU driver refused it)", !vs ? "vertex" : "fragment");
         return VK_NULL_HANDLE;
@@ -1938,7 +2041,8 @@ static void lat_diag(const DrawActor *a, int newest, int pick, uint64_t xtag, ui
 
 // (mp2-perf C4) The descriptor sets of one draw: set 0 = texture <tex> of <a> (C4: the persistent set, else a per-draw one), set 1 = BotW's
 // scene depth + the sun cascade (<fset>, one per draw pass; NULL = C4 off: a per-draw set, dv / sv with <fb> where a view is missing).
-static void bind_draw_sets(VkCommandBuffer cb, const DrawActor *a, uint32_t tex, VkDescriptorSet fset, VkImageView dv, VkImageView sv) {
+static void bind_draw_sets(VkCommandBuffer cb, const DrawActor *a, uint32_t tex, VkDescriptorSet fset, VkImageView dv, VkImageView sv,
+                           VkImageLayout dl) {  // (s233: dl = the layout dv is in, GENERAL unless SAVAGEWIND_SORA_DEPTH_LAYOUT)
     VkDescriptorSet s0 = fset ? a->gpu.tex_set[tex] : VK_NULL_HANDLE;
     if (!s0) {
         s0 = vk_alloc_set(G.set_layout);
@@ -1951,7 +2055,7 @@ static void bind_draw_sets(VkCommandBuffer cb, const DrawActor *a, uint32_t tex,
     if (!fset) {  // (the old cost: a set of its own per draw)
         VkDescriptorSet s1 = vk_alloc_set(G.set_layout1);
         const VkImageView fb = a->gpu.tex_view[0];
-        VkDescriptorImageInfo ii[2] = {{G.nearest, dv ? dv : fb, VK_IMAGE_LAYOUT_GENERAL}, {G.nearest, sv ? sv : fb, VK_IMAGE_LAYOUT_GENERAL}};
+        VkDescriptorImageInfo ii[2] = {{G.nearest, dv ? dv : fb, dv ? dl : VK_IMAGE_LAYOUT_GENERAL}, {G.nearest, sv ? sv : fb, VK_IMAGE_LAYOUT_GENERAL}};
         VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = s1, .dstBinding = 0, .descriptorCount = 2,
                                   .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = ii};
         mod_update_set(&w);
@@ -2125,13 +2229,28 @@ static bool draw_pass(VkImageView cv, VkFormat fmt, VkImageLayout lay, VkExtent2
     memcpy(g_last_mvp, pc.mvp, sizeof g_last_mvp);
     g_last_vp[0] = vx, g_last_vp[1] = vy, g_last_vp[2] = vw, g_last_vp[3] = vh, g_last_ok = true;
     // the world in front of Sora: BotW's scene depth (exec.c vk_scene_depth), linearised with the game's near / far
-    static int occl = -1, dbg_env;
+    static int occl = -1, dbg_env, dguard, dcopy, ddiag, dlayout;
     if (occl < 0) {
         const char *e = getenv("SAVAGEWIND_SORA_OCCLUDE");
         occl = e && *e ? atoi(e) : 1;
-        dbg_env = getenv("SAVAGEWIND_SORA_DEPTH_DEBUG") != NULL;
+        // (s232 amdtest2) set = view 1 as before; =2 / =3 the new views (any other value: view 1)
+        const char *d = getenv("SAVAGEWIND_SORA_DEPTH_DEBUG");
+        dbg_env = d ? (atoi(d) >= 2 && atoi(d) <= 4 ? atoi(d) : 1) : 0;  // (s236 amdtest4a: 4 = the image-size view)
+        const char *g = getenv("SAVAGEWIND_SORA_DEPTH_GUARD"), *c = getenv("SAVAGEWIND_SORA_DEPTH_COPY");
+        const char *dd = getenv("SAVAGEWIND_SORA_DEPTH_DIAG");
+        dguard = g && *g && atoi(g) == 1, dcopy = c && *c && (atoi(c) == 1 || atoi(c) == 2) ? atoi(c) : 0, ddiag = dd && *dd && atoi(dd);
+        const char *dl = getenv("SAVAGEWIND_SORA_DEPTH_LAYOUT");  // (s233 amdtest3: 1 / 2 / 3, anything else off)
+        dlayout = dl && *dl && atoi(dl) >= 1 && atoi(dl) <= 3 ? atoi(dl) : 0;
+        if (dbg_env || dguard || dcopy)
+            LOG("[sora-draw] amdtest2 switches: depth view %d, guard %d, depth copy %d, diag %d (occlusion %d)\n", dbg_env, dguard,
+                dcopy, ddiag, occl);
+        const char *fu = getenv("SAVAGEWIND_VK_DEPTH_FEEDBACK_USAGE");  // (s233: read by textures.c; here for the log line only)
+        if (dbg_env || dguard || dcopy || dlayout || ddiag)
+            LOG("[sora-draw] amdtest3 switches: depth layout %d (1 DS read-only, 2 shader read-only, 3 via attachment), depth copy %d "
+                "(2 = via DS attachment + TRANSFER_SRC), depth feedback usage %d, guard %d, depth view %d, diag %d, occlusion %d\n",
+                dlayout, dcopy, fu && *fu && atoi(fu) == 1, dguard, dbg_env, ddiag, occl);
     }
-    const int dbg = dbg_env || g_depth_dbg;  // (s105: also the live key depthdbg)
+    const int dbg = dbg_env ? dbg_env : g_depth_dbg ? 1 : 0;  // (s105: also the live key depthdbg; s232: 2 / 3 = the new views)
     VkImageView dview = VK_NULL_HANDLE;
     uint32_t dw = 0, dh = 0, ddraws = 0;
     float mode = 0;
@@ -2156,6 +2275,21 @@ static bool draw_pass(VkImageView cv, VkFormat fmt, VkImageLayout lay, VkExtent2
     PdRing pdr = {0};  // (s183 amd) at most one push per shadow + one per (scissor rect <= 4, pass <= 4) per drawn actor
     pd_begin(&pdr, (uint32_t)nvalid * 17 + 1);
     if (window) vk_frame_suspend();
+    if (ddiag && dview && mode > 0) {  // (s233 amdtest3 self-test: twice a run, DIAG only; the image stays in GENERAL)
+        vk_scene_depth_selftest();
+        cb = vk_cmd();
+    }
+    if (dcopy && dview && mode > 0) {  // (s232 candidate fix 2: outside any rendering here; off = this never runs)
+        VkImageView cv2 = vk_scene_depth_copy(dcopy);
+        if (cv2) dview = cv2;
+        cb = vk_cmd();
+    }
+    VkImageLayout dlay = VK_IMAGE_LAYOUT_GENERAL;  // (s233 amdtest3: the layout the scene depth is sampled in this pass)
+    if (dlayout && dview && mode > 0) {  // (s233 candidates: outside any rendering; off = this never runs; back after the pass)
+        dlay = vk_scene_depth_layout_begin(dlayout, dview);
+        cb = vk_cmd();
+    }
+    sora_fx_sdepth_layout(dlay);
     vk_full_barrier(cb);  // (the game image's draw into the window image / BotW's composite before our load of it)
     VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = cv,
                                     .imageLayout = lay,
@@ -2171,16 +2305,28 @@ static bool draw_pass(VkImageView cv, VkFormat fmt, VkImageLayout lay, VkExtent2
     rec_CmdSetViewport(cb, 0, 1, &vp);
     rec_CmdSetScissor(cb, 0, 1, &sc);
     VkDescriptorSet fset = VK_NULL_HANDLE;  // (mp2-perf C4) set 1 for the whole pass: scene depth + sun cascade (views missing: an actor's texture 0, never sampled then)
+    const DrawActor *fa = NULL;  // (the first drawn actor: nvalid > 0 here)
+    for (int i = 0; i < nact && !fa; i++)
+        if (s[i].valid) fa = &g_act[i];
     if (g_perf & PERF_C4) {
-        VkImageView fb = VK_NULL_HANDLE;
-        for (int i = 0; i < nact && !fb; i++)
-            if (s[i].valid) fb = g_act[i].gpu.tex_view[0];
+        VkImageView fb = fa->gpu.tex_view[0];
         fset = vk_alloc_set(G.set_layout1);
-        VkDescriptorImageInfo ii[2] = {{G.nearest, dview ? dview : fb, VK_IMAGE_LAYOUT_GENERAL}, {G.nearest, sdw_view ? sdw_view : fb, VK_IMAGE_LAYOUT_GENERAL}};
+        VkDescriptorImageInfo ii[2] = {{G.nearest, dview ? dview : fb, dview ? dlay : VK_IMAGE_LAYOUT_GENERAL}, {G.nearest, sdw_view ? sdw_view : fb, VK_IMAGE_LAYOUT_GENERAL}};
         VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fset, .dstBinding = 0, .descriptorCount = 2,
                                   .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = ii};
         mod_update_set(&w);
-        rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, G.layout, 1, 1, &fset, 0, NULL);
+    }
+    // (s227 sets) set 0 FIRST, with G.layout, before any set 1 / set 2 of ours: the set 0 bound on this command buffer before
+    // the pass is BotW's (its own pipeline layout), and a set-0 bind over a set bound with an incompatible layout disturbs
+    // every higher set (Vulkan "Pipeline Layout Compatibility"), which left set 1 (scene depth) and set 2 (pd_push) invalid
+    // at the body draws (VUID-vkCmdDrawIndexed-None-08600; AMD issue 2 suspect F2). From here on every bind of the pass uses
+    // G.layout, so none disturbs another (pd_push's skip of an unchanged block stays valid).
+    if (fset && fa->gpu.tex_set[0]) {
+        VkDescriptorSet s01[2] = {fa->gpu.tex_set[0], fset};
+        rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, G.layout, 0, 2, s01, 0, NULL);
+    } else {  // (no persistent texture set / C4 off: a per-draw set 0 (+ set 1 when C4 is off), then set 1 of the pass)
+        bind_draw_sets(cb, fa, 0, fset, dview, sdw_view, dlay);
+        if (fset) rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, G.layout, 1, 1, &fset, 0, NULL);
     }
     {  // (s121 light) binding 1, per instance: record 2 * actor = its light, 2 * actor + 1 = the same unlit (style 0: shadow
        // discs, KH2 NoLight groups); a draw picks its record with firstInstance
@@ -2283,7 +2429,7 @@ static bool draw_pass(VkImageView cv, VkFormat fmt, VkImageLayout lay, VkExtent2
         pd.s0[0] = sh->floor_y, pd.s0[1] = sh->radius, pd.s0[2] = sh->fade_h, pd.s0[3] = sh->min_scale;
         pd.s1[0] = sh->min_alpha, pd.s1[1] = 0, pd.s1[2] = SHADOW_DROP_MAX, pd.s1[3] = SHADOW_LIFT;
         pd_push(cb, &pdr, &pc, &pd);
-        bind_draw_sets(cb, &g_act[ai], 0, fset, dview, sdw_view);
+        bind_draw_sets(cb, &g_act[ai], 0, fset, dview, sdw_view, dlay);
         rec_CmdDrawIndexed(cb, SHADOW_SEG * 3, 1, 0, 0, (uint32_t)(2 * ai + 1));
     }
     memcpy(pc.mvp, mvp_keep, sizeof mvp_keep);
@@ -2337,6 +2483,11 @@ static bool draw_pass(VkImageView cv, VkFormat fmt, VkImageLayout lay, VkExtent2
             if (mx1 < sx1) srect[nsr++] = (VkRect2D){{mx1, my0}, {(uint32_t)(sx1 - mx1), (uint32_t)(my1 - my0)}};  // right
         }
     }
+    bool a2_have = false;  // (s232 amdtest2 diag log: what the CPU hands one body draw, the first opaque push of a2_actor)
+    BodyPC a2_pc;
+    BodyPD a2_pd;
+    int a2_actor = s[g_body].valid ? g_body : 0;
+    while (a2_actor < nact - 1 && !s[a2_actor].valid) a2_actor++;
     for (int ri = 0; ri < nsr; ri++) {
     rec_CmdSetScissor(cb, 0, 1, &srect[ri]);
     if (fset) rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, G.layout, 1, 1, &fset, 0, NULL);
@@ -2347,9 +2498,21 @@ static bool draw_pass(VkImageView cv, VkFormat fmt, VkImageLayout lay, VkExtent2
             if (!s[ai].valid || (pass >= 2 && !(s[ai].ghost > 0.004f && mode > 0 && !dbg))) continue;
             const uint64_t pf_tr = plat_now_ns();
             pc.k[0] = pass == 1 ? 0.02f : 0.5f, pc.k[1] = (float)(pass == 1), pc.k[2] = mode, pc.k[3] = dbg ? 1.0f : 0.0f;
+            if (dbg) pc.k[3] = (float)dbg;                // (s232 amdtest2: the view's number; 1 as before)
+            else if (dguard && mode > 0) pc.k[3] = -1.0f;  // (s232 candidate fix 1: the shader's guard; off = 0 as before)
             pd.s1[1] = pass >= 2 ? s[ai].ghost : 0;
             memcpy(pd.t, s[ai].tint, sizeof pd.t);
             pd_set_org(&pd, pc.mvp, s[ai].feet);  // (s217 depth; pc.mvp = mvp_keep here, after the cam.shift edit)
+            if (dbg == 3)  // (s232 view 3: k.y = the pd checksum the shader recomputes from the block it reads; k.y unused there)
+                pc.k[1] = pd.s1[0] + 2 * pd.s1[1] + 3 * pd.s2[0] + 0.25f * pd.s2[2] + 5 * pd.s2[3] + 7 * pd.oa[3] + 11 * pd.s0[3];
+            if (dbg == 4) {  // (s236 view 4: k.y = the scene depth's size, w * 4096 + h: exact in a float below 4096)
+                static bool said;
+                pc.k[1] = (float)dw * 4096.0f + (float)dh;
+                if (!said)
+                    said = true, LOG("[sora-draw] amdtest4a view 4: scene depth %ux%u (k.y %.0f), binding 1 = %s, depth mode %.0f\n", dw,
+                                     dh, pc.k[1], sdw_view ? "the sun cascade" : "the body texture (filler)", mode);
+            }
+            if (!a2_have && pass == 0 && ai == a2_actor) a2_have = true, a2_pc = pc, a2_pd = pd;  // (s232 diag log: one body draw)
             pd_push(cb, &pdr, &pc, &pd);
             VkDeviceSize vo = vb[ai].off;
             rec_CmdBindVertexBuffers(cb, 0, 1, &vb[ai].buf, &vo);
@@ -2362,7 +2525,7 @@ static bool draw_pass(VkImageView cv, VkFormat fmt, VkImageLayout lay, VkExtent2
                     uint32_t c = a->gchain[g], want = s[ai].blade[c] ? s[ai].blade[c] : c + 1;
                     if (ATTR_ALT(gr->attr) != want) continue;
                 }
-                bind_draw_sets(cb, a, gr->tex, fset, dview, sdw_view);
+                bind_draw_sets(cb, a, gr->tex, fset, dview, sdw_view, dlay);
                 rec_CmdDrawIndexed(cb, gr->n, 1, gr->first, 0, (uint32_t)(2 * ai + ((gr->attr & ATTR_NOLIGHT) ? 1 : 0)));
             }
             p_rec[ai == g_body ? 0 : 1] += pf_ms(pf_tr);
@@ -2377,8 +2540,33 @@ static bool draw_pass(VkImageView cv, VkFormat fmt, VkImageLayout lay, VkExtent2
     if (scr) g_last_ok = false;  // (s59: no world camera this frame for sora_draw_project)
     rec_CmdEndRendering(cb);
     vk_full_barrier(cb);
+    if (dlay != VK_IMAGE_LAYOUT_GENERAL) vk_scene_depth_layout_end();  // (s233: the scene depth back in GENERAL, as the engine expects)
     if (window) vk_frame_resume();  // (the overlay menu draws after this)
     if (s[g_body].valid) g_dg_drawn = vk_frame_counter(), g_dg_skip = "";  // (s183 kairi-diag)
+    static uint64_t a2_n;  // (s232 amdtest2, issue 2) the CPU's truth for one body draw, every ~300 passes, with the
+    if ((ddiag || dbg || dguard || dcopy || dlayout) && a2_have && a2_n++ % 300 == 0) {  // depth diag / a debug view / a fix switch on
+        char dsc[400];
+        vk_scene_depth_describe(dsc, sizeof dsc);
+        const float *k = a2_pc.k, *u = a2_pc.duv, *p = a2_pc.vp, *z = a2_pc.z, *s1 = a2_pd.s1, *s2 = a2_pd.s2, *s0 = a2_pd.s0;
+        LOG("[sora-draw] amd2 cpu: actor %d pass 0 | pc duv %.4f %.4f %.4f %.4f vp %.1f %.1f %.1f %.1f z %.4f %.1f %.4f %.1f "
+            "k %.4f %.4f %.4f %.4f | pd s1 %.4f %.4f %.4f %.4f s2 %.4f %.4f %.4f %.4f s0.w %.4f oa.w %.1f org %.2f %.2f %.2f c3.w %.3f\n",
+            a2_actor, u[0], u[1], u[2], u[3], p[0], p[1], p[2], p[3], z[0], z[1], z[2], z[3], k[0], k[1], k[2], k[3], s1[0], s1[1],
+            s1[2], s1[3], s2[0], s2[1], s2[2], s2[3], s0[3], a2_pd.oa[3], a2_pd.org[0], a2_pd.org[1], a2_pd.org[2], a2_pd.c3[3]);
+        LOG("[sora-draw] amd2 cpu: depth mode %.0f (1 = GL minus-one, 2 = zero-to-one; nvn %u) view %p %ux%u (%u draws), %s copy | "
+            "set 1 %s (C4 %d) | pd ring stride %u (align %llu) slots %u spans %u | into the %s %ux%u format %d | switches view %d "
+            "guard %d copy %d leaf %d near cut %.2f | lin_z(raw 0) = %.3f m, raw 0.9 = %.3f m\n",
+            mode, nvn_depth_mode(), (void *)dview, dw, dh, ddraws, dcopy ? "WITH" : "no", fset ? "per pass" : "per draw",
+            (g_perf & PERF_C4) != 0, pdr.stride, (unsigned long long)g_vk.props.limits.minUniformBufferOffsetAlignment, pdr.slots,
+            pdr.spans, window ? "window image" : "game image", ext.width, ext.height, fmt, dbg, dguard, dcopy, g_leaf_mode,
+            g_near_cut, z[0], mode < 1.5f ? 2 * z[0] * z[1] / (z[1] + z[0] - 0.8f * (z[1] - z[0])) : z[0] * z[1] / (z[1] - 0.9f * (z[1] - z[0])));
+        LOG("[sora-draw] amd2 cpu: scene depth image %s\n", dsc);
+        char d3[700];  // (s233 amdtest3) usage, clears / attachment of this frame, what the candidates ran, the sampled layout
+        vk_scene_depth_describe3(d3, sizeof d3);
+        LOG("[sora-draw] amd3: switches layout %d copy %d guard %d view %d | body sampled the scene depth in layout %d (%s)%s | %s\n",
+            dlayout, dcopy, dguard, dbg, (int)dlay, dlay == VK_IMAGE_LAYOUT_GENERAL ? "GENERAL" : dlay == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ?
+            "SHADER_READ_ONLY_OPTIMAL" : dlay == VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL ? "DEPTH_STENCIL_READ_ONLY_OPTIMAL" : "other",
+            dcopy ? ", from the depth copy" : "", d3);
+    }
     if (G.drawn++ % 300 == 0) {
         LOG("[sora-draw]   ui order %d: drawn into the %s %ux%u (format %d); scene passes %llu, fallbacks %llu, skipped %llu\n",
             g_ui_order, window ? "window image" : "game image", ext.width, ext.height, fmt, (unsigned long long)g_ub.passes,

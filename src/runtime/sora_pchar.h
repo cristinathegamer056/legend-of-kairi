@@ -102,6 +102,20 @@ static inline bool pchar_offered(int slot, const int pchar[PCH_SLOTS], uint32_t 
         if (o[k] == c) return true;
     return false;
 }
+// (s233 dbgmenu) "None" on a Party row = the slot is empty this session (sora_party.h g_pslot_off; the slot keeps its own member,
+// held hidden). Not a character: never in g_pchar, never a PCH_TAB index; only a Debug Menu row value / live dbmparty1 / dbmparty2 value.
+#define PCH_NONE PCH_N
+// (s233) as pchar_step below, with none = "None" offered after the characters; pchar[] may hold PCH_NONE (the rows' values)
+static inline int pchar_step_n(int slot, const int pchar[PCH_SLOTS], uint32_t have, int dir, bool none) {
+    int o[PCH_N + 1], n = pchar_offer(slot, pchar, have, o), k = 0;
+    if (none && n > 0) o[n++] = PCH_NONE;
+    if (n <= 0) return -1;
+    while (k < n && o[k] != pchar[slot]) k++;
+    if (k == n) k = 0;  // (the one in force is not offered: as if on the home member)
+    if (dir == 0) return n > 1 ? o[(k + 1) % n] : -1;
+    k += dir > 0 ? 1 : -1;
+    return k >= 0 && k < n ? o[k] : -1;
+}
 // Left / Right (dir -1 / +1) on the row: the offered character before / after the slot's one, -1 at an end (clamped, as the Outfit
 // row); dir 0 = A: the next one, wrapping (-1 when the row offers nobody else)
 static inline int pchar_step(int slot, const int pchar[PCH_SLOTS], uint32_t have, int dir) {

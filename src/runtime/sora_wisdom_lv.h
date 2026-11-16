@@ -47,7 +47,9 @@ static void wl_load(int exp, const char *why) {  // (sl_slot_load: -1 = no "wisd
 }
 
 // an enemy died with Sora's credit (sora_levels.h sl_kill)
+static bool dbm_form_hold(void);  // (sora_dbgmenu.h)
 static void wl_kill(int flags) {
+    if (dbm_form_hold()) return;  // (s235 review fix) a form held by the Debug Menu (Drive Form row / Infinite Drive) earns no form EXP: none reaches the save
     if (!IN_WISDOM || (flags & 2)) return;
     wl_init();
     int lv0 = wl_lv();

@@ -49,7 +49,9 @@ static void ll_load(int exp, const char *why) {  // (sl_slot_load: -1 = no "limi
 }
 
 // a Limit command's finishing move started in Limit Form (sora_limit.h)
+static bool dbm_form_hold(void);  // (sora_dbgmenu.h)
 static void ll_finish(const char *what) {
+    if (dbm_form_hold()) return;  // (s235 review fix) a form held by the Debug Menu (Drive Form row / Infinite Drive) earns no form EXP: none reaches the save
     ll_init();
     int lv0 = ll_lv();
     uint32_t mx = LL_EXP_AT[LL_MAX_LV - 1];

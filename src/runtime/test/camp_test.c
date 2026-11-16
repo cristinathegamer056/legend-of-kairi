@@ -935,6 +935,46 @@ static bool test_dbg_outfit_rows(void) {
     PV = &GV;
     return true;
 }
+// (s233) the new rows: Infinite Drive / Infinite MP toggles, Drive Form + Mickey Rescue value lists after Drive Forms; Party rows' "None"
+static bool test_dbg_s233_rows(void) {
+    GD = GV, GD.db_v[11] = PCH_GOOFY, GD.db_party_have = 1u << PCH_RIKU, GD.db_party_none = 1;
+    PV = &GD;
+    CHECK(dbg_open_());
+    CHECK(CP_DB_ORD[7] == 2 && CP_DB_ORD[8] == 12 && CP_DB_ORD[9] == 15 && CP_DB_ORD[10] == 13 && CP_DB_ORD[11] == 14 && CP_DB_ORD[CP_DB_ROWS - 1] == 6);
+    for (int i = 0; i < 8; i++) pt_(2, CP_BTN_DOWN);  // shown row 8 = Infinite Drive (backend 12): a toggle
+    CHECK(P.db_row == 8 && P.db_top == 2);
+    pt_(2, CP_BTN_A); CHECK(PO.db_set == 13 && PO.db_val == 1 && P.db_v[12] == 1);
+    pt_(2, CP_BTN_DOWN); pt_(2, CP_BTN_RIGHT); CHECK(PO.db_set == 16 && PO.db_val == 1 && P.db_v[15] == 1);  // Infinite MP (backend 15)
+    pt_(2, CP_BTN_DOWN);  // Drive Form (backend 13): Off .. Anti, clamped, A wraps
+    char b[32];
+    cp_db_value_(b, sizeof b, &P, 10); CHECK(!strcmp(b, "Off"));
+    pt_(2, CP_BTN_LEFT); CHECK(PO.se == CP_SE_ERROR && PO.db_set == 0);
+    pt_(2, CP_BTN_RIGHT); CHECK(PO.db_set == 14 && PO.db_val == 1 && P.db_v[13] == 1);
+    cp_db_value_(b, sizeof b, &P, 10); CHECK(!strcmp(b, "Valor"));
+    for (int i = 0; i < 5; i++) pt_(2, CP_BTN_RIGHT);
+    CHECK(P.db_v[13] == 6); cp_db_value_(b, sizeof b, &P, 10); CHECK(!strcmp(b, "Anti"));
+    pt_(2, CP_BTN_RIGHT); CHECK(PO.se == CP_SE_ERROR && P.db_v[13] == 6);
+    pt_(2, CP_BTN_A); CHECK(PO.db_set == 14 && PO.db_val == 0 && P.db_v[13] == 0);
+    pt_(2, CP_BTN_DOWN);  // Mickey Rescue (backend 14): Off / Any Enemy / Now
+    pt_(2, CP_BTN_A); CHECK(PO.db_set == 15 && PO.db_val == 1);
+    cp_db_value_(b, sizeof b, &P, 11); CHECK(!strcmp(b, "Any Enemy"));
+    pt_(2, CP_BTN_RIGHT); CHECK(PO.db_val == 2); cp_db_value_(b, sizeof b, &P, 11); CHECK(!strcmp(b, "Now"));
+    pt_(2, CP_BTN_RIGHT); CHECK(PO.se == CP_SE_ERROR);
+    pt_(2, CP_BTN_A); CHECK(PO.db_set == 15 && PO.db_val == 0);
+    for (int i = 0; i < 12; i++) pt_(2, CP_BTN_UP);  // Party 1 (shown row 3): Donald, Riku, None, clamped; A wraps to Donald
+    for (int i = 0; i < 3; i++) pt_(2, CP_BTN_DOWN);
+    CHECK(P.db_row == 3);
+    pt_(2, CP_BTN_RIGHT); CHECK(PO.db_set == 11 && PO.db_val == PCH_RIKU);
+    pt_(2, CP_BTN_RIGHT); CHECK(PO.db_set == 11 && PO.db_val == PCH_NONE && P.db_v[10] == PCH_NONE);
+    cp_db_value_(b, sizeof b, &P, 3); CHECK(!strcmp(b, "None"));
+    pt_(2, CP_BTN_RIGHT); CHECK(PO.se == CP_SE_ERROR && PO.db_set == 0);
+    pt_(2, CP_BTN_DOWN); pt_(2, CP_BTN_LEFT); CHECK(PO.se == CP_SE_ERROR && PO.db_set == 0);  // Party 2 on Goofy: the start
+    pt_(2, CP_BTN_RIGHT); CHECK(PO.db_set == 12 && PO.db_val == PCH_RIKU);  // Party 2 may take Riku (Party 1 is None)
+    pt_(2, CP_BTN_RIGHT); CHECK(PO.db_set == 12 && PO.db_val == PCH_NONE);  // both None
+    pt_(2, CP_BTN_UP); pt_(2, CP_BTN_A); CHECK(PO.db_set == 11 && PO.db_val == PCH_DONALD);  // A wraps from None
+    PV = &GV;
+    return true;
+}
 
 static bool test_equip_forms(void) {
     ge_(KB_KINGDOM_KEY, KB_STAR_SEEKER);
@@ -1063,6 +1103,7 @@ int main(int argc, char **argv) {
     RUN(test_eqlook_off_switch);
     RUN(test_equip_forms);
     RUN(test_dbg_outfit_rows);
+    RUN(test_dbg_s233_rows);
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
     return fails ? 1 : 0;
 }

@@ -34,7 +34,11 @@
 // s181 mode 3 (the AI-phase runner, sora_esa_ai.h): per-actor locks. The test build (ESA_NO_EXE, one thread) gets a fake lock it can
 // set "busy" by hand.
 #ifndef ESA_NO_EXE
+#ifdef _WIN32
 #include <psapi.h>  // (K32GetProcessMemoryInfo lives in kernel32: no new lib)
+#else
+#include <sys/resource.h>  // (s238 Deck port: getrusage for the diag's page faults)
+#endif
 typedef SRWLOCK EsaLk;  // (zero = SRWLOCK_INIT)
 #define esa_lk_tryx(l) (TryAcquireSRWLockExclusive(l) != 0)
 #define esa_lk_xu(l) ReleaseSRWLockExclusive(l)
@@ -44,6 +48,7 @@ typedef SRWLOCK EsaLk;  // (zero = SRWLOCK_INIT)
 static double esa_qms(void) { LARGE_INTEGER q, f; QueryPerformanceCounter(&q), QueryPerformanceFrequency(&f); return (double)q.QuadPart * 1000.0 / (double)f.QuadPart; }
 // s182 diag: wall vs thread CPU vs page faults around one timed call (cycles = QueryThreadCycleTime, k+u = GetThreadTimes in 100 ns, pf = process-wide)
 typedef struct { double ms; uint64_t cyc, ku100ns, pf; } EsaRes;
+#ifdef _WIN32
 static uint64_t esa_ft(FILETIME f) { return ((uint64_t)f.dwHighDateTime << 32) | f.dwLowDateTime; }
 static EsaRes esa_res(void) {
     EsaRes r; memset(&r, 0, sizeof r);
@@ -68,6 +73,20 @@ static double esa_cyc_per_ms(void) {
     v = ms > 0 ? (double)(c1 - c0) / ms : 0;
     return v;
 }
+#else
+// (s238 Deck port) Linux: thread CPU = CLOCK_THREAD_CPUTIME_ID (k+u in 100 ns), page faults = getrusage (process-wide, as
+// on Windows); no thread cycle counter, so cyc stays 0 and cycles per ms is 0 (the callers' "not measured" answer).
+static EsaRes esa_res(void) {
+    EsaRes r; memset(&r, 0, sizeof r);
+    r.ms = esa_qms();
+    struct timespec ts;
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) == 0) r.ku100ns = ((uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec) / 100;
+    struct rusage ru;
+    if (getrusage(RUSAGE_SELF, &ru) == 0) r.pf = (uint64_t)ru.ru_minflt + (uint64_t)ru.ru_majflt;
+    return r;
+}
+static double esa_cyc_per_ms(void) { return 0; }
+#endif
 #else
 typedef struct { int x, s; } EsaLk;
 static inline bool esa_lk_tryx(EsaLk *l) { if (l->x || l->s) return false; l->x = 1; return true; }

@@ -12,6 +12,7 @@
                                                 driver, RAM) into "Legend of Kairi bug report <date-time>.zip" on the Desktop (no saves, no game files)
        and (s185) two shortcuts with the Legend of Kairi icon that start the first two: "Legend of Kairi.lnk", "Legend of Kairi
        Multiplayer.lnk" (shortcut.ps1; a failure is logged and never stops the install)
+    3. (s241) the "AMD test 1 - 4b" files (launchers, Install / Undo, scripts, the 0.1.8 backup folder) leave <root>: remove_amd_tests
     Re-running overwrites bin/ and the launchers; saves (the Savage Wind folder's save\\), data/ and logs/ are never touched.
 
 The mod finds its files through SORA_ROOT (runtime/sora_path.h maps every "D:/SoraBotW/..." default to <SORA_ROOT>/...), the mod DLL
@@ -22,6 +23,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -308,6 +310,26 @@ try {
 foreach ($n in $notes) { Add-Line ('note: ' + $n) }
 $si | Set-Content -LiteralPath (Join-Path $stage 'systeminfo.txt') -Encoding UTF8
 
+# (s235, issue 2) vulkaninfo.txt: what the graphics driver itself reports (formats, limits, extensions). The driver installs
+# vulkaninfo.exe in System32; full path, own process, 30 s limit (a hung driver must not hang the report). Scrubbed below like every .txt.
+try {
+    $vi = Join-Path $env:SystemRoot 'System32\vulkaninfo.exe'
+    if (Test-Path -LiteralPath $vi) {
+        $vo = Join-Path $stage 'vulkaninfo.txt'
+        $ve = Join-Path $stage 'vulkaninfo_err.txt'
+        $vp = Start-Process -FilePath $vi -WindowStyle Hidden -PassThru -RedirectStandardOutput $vo -RedirectStandardError $ve
+        if (-not $vp.WaitForExit(30000)) {
+            try { $vp.Kill() } catch { }
+            Add-Content -LiteralPath $ve -Value 'vulkaninfo did not finish in 30 s: stopped' -Encoding ASCII
+        }
+        if ((Test-Path -LiteralPath $ve) -and ((Get-Item -LiteralPath $ve).Length -eq 0)) { Remove-Item -LiteralPath $ve -Force }
+    } else {
+        Set-Content -LiteralPath (Join-Path $stage 'vulkaninfo.txt') -Value ('vulkaninfo.exe not found in ' + (Join-Path $env:SystemRoot 'System32')) -Encoding ASCII
+    }
+} catch {
+    try { Set-Content -LiteralPath (Join-Path $stage 'vulkaninfo.txt') -Value ('vulkaninfo failed: ' + $_.Exception.Message) -Encoding ASCII } catch { }
+}
+
 # (s185 sec) privacy scrub: every file in the report folder is read as bytes (Latin-1 keeps the bytes as they are, so UTF-8 text round-trips),
 # friends' IPs, Windows user names and this PC's name are replaced, and a file that cannot be scrubbed is LEFT OUT of the zip (never shipped as it is).
 $scrubExt = @('.log', '.txt', '.bat', '.cmd', '.ps1', '.json', '.ini', '.md', '.csv', '.xml', '.cfg', '.conf', '.yaml', '.yml')
@@ -585,6 +607,188 @@ def remove_old_multiplayer(root, log=print):
     return gone
 
 
+# (s241) "AMD test 1 - 4b" (GitHub issue 2, sent by DM: sb/s231 - s239 pkg): the fix is in this release, so their files leave the install
+# folder. Exact names only, never a wildcard (a player's own "AMD test notes.txt" stays); logs/ (the "amdtest* run N.log" copies) stays.
+AMD_LAUNCHERS = ("AMD test 2 - A (depth view).bat", "AMD test 2 - B (second view).bat", "AMD test 2 - C (guard on).bat",
+                 "AMD test 2 - D (depth copy on).bat", "AMD test 3 - A (fix try 1).bat", "AMD test 3 - B (fix try 2).bat",
+                 "AMD test 3 - C (fix try 3).bat", "AMD test 3 - D (fix try 4).bat", "AMD test 3 - E (guard on).bat",
+                 "AMD test 4a - A (fix try 5).bat", "AMD test 4a - DBG (colour bands).bat", "AMD test 4a - E (guard on).bat")
+AMD_4B = ("AMD test 4b - F (own set per draw).bat", "AMD test 4b - F DBG (colour bands).bat")
+AMD_KIT = ("Install AMD test.bat", "Undo AMD test.bat", "Install AMD test 2.bat", "Undo AMD test 2.bat", "Install AMD test 3.bat",
+           "Undo AMD test 3.bat", "Install AMD test 4a.bat", "Undo AMD test 4a.bat", "amdtest.ps1", "amdtest2.ps1", "amdtest3.ps1", "amdtest4a.ps1")
+# made at run time: 4b's copy of the Play launcher + its live file; Copy-In's temp names (a run stopped half way)
+AMD_FILES = AMD_LAUNCHERS + AMD_4B + AMD_KIT + ("AMD test 4b - play copy.bat", "amdtest4b_live.txt") + tuple(
+    n + ".amdtest-new" for n in AMD_LAUNCHERS + ("manifest.json", "bin/savagewind.exe", "bin/sora_mod.dll"))
+AMD_BACKUP = "AMD test backup (original 0.1.8 files)"   # always goes: "Undo AMD test 4a.bat" would put 0.1.8's exe + DLL back from it
+AMD_DIRS = tuple("Legend of Kairi AMD test %s" % t for t in ("1", "2", "3", "4a", "4b"))     # a test zip extracted INTO the install folder
+AMD_README = "Legend of Kairi - AMD test"     # the first line of every test's "READ ME.txt"
+# (s242) the downloads' own names (sb/s231 - s239 out/, all five read): "<name>.zip" saved into the install folder, and the folder
+# "<name>/" that Windows "Extract All" makes around the zip's one top folder ("<name>/Legend of Kairi AMD test <n>/")
+AMD_ZIPS = tuple(("Legend-of-Kairi-0.1.8-AMD-test-%s" % t, "Legend of Kairi AMD test %s" % t) for t in ("1", "2", "3", "4a", "4b"))
+
+
+def _amd_rm(p, carry=False):
+    """(s241) p goes: a link / junction itself (never followed), a folder with all in it, read-only files too. Raises OSError.
+    carry (s242, the backup folder only): a file that will not go does not stop the rest of its folder (so a part-deleted backup has
+    no exe AND no DLL left); the first error is raised at the end. Without it the first failure stops, so a shape-checked folder
+    keeps its READ ME / manifest and is found again by the next run."""
+    from update import is_reparse
+    if is_reparse(p):
+        try:
+            os.remove(p)
+        except OSError:
+            os.rmdir(p)
+        return
+    if os.path.isdir(p):
+        bad = None
+        for n in os.listdir(p):
+            try:
+                _amd_rm(os.path.join(p, n), carry)
+            except OSError as e:
+                if not carry:
+                    raise
+                bad = bad or e
+        if bad:
+            raise bad
+        try:
+            os.rmdir(p)
+        except PermissionError:
+            os.chmod(p, stat.S_IWRITE)
+            os.rmdir(p)
+        return
+    try:
+        os.remove(p)
+    except PermissionError:
+        os.chmod(p, stat.S_IWRITE)
+        os.remove(p)
+
+
+def _amd_readme(p):
+    """(s241) True when p is a plain file whose first line says it is a test's READ ME"""
+    from update import is_reparse
+    try:
+        if is_reparse(p) or not os.path.isfile(p):
+            return False
+        with open(p, encoding="utf-8-sig", errors="replace") as f:
+            return f.readline(200).startswith(AMD_README)
+    except OSError:
+        return False
+
+
+def _amd_payload(p):
+    """(s241) True when folder p is exactly a test zip's files/: manifest.json of an AMD test build ("source_commit": "AMD test ..."),
+    bin/ = savagewind.exe (+ sora_mod.dll), launchers/ = test launchers only, orig/ = manifest.json only; plain files, no link anywhere"""
+    from update import is_reparse
+    try:
+        if is_reparse(p) or not os.path.isdir(p):
+            return False
+        top = set(os.listdir(p))
+        if not top <= {"bin", "launchers", "manifest.json", "orig"} or not {"bin", "manifest.json"} <= top:
+            return False
+        m = os.path.join(p, "manifest.json")
+        if is_reparse(m) or not os.path.isfile(m):
+            return False
+        with open(m, encoding="utf-8") as f:
+            j = json.load(f)
+        if j.get("release") != "Legend of Kairi" or not str(j.get("source_commit", "")).startswith("AMD test "):
+            return False
+        for d, ok, need in (("bin", {"savagewind.exe", "sora_mod.dll"}, "savagewind.exe"), ("launchers", set(AMD_LAUNCHERS), None),
+                            ("orig", {"manifest.json"}, None)):
+            q = os.path.join(p, d)
+            if d not in top:
+                continue
+            if is_reparse(q) or not os.path.isdir(q):
+                return False
+            names = os.listdir(q)
+            if not set(names) <= ok or (need and need not in names):
+                return False
+            if any(is_reparse(os.path.join(q, n)) or not os.path.isfile(os.path.join(q, n)) for n in names):
+                return False
+        return True
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _amd_folder(p):
+    """(s241) True when p is an extracted "Legend of Kairi AMD test <n>" folder and nothing else: its READ ME.txt says so, every entry is
+    a test zip's own name (plain files), files/ (if there) is a test payload"""
+    from update import is_reparse
+    try:
+        if is_reparse(p) or not os.path.isdir(p) or not _amd_readme(os.path.join(p, "READ ME.txt")):
+            return False
+        for n in os.listdir(p):
+            q = os.path.join(p, n)
+            if n == "files":
+                if not _amd_payload(q):
+                    return False
+            elif n not in AMD_KIT + AMD_4B + ("READ ME.txt",) or is_reparse(q) or not os.path.isfile(q):
+                return False
+        return True
+    except OSError:
+        return False
+
+
+def _amd_wrap(p, inner):
+    """(s242) True when p is the folder "Extract All" made from a test zip: nothing in it but the zip's top folder, and that one is ours"""
+    from update import is_reparse
+    try:
+        return not is_reparse(p) and os.path.isdir(p) and os.listdir(p) == [inner] and _amd_folder(os.path.join(p, inner))
+    except OSError:
+        return False
+
+
+def _amd_zip(p, inner):
+    """(s242) True when p is a test's download itself: a plain zip file whose every entry sits under the test's top folder"""
+    import zipfile
+    from update import is_reparse
+    try:
+        if is_reparse(p) or not os.path.isfile(p) or not zipfile.is_zipfile(p):
+            return False
+        with zipfile.ZipFile(p) as z:
+            names = z.namelist()
+        ours = AMD_KIT + AMD_4B + ("READ ME.txt", "files", "")      # the second path part: a test zip's own names only ("" = the folder entry)
+        return bool(names) and all(n.startswith(inner + "/") and n.split("/")[1] in ours for n in names)
+    except Exception:  # noqa: BLE001 - a file that is not a readable zip of ours stays
+        return False
+
+
+def remove_amd_tests(root, log=print):
+    """(s241) the AMD test 1 - 4b files leave <root> (top level only, exact names; the backup folder always; an extracted test folder,
+    a loose files/ payload and a "READ ME.txt" only when their shape proves they are ours; (s242) the same for a test's download
+    "Legend-of-Kairi-0.1.8-AMD-test-<n>.zip" and the folder of that name "Extract All" makes). Never raises: a file that cannot be removed
+    (in use) is one log line. Safe on a fresh install, on Melty installs and twice in a row. -> the removed names"""
+    gone = []
+    try:
+        from update import is_reparse
+        root = os.path.abspath(root)
+        if not os.path.isdir(root):
+            return gone
+        binlink = is_reparse(os.path.join(root, "bin"))      # the two bin/ temp names: never through a bin/ link
+        # the backup first: once it is gone, an Undo left behind has nothing to put back
+        todo = [n for n in (AMD_BACKUP,) + AMD_FILES if os.path.lexists(os.path.join(root, n)) and not (binlink and "/" in n)]
+        todo +=[n for n in AMD_DIRS if _amd_folder(os.path.join(root, n))]
+        todo +=[w for w, inner in AMD_ZIPS if _amd_wrap(os.path.join(root, w), inner)]
+        todo +=[w + ".zip" for w, inner in AMD_ZIPS if _amd_zip(os.path.join(root, w + ".zip"), inner)]
+        if _amd_readme(os.path.join(root, "READ ME.txt")):
+            todo.append("READ ME.txt")
+        files = os.path.join(root, "files")
+        if _amd_payload(files):
+            todo.append("files")
+        elif os.path.lexists(files):
+            log("[game] kept the folder \"files\" (it does not look like an AMD test download)")
+        for n in todo:
+            try:
+                _amd_rm(os.path.join(root, n), carry=n == AMD_BACKUP)
+                gone.append(n)
+            except Exception as e:  # noqa: BLE001 - never fails the install
+                log("[game] could not remove %s (%s): delete it by hand" % (n, getattr(e, "strerror", None) or e))
+        if gone:
+            log("[game] removed %d AMD test files (the fix is in this release): %s" % (len(gone), ", ".join(gone)))
+    except Exception as e:  # noqa: BLE001 - never fails the install
+        log("[game] could not check for AMD test files (%s)" % e)
+    return gone
+
+
 def install_game_side(root, sw_dir, log=print, release=RELEASE):
     """-> {"solo": path, "bin": path, ...}. Raises RuntimeError with a plain-words message. (s223) single player: the
     Multiplayer launcher is neither written nor kept."""
@@ -630,7 +834,8 @@ def install_game_side(root, sw_dir, log=print, release=RELEASE):
     write_game_id(root, release, sw_dir, log)
     _write_bat(solo, launcher_text(False, sw_dir))
     removed = remove_old_multiplayer(root, log)
-    bug = os.path.join(root, BUGREPORT)
+    amd = remove_amd_tests(root, log)      # (s241)
+    bug =os.path.join(root, BUGREPORT)
     _write_bat(bug, bugreport_text(sw_dir))
     _write_bat(os.path.join(root, BUGREPORT_PS1), bugreport_ps_text())
     log("[game] launchers: %s, %s (+ %s)" % (SOLO, BUGREPORT, BUGREPORT_PS1))
@@ -640,4 +845,4 @@ def install_game_side(root, sw_dir, log=print, release=RELEASE):
         log("[game] could not make the shortcuts (%s): start the .bat files instead" % e)
         lnks = []
     write_build_id(root, release, log)
-    return {"solo": solo, "bugreport": bug, "bin": dst, "shortcuts": lnks, "removed": removed}
+    return {"solo": solo, "bugreport": bug, "bin": dst, "shortcuts": lnks, "removed": removed, "amd_removed": amd}

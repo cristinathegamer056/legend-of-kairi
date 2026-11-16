@@ -103,7 +103,7 @@ void sora_draw_set_ui_order(int on);
 // SAVAGEWIND_SORA_PUSH_LIMIT=<n> (test a 128-byte GPU on NVIDIA). Every Sora pipeline layout checks its push range with it.
 unsigned sora_push_limit(void);
 // (mp2-perf) remote avatar perf cuts, DLL "set drawperf N" (looked up by name): bits 1 C1 bones blended once per publish,
-// 2 C2 static index buffer, 4 C3 one vertex copy fewer per side, 8 C4 cached descriptor sets (default 15 = all), 16 = verify
+// 2 C2 static index buffer, 4 C3 one vertex copy fewer per side, 8 C4 cached descriptor sets (15 = all; default 7 since s241: C4 off = a fresh set 1 per body draw, the AMD fix), 16 = verify
 // (one-shot: logs the old vs new memcmp). A cleared bit = the old path. sora_draw_perf: the cut bits now.
 void sora_draw_set_perf(int bits);
 int sora_draw_perf(void);

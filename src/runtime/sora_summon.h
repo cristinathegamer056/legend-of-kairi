@@ -281,7 +281,8 @@ static bool sm_actors(int d, uint64_t present) {
 }
 
 // ---- who may be summoned right now
-static bool sm_member_ok(int mb) { return P.on && P.ticks && g_party_id[mb] > 0 && P.m[mb].hp > 0 && !g_party_absorbed[mb]; }
+// (s233 dbgmenu, conductor's rule) a Debug Menu "None" slot counts as able: the summon has nobody to replace there, and the slot stays empty after it
+static bool sm_member_ok(int mb) { return party_slot_off(mb) || (P.on && P.ticks && g_party_id[mb] > 0 && P.m[mb].hp > 0 && !g_party_absorbed[mb]); }
 static const char *sm_gate(bool force, int st) {
     if (!SM.on) return "summon is off (set summon 1)";
     if (SM.st != SM_OFF) return "a summon is already out";
@@ -316,6 +317,7 @@ static void sm_end(const char *why) {
         if (!SM.abs[mb]) continue;
         SM.abs[mb] = false;
         if (fm_in_form() && fm_takes(g_fform, mb)) continue;  // (the Drive form owns his absorb now; it gives him back at its revert)
+        if (party_slot_off(mb)) { LOG("[summon] %s's place stays empty (Debug Menu None)\n", mb ? "Goofy" : "Donald"); continue; }  // (s233)
         if (g_party_absorbed[mb]) g_party_absorbed[mb] = false, P.m[mb].placed = false;  // (party_core_tick places him beside Sora)
         LOG("[summon] %s back beside Sora\n", mb ? "Goofy" : "Donald");
     }

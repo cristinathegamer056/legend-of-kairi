@@ -767,6 +767,11 @@ static void create_device(void) {
         if (uil) ext[n_ext++] = VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME;
 #endif
     }
+    LOG("[vk] (s233 amdtest3) offered: VK_EXT_image_compression_control %d, VK_KHR_unified_image_layouts %d, "
+        "VK_EXT_attachment_feedback_loop_layout %d (feature %d); driverVersion %#x\n",
+        (int)has_ext(ep, ne, "VK_EXT_image_compression_control"), (int)has_ext(ep, ne, "VK_KHR_unified_image_layouts"),
+        (int)has_ext(ep, ne, VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME), (int)(fbl && fbl_have.attachmentFeedbackLoopLayout),
+        (unsigned)g_vk.props.driverVersion);
     LOG("[vk] attachment feedback loops %s\n", gcn_off ? win_legacy ? "off (target copies)" : intel_igpu ? "off on this Intel integrated GPU (target copies)" : "off on this GCN chip (target copies)"
                                                : !g_vk.feedback_loop ? "off (target copies)"
                                                : g_vk.feedback_layout ? "on (feedback loop layout)" : "on");

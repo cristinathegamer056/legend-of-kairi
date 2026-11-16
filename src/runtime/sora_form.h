@@ -150,11 +150,16 @@ static bool fm_member_ok(int f) {
     }
     return true;
 }
+// (s233 dbgmenu) 1 only around the Debug Menu's own fm_drive call (sora_dbgmenu.h dbm_form_tick): the unlock gate is skipped, the
+// rest (draw actor, motions, fmmaster / fmfinal) still counts
+static int g_fm_gate_skip;
+static const char *g_fm_rev_why = "";  // (s233) the last fm_revert's reason (the Debug Menu's Form row tells a death / load from a Revert)
+static bool dbm_form_hold(void);  // (s233, sora_dbgmenu.h) true = the form gauge does not run down (Infinite Drive / the Form row's form)
 static bool fm_ready(int f) {  // (s89 kb: + the unlock gate, sora_unlock.h; s89 master / final: live fmmaster 0 / fmfinal 0)
     fm_init(); fm_load_actor();
     if (f == FORM_MASTER && !ml_form_on()) return false;
     if (f == FORM_FINAL && !g_fmfinal_on) return false;  // (s89 b4-final: live fmfinal 0)
-    return FM.actor[f] > 0 && FM.set_body && g_nfmots_tab[f] > 0 && ul_form_unlocked(FM_FORMS[f].name);
+    return FM.actor[f] > 0 && FM.set_body && g_nfmots_tab[f] > 0 && (g_fm_gate_skip || ul_form_unlocked(FM_FORMS[f].name));
 }
 static int fm_rows(int rf[FM_NFORMS]) {  // (s89 kb) the Drive page rows: the unlocked menu forms, FM_FORMS order -> count (>= 1)
     int n = 0;
@@ -203,6 +208,7 @@ static void fm_absorb(int f, bool absorbed) {  // (s72: the form's member, Goofy
     for (int mb = 0; mb < 2; mb++) {
         // (a revert gives back whoever is absorbed: mboth may have changed while in the form)
         if (absorbed ? !fm_takes(f, mb) : !g_party_absorbed[mb]) continue;
+        if (!absorbed && party_slot_off(mb)) continue;  // (s233 dbgmenu: a None slot stays empty after the revert)
         if (g_party_absorbed[mb] == absorbed) continue;
         g_party_absorbed[mb] = absorbed;
         if (!absorbed) P.m[mb].placed = false;  // (party_core_tick places him beside Sora next tick)
@@ -378,6 +384,7 @@ static void fm_revert(const char *why) {
     if (FM.st == FM_BASE) return;
     bool was_form = FM.st == FM_FORM;
     FM.st = FM_BASE, FM.away = false;
+    g_fm_rev_why = why;  // (s233; every caller passes a string literal)
     lm_abort(why);  // (s89: a running Limit command + its flights end with the form)
     g_fmots_on = false;
     if (FM.set_body) FM.set_body(ofx_actor_base());  // (s146 outfit: 0 while Normal)
@@ -511,6 +518,7 @@ static void fm_tick(float kh) {
     }
     bool battle = P.on && P.combat && P.battle;
     FM.t -= kh * (battle ? 1.0f : FM_RELAX);
+    if (dbm_form_hold()) FM.t = FM.total;  // (s233 dbgmenu: Infinite Drive / the Form row: the gauge stays full, no time-out)
     anti_life_tick();  // (s89: in Anti only - no heal, x1.5 damage taken)
     if (FM.t <= 0) fm_revert("form gauge empty");
 }

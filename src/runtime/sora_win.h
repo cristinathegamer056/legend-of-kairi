@@ -229,6 +229,7 @@ static inline int TryAcquireSRWLockShared(SRWLOCK *l) { return pthread_rwlock_tr
 #define InterlockedExchange(p, v) __atomic_exchange_n((p), (v), __ATOMIC_SEQ_CST)
 #define InterlockedExchangePointer(p, v) __atomic_exchange_n((p), (v), __ATOMIC_SEQ_CST)
 #define InterlockedOr64(p, v) __atomic_fetch_or((p), (v), __ATOMIC_SEQ_CST)
+#define InterlockedExchange64(p, v) __atomic_exchange_n((p), (v), __ATOMIC_SEQ_CST)  // (s238 linkpos.c rd_mark)
 #define InterlockedCompareExchange(p, x, c) __extension__({ \
     __typeof__(*(p)) sw_cmp_ = (c); \
     __atomic_compare_exchange_n((p), &sw_cmp_, (x), 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); \

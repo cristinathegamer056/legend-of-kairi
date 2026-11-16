@@ -49,7 +49,9 @@ static void vl_load(int exp, const char *why) {  // (sl_slot_load: -1 = no "valo
 }
 
 // a hit landed in Valor (sora.c blade_hits)
+static bool dbm_form_hold(void);  // (sora_dbgmenu.h)
 static void vl_hit(void) {
+    if (dbm_form_hold()) return;  // (s235 review fix) a form held by the Debug Menu (Drive Form row / Infinite Drive) earns no form EXP: none reaches the save
     vl_init();
     int lv0 = vl_lv();
     uint32_t mx = VL_EXP_AT[VL_MAX_LV - 1];

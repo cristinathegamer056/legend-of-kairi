@@ -112,6 +112,7 @@ static struct {
     bool nearb, doomed;     // a boss is near this frame / the roll was lost (the clamp stays off until he is healed)
     char boss[48];
     bool force, heal, warned;  // live one-shots
+    bool sure;              // (s233 dbgmenu) the Debug Menu's "Now": this forced KO's rescue roll is 100 % and does not count in the fight's chance steps
     unsigned rng;
 } MK;
 
@@ -487,7 +488,7 @@ static void mk_tick(int life, uint64_t present) {
     if (!g_mickey) {
         if (MK.active) mk_end("set mickey 0");
         if (MK.choosing) MK.choosing = false, mc_close(), MK.guard_set ? MK.guard_set(0) : (void)0;
-        MK.nearb = MK.doomed = false, MK.force = MK.heal = false;
+        MK.nearb = MK.doomed = false, MK.force = MK.heal = MK.sure = false;
         return;
     }
     mk_bind();
@@ -561,12 +562,13 @@ static void mk_tick(int life, uint64_t present) {
     }
     roll:
     if (ko) {
-        int pct = chose && !g_mkroll ? 100 : mk_chance_pct();
+        int pct = (chose && !g_mkroll) || MK.sure ? 100 : mk_chance_pct();  // (s233: the Debug Menu's "Now" = 100 %)
         MK.rng = MK.rng * 1664525u + 1013904223u;
         bool ok = (int)((MK.rng >> 8) % 100) < pct;
-        LOG("[mickey] Sora's HP hit 0 (boss %s, life %d): rescue #%d, %d%% -> %s\n", MK.nearb ? MK.boss : "none/forced", life, MK.rescues + 1, pct,
-            ok ? "I won't give up! Mickey comes" : "It's all over... (the clamp is off: the next hit kills him)");
-        MK.rescues++;
+        LOG("[mickey] Sora's HP hit 0 (boss %s, life %d): rescue #%d, %d%% -> %s%s\n", MK.nearb ? MK.boss : "none/forced", life, MK.rescues + 1, pct,
+            ok ? "I won't give up! Mickey comes" : "It's all over... (the clamp is off: the next hit kills him)", MK.sure ? " (Debug Menu Now: not counted)" : "");
+        if (!MK.sure) MK.rescues++;
+        MK.sure = false;
         if (ok) {
             MK.active = true, MK.hp = MK_HP, MK.t0 = now, MK.phase = 0, MK.potion = MK.healed = false;
             MK.gauge = 0, MK.gfrac = 0, MK.mp = 100.0f, MK.t_tick = now, MK.pearl_n = 0, MK.pearl_target = 0;

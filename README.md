@@ -4,7 +4,7 @@
 
 > [!WARNING]
 > **Early alpha:** bugs and crashes are likely. Back up your Savage Wind saves (`Savage Wind/save`) before you play.
-> **0.1.8-alpha plays on your own.** Co-op is in 0.1.4-alpha only for now (see [Which version do I need?](#which-version-do-i-need)).
+> **0.1.10-alpha plays on your own.** Co-op is in 0.1.4-alpha only for now (see [Which version do I need?](#which-version-do-i-need)).
 
 Play **The Legend of Zelda: Breath of the Wild** (on the [Savage Wind](https://github.com/Revivedx/SavageWindRecomp) PC
 recompilation) as **Sora from Kingdom Hearts II Final Mix**, with Roxas, Mickey, Donald and Goofy, KH2's combos,
@@ -43,10 +43,10 @@ magic, Drive Forms and summons, and KH2's own menus and HUD.
 
 | You want to | Legend of Kairi | Savage Wind |
 |---|---|---|
-| Play on your own (newest) | **0.1.8-alpha** | **0.5.3-alpha.5** (a 0.4.1-alpha.4 folder is upgraded for you) |
+| Play on your own (newest) | **0.1.10-alpha** | **0.5.3-alpha.5** (a 0.4.1-alpha.4 folder is upgraded for you) |
 | Play co-op with friends (up to 4) | **[0.1.4-alpha](https://github.com/tvllerr/legend-of-kairi/releases/tag/v0.1.4-alpha)** | **0.4.1-alpha.4** |
 
-Co-op is not in 0.1.8-alpha yet. Everybody in a co-op game needs the very same release, so co-op players stay on 0.1.4.
+Co-op is not in 0.1.10-alpha yet. Everybody in a co-op game needs the very same release, so co-op players stay on 0.1.4.
 
 ## Requirements
 
@@ -60,7 +60,7 @@ Co-op is not in 0.1.8-alpha yet. Everybody in a co-op game needs the very same r
 
 ## Install
 
-1. Download `Legend-of-Kairi-0.1.8-alpha.zip` from [Releases](https://github.com/tvllerr/legend-of-kairi/releases/latest).
+1. Download `Legend-of-Kairi-0.1.10-alpha.zip` from [Releases](https://github.com/tvllerr/legend-of-kairi/releases/latest).
 2. Right-click it > **Extract All...** into an empty folder (not inside the Savage Wind folder).
 3. Double-click **Install Legend of Kairi.cmd**.
 4. Click **Choose...** next to *Savage Wind folder* and pick the `Savage Wind` folder (the one with `extracted` inside).
@@ -71,7 +71,7 @@ Co-op is not in 0.1.8-alpha yet. Everybody in a co-op game needs the very same r
 release, checks its signature and opens the installer on Update. From 0.1.0-0.1.3 (once, by hand): unzip the new release, double-click **Install Legend of Kairi.cmd**, choose
 **Update an existing install** and pick your old Legend of Kairi folder. Your saves are kept.
 
-The update from 0.1.4 to 0.1.8 is a big one (about 25 minutes): it brings your Savage Wind 0.4.1 folder up to 0.5.3
+The update from 0.1.4 to 0.1.10 is a big one (about 25 minutes): it brings your Savage Wind 0.4.1 folder up to 0.5.3
 where it is (it downloads the official Savage Wind 0.5.3-alpha.5 zip, keeps your game files, saves and settings, and
 keeps a copy of your saves and settings in `work\sw-upgrade`), and it builds Sora's data again. The Multiplayer launcher
 is removed (its text, with your friends' IPs, is kept in `work\removed`). If you play co-op, don't update: stay on 0.1.4.
@@ -91,7 +91,7 @@ that version, or unzip Savage Wind 0.5.3-alpha.5 over it again and run the insta
 <img src="docs/sora_coop.gif" width="100%" alt="Co-op: one player's Sora in a blue outfit walks and swings, then the other player's Sora (from a Steam Deck, in another outfit) moves around next to him, each with Donald and Goofy">
 
 > [!NOTE]
-> Multiplayer is in **0.1.4-alpha** only (with Savage Wind 0.4.1-alpha.4); 0.1.8-alpha has no Multiplayer launcher.
+> Multiplayer is in **0.1.4-alpha** only (with Savage Wind 0.4.1-alpha.4); 0.1.10-alpha has no Multiplayer launcher.
 > Multiplayer works, but it is still glitchy and needs more development: enemy positions and copied enemy attacks can be
 > late or out of sync, and a hit may not land now and then. Please report what you see.
 
@@ -121,7 +121,7 @@ that version, or unzip Savage Wind 0.5.3-alpha.5 over it again and run the insta
 
 ## Download check
 
-`Legend-of-Kairi-0.1.8-alpha.zip` sha256: `5308945c1f367a20071c0093c76cf2ca235668d9ec53fe5396aa5ca2fe647b56`
+`Legend-of-Kairi-0.1.10-alpha.zip` sha256: `0da0363e22586bf4ca6cebd4f5f841bd3aba4303c2831ff94ae89098b79fb7a7`
 
 `Legend-of-Kairi-0.1.4-alpha.zip` sha256: `e4ee7470e9e8cd7b444475c505ee268ddc6a4683450d5a702633d8732e0c7ba0`
 

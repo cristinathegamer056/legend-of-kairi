@@ -159,6 +159,8 @@ typedef struct TexBackend {
     uint16_t block_slice;
     bool gpu_bc4;                // BC4 kept as BC4 though SAVAGEWIND_VK_BC4_CPU is on: the GPU draws into its blocks
     bool block_pending;          // (exec.c) the attachment view just made is block's: copy it after the pass
+    uint32_t usage;              // (s233 amdtest3, log only) the VkImageUsageFlags textures.c made the image with
+    uint64_t made_frame;         // (s233 amdtest3, log only) vk_frame_counter() when textures.c made the image
 } TexBackend;
 
 TexBackend *vk_tex(NvnTexture *t, bool for_render);  // backend image (uploads CPU contents unless for_render)

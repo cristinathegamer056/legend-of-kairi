@@ -60,7 +60,9 @@ static void ml_load(int exp, const char *why) {  // (sl_slot_load: -1 = no "mast
 }
 
 // an enemy died with Sora's credit (sora_levels.h sl_kill): the Drive orbs it would drop, +1 EXP each, while in Master
+static bool dbm_form_hold(void);  // (sora_dbgmenu.h)
 static void ml_kill(int pct, int flags) {
+    if (dbm_form_hold()) return;  // (s235 review fix) a form held by the Debug Menu (Drive Form row / Infinite Drive) earns no form EXP: none reaches the save
     if (!IN_MASTER || (flags & 2)) return;
     ml_init();
     int orbs = (flags & 1) || pct > 150 ? 4 : 2;  // (dg_kill's sizes: 2 small / 2 big / 4 big orbs)

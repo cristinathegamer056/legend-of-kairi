@@ -2526,7 +2526,9 @@ static struct {
 static struct { float mp, mp_max, charge, charge_total; } MP = {100, 100, 0, 0};  // KH2 base MP 100; charge > 0 = MP Charge
 
 static bool mp_charging(void) { return MP.charge_total > 0; }
+static bool dbm_inf_mp(void);  // (s233, sora_dbgmenu.h) the Debug Menu's Infinite MP is ON
 static void mp_change(int delta) {  // re:0x3D3CF0: below 0 -> MP Charge (exactly 0 left: no charge)
+    if (delta < 0 && dbm_inf_mp()) return;  // (s233 dbgmenu: Infinite MP: a spend costs nothing, so MP Charge never starts)
     if (mp_charging()) {
         if (delta > 0) MP.charge -= (float)delta * 12.0f;  // (MpToMpDrive 12)
         if (MP.charge <= 0) MP.charge_total = 0, MP.mp = MP.mp_max;
@@ -6745,6 +6747,7 @@ static void sora_mod_frame_body(void) {
     note_hurt(life);  // (s209 step 2: Melty's HURT note: the raw life, before Second Chance's clamp)
     life = ca_survive(life);  // (s102 b16-chestabil: Second Chance / Once More)
     mk_tick(life, present);  // (s109 b22-mickey: KH2's Mickey rescue state machine)
+    dbm_world_tick();  // (s233 dbgmenu: Infinite Drive / Infinite MP refill, the Mickey Rescue "Now" row; every unpaused world frame)
     // Dead (life_s16a) until he stands again with life: Continue gives the life back while the Game Over menu and the
     // loading tip are still up (state 0x80080000 = air), which drew Sora and the HUD over both (go26a, presents
     // 59101-59251; the frames never stop, so the watchdog below doesn't see it). Same rule as linkpos's auto-Continue,
@@ -7125,6 +7128,7 @@ static void sora_mod_frame_body(void) {
     else if (cast >= CMD_SUMMON_CAST && cast <= CMD_SUMMON_FPS) smn_cast(cast), cast = -1;  // (s137 smenu)
     else if (cast >= CMD_SLATE && cast < CMD_SLATE + 8) sk_request(cast - CMD_SLATE, st, present), cast = -1;  // (s93 b7-runes)
     else if (cast == CMD_REVERT) fm_revert("Revert command"), M.dead = 8, M.cursor = 0, cast = -1;
+    dbm_form_tick(st == LINK_GROUND && !dream_ui);  // (s233 dbgmenu: the Drive Form row drives / reverts here, where the Drive command does)
     bool r1 = (press & BTN_LOCK) != 0;       // (taken before a reaction zeroes the presses: the block ticks anyway)
     mp_tick(kh);
     int32_t slx = g_lx, sly = g_ly;

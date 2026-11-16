@@ -64,7 +64,7 @@ static void rox_leave(void) {
 
 // the body the story wants: 1 Roxas, 0 Sora, -1 unknown (keep)
 static int rox_wanted(void) {
-    if (g_dbm_sora) return 0;  // (s146 outfit; before "set char 1": the Debug Menu row is a debug override of everything)
+    if (g_dbm_sora || g_dbm_mksora) return 0;  // (s146 outfit; before "set char 1": the Debug Menu row is a debug override of everything; s233: + the Mickey Rescue "Now" stand-in)
     if (g_char == 1) return 1;
     if (g_char == 2) return 0;
     int glider = 0;
@@ -92,7 +92,7 @@ static void rox_tick(void) {
     int w = hw >= 0 ? hw : rox_wanted();
     if (w < 0 || w == (RX.on ? 1 : 0)) { RX.want = -1; return; }
     if (RX.want != w) RX.want = w, RX.want_since = now;
-    bool forced = g_char != 0 || g_dbm_sora || hw >= 0;  // (a live "set char 1 / 2" applies at once, only auto waits)
+    bool forced = g_char != 0 || g_dbm_sora || g_dbm_mksora || hw >= 0;  // (a live "set char 1 / 2" applies at once, only auto waits)
     if (!forced && now - RX.want_since < ROX_HOLD_MS) return;
     if (S.special != SP_NONE && S.special != SP_DRIVE) return;  // (not in the middle of a swing / reaction)
     if (S.act == ACT_GLIDE || S.act == ACT_GLIDE_HOVER) return;  // (s109 review: Roxas has no glide slots: a mid-glide switch drew nothing until the glide ended)

@@ -2059,6 +2059,27 @@ static void vk_end_pass_at(int line) {
 
 static uint32_t level_extent(uint32_t v, uint32_t lv) { v >>= lv; return v ? v : 1; }
 
+// (s233 amdtest3, issue 2; SAVAGEWIND_SORA_DEPTH_DIAG=1 only, log only) per depth target of the frame being recorded: how
+// it was cleared (vkCmdClearAttachments in its pass over the whole pass / a part, or the clear-draw path), the last clear
+// value, and how its passes attached it (layout, load / store op). vk_scene_depth_describe3 prints the scene depth's row.
+static struct { NvnTexture *t; uint32_t clears, ca_full, ca_part, cdraw, passes, lay, load, store; float val; } sd3_tab[8];
+static uint64_t sd3_frame = ~0ull;
+static int sd3_on = -1;
+static bool sd3_diag(void) {
+    if (sd3_on < 0) { const char *e = getenv("SAVAGEWIND_SORA_DEPTH_DIAG"); sd3_on = e && *e && atoi(e) ? 1 : 0; }
+    return sd3_on == 1;
+}
+static int sd3_row(NvnTexture *t) {  // (-1: table full / no target)
+    if (!t) return -1;
+    if (sd3_frame != vk_frame_counter()) sd3_frame = vk_frame_counter(), memset(sd3_tab, 0, sizeof sd3_tab);
+    for (int i = 0; i < 8; i++) {
+        if (sd3_tab[i].t && sd3_tab[i].t != t) continue;
+        sd3_tab[i].t = t;
+        return i;
+    }
+    return -1;
+}
+
 static void begin_pass(void) {
     after_dispatch = false;  // (dispatch_compute: a pass in between)
     if (in_pass && !st.rt_dirty) return;
@@ -2282,6 +2303,10 @@ static void begin_pass(void) {
                                            .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
             if (b->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) { da = a; has_d = true; pass_depth = b->format; }
             if (b->aspect & VK_IMAGE_ASPECT_STENCIL_BIT) { sa = a; has_s = true; pass_stencil = b->format; }
+            if (sd3_diag()) {  // (s233 amdtest3 diag: log only)
+                int r = sd3_row(st.rt.depth);
+                if (r >= 0) sd3_tab[r].passes++, sd3_tab[r].lay = a.imageLayout, sd3_tab[r].load = a.loadOp, sd3_tab[r].store = a.storeOp;
+            }
             uint32_t lv = st.rt.has_dview && (st.rt.dview.setmask & 1) ? st.rt.dview.base_level : 0;
             uint32_t ew = level_extent(b->width, lv), eh = level_extent(b->height, lv);
             if (!w) { renderer_texture_scale(st.rt.depth, &pass_sx, &pass_sy); w = ew; }
@@ -2616,6 +2641,15 @@ static void clear(int index, int kind, const void *color, uint32_t mask, bool de
     if (!rect.extent.width || !rect.extent.height) return;
     if (index >= 0 && (index >= (int)pass_ncolor || pass_color[index] == VK_FORMAT_UNDEFINED)) return;
     bool simple = (index < 0 || (mask & 0xF) == 0xF) && (!stencil || (smask & 0xFF) == 0xFF);
+    if (depth && pass_depth && sd3_diag()) {  // (s233 amdtest3 diag: log only)
+        int r = sd3_row(st.rt.depth);
+        if (r >= 0) {
+            sd3_tab[r].clears++, sd3_tab[r].val = dval;
+            if (!simple) sd3_tab[r].cdraw++;
+            else if (rect.offset.x == 0 && rect.offset.y == 0 && rect.extent.width >= pass_w && rect.extent.height >= pass_h) sd3_tab[r].ca_full++;
+            else sd3_tab[r].ca_part++;
+        }
+    }
     if (simple) {
         VkClearAttachment a[2];
         uint32_t n = 0;
@@ -7959,6 +7993,311 @@ bool vk_scene_depth(VkImageView *view, float uv[4], uint32_t *w, uint32_t *h, ui
         }
     }
     return *view != VK_NULL_HANDLE;
+}
+
+// (s232 amdtest2, issue 2) The scene depth target vk_scene_depth picks (NULL: none this frame); the same pick, kept apart
+// so vk_scene_depth itself is unchanged.
+static NvnTexture *scene_depth_pick(void) {
+    int best = -1;
+    for (int i = 0; i < 8; i++)
+        if (scene_depth_frame == vk_frame_counter() && scene_depths[i].t && (best < 0 || scene_depths[i].draws > scene_depths[best].draws)) best = i;
+    return best < 0 ? NULL : scene_depths[best].t;
+}
+// (s232 amdtest2) one line about the scene depth image Sora samples: its backend (the Vulkan image: size, format, samples,
+// aspect, feedback-loop flags, scale), for the SAVAGEWIND_SORA_DEPTH_DIAG log line in sora_draw.c. Log only.
+void vk_scene_depth_describe(char *out, size_t n) {
+    NvnTexture *t = scene_depth_pick();
+    TexBackend *b = t ? vk_tex(t, true) : NULL;
+    if (!b) { snprintf(out, n, "none this frame"); return; }
+    snprintf(out, n, "nvn %ux%u fmt %#x target %u | image %p %ux%u vkformat %d samples %u levels %u layers %u aspect %#x | "
+             "feedback_ok %d seen %d in_fb_layout %d (fb layout path %d) | scalable %d scale %.3f %.3f group %u | sampled in the "
+             "layout the amd3 line names | preblend %s",
+             t->width, t->height, (unsigned)t->format, (unsigned)t->target, (void *)b->image, b->width, b->height, (int)b->format,
+             b->samples, b->levels, b->layers, (unsigned)b->aspect, (int)b->feedback_ok, (int)b->feedback_seen,
+             (int)b->in_feedback_layout, (int)g_vk.feedback_layout, (int)b->scalable, b->sx, b->sy, (unsigned)b->rs_group,
+             sd_pb_on == 1 ? "on" : "off");
+}
+// (s232 amdtest2, candidate fix 2: SAVAGEWIND_SORA_DEPTH_COPY=1; default off = never called) A fresh copy of the scene
+// depth, made right before Sora's pass (vkCmdCopyImage, GENERAL -> GENERAL, full barriers around it, the s99 preblend
+// snapshot's way), and its depth view; VK_NULL_HANDLE = no copy (Sora then samples the live target as before). Tests the
+// GUESS that AMD hands a sampler in GENERAL a still-compressed depth image: a transfer read always sees the real values.
+// Called from sora_draw.c's draw_pass outside any rendering (render thread).
+// (s233 amdtest3, candidate: SAVAGEWIND_SORA_DEPTH_COPY=2) mode 2 = the same copy, but the scene depth makes REAL layout
+// changes around it: GENERAL -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL (+ an empty pass) -> TRANSFER_SRC_OPTIMAL (sd3_expand),
+// the copy reads it in that layout, then back to GENERAL (the engine keeps every image in GENERAL). Mode 1 = the test 2
+// copy, unchanged.
+static struct { uint64_t to, back, copy1, copy2, rpass, skipped; } sd3_stat;  // (s233: what really ran, for the diag log)
+static void sd3_barrier(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect, VkImageLayout from, VkImageLayout to) {
+    VkImageMemoryBarrier2 ib = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                                .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                                .dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                                .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                                .oldLayout = from, .newLayout = to,
+                                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                .image = img, .subresourceRange = {aspect, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS}};
+    VkDependencyInfo di = {.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &ib};
+    rec_CmdPipelineBarrier2(cb, &di);
+}
+// (s233) "tell it, then ask for it": GENERAL -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL, an empty pass with the image as the depth
+// (/ stencil) attachment in that layout (LOAD / STORE, no draw: it changes no texel), then DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+// -> <to>. GUESS (s233 amdwhy): the driver takes GENERAL as "already expanded"; out of ATTACHMENT_OPTIMAL every driver must
+// expand (decompress) a depth image for a sampler / transfer read. Outside any rendering. false (nothing recorded): the
+// image cannot be attached.
+static bool sd3_expand(VkCommandBuffer cb, TexBackend *b, VkImageLayout to) {
+    static const VkComponentMapping id = {0};
+    VkImageView av = b->not_attachable ? VK_NULL_HANDLE : vk_image_view(b, VK_IMAGE_VIEW_TYPE_2D, b->format, 0, 1, 0, 1, id, b->aspect);
+    if (!av) return false;
+    sd3_barrier(cb, b->image, b->aspect, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    VkRenderingAttachmentInfo a = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = av,
+                                   .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                                   .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD, .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
+    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, {b->width, b->height}}, .layerCount = 1,
+                          .pDepthAttachment = (b->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) ? &a : NULL,
+                          .pStencilAttachment = (b->aspect & VK_IMAGE_ASPECT_STENCIL_BIT) ? &a : NULL};
+    rec_CmdBeginRendering(cb, &ri);
+    rec_CmdEndRendering(cb);
+    sd3_barrier(cb, b->image, b->aspect, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, to);
+    sd3_stat.rpass++;
+    return true;
+}
+VkImageView vk_scene_depth_copy(int mode) {
+    static TexBackend cp;
+    static uint64_t said;
+    NvnTexture *t = scene_depth_pick();
+    TexBackend *src = t ? vk_tex(t, true) : NULL;
+    if (!src || !src->image || !(src->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || src->samples != 1) return VK_NULL_HANDLE;
+    vk_end_pass();  // (no-op when no pass is open)
+    if (cp.image && (cp.width != src->width || cp.height != src->height || cp.format != src->format)) {
+        vk_views_forget(&cp);
+        vk_defer_image(cp.image, cp.mem);
+        cp.image = VK_NULL_HANDLE;
+        cp.mem = VK_NULL_HANDLE;
+    }
+    if (!cp.image) {
+        VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = src->format,
+                                .extent = {src->width, src->height, 1}, .mipLevels = 1, .arrayLayers = 1,
+                                .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
+                                .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        if (vmaCreateImage(g_vk.vma, &ci, &ai, &cp.image, &cp.mem, NULL) != VK_SUCCESS) {
+            cp.image = VK_NULL_HANDLE, cp.mem = VK_NULL_HANDLE;
+            LOG("[sora-draw] depth copy: image %ux%u format %d could not be made (live depth used)\n", src->width, src->height, (int)src->format);
+            return VK_NULL_HANDLE;
+        }
+        cp.format = src->format; cp.width = src->width; cp.height = src->height; cp.depth = 1; cp.layers = 1; cp.levels = 1;
+        cp.samples = 1; cp.aspect = src->aspect; cp.base_type = VK_IMAGE_VIEW_TYPE_2D;
+        vk_image_init_layout(vk_cmd(), cp.image, cp.aspect);
+    }
+    VkCommandBuffer cb = vk_cmd();
+    vk_full_barrier(cb);
+    VkImageCopy rg = {.srcSubresource = {src->aspect, 0, 0, 1}, .dstSubresource = {src->aspect, 0, 0, 1},
+                      .extent = {src->width, src->height, 1}};
+    if (mode == 2 && sd3_expand(cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL)) {  // (s233) real transitions for the copy, and back
+        rec_CmdCopyImage(cb, src->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, cp.image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+        sd3_barrier(cb, src->image, src->aspect, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+        sd3_stat.copy2++;
+    } else {
+        rec_CmdCopyImage(cb, src->image, VK_IMAGE_LAYOUT_GENERAL, cp.image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+        sd3_stat.copy1++;
+    }
+    vk_full_barrier(cb);
+    static const VkComponentMapping id = {0};
+    VkImageView v = vk_image_view(&cp, VK_IMAGE_VIEW_TYPE_2D, cp.format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_DEPTH_BIT);
+    if (vk_frame_counter() >= said + 300) {
+        said = vk_frame_counter();
+        LOG("[sora-draw] depth copy (SAVAGEWIND_SORA_DEPTH_COPY=%d): Sora samples a fresh copy %ux%u format %d of the scene depth %p "
+            "(view %p)%s\n", mode, cp.width, cp.height, (int)cp.format, (void *)src->image, (void *)v,
+            mode == 2 ? ", copied in TRANSFER_SRC_OPTIMAL (GENERAL -> DS_ATTACHMENT (+ empty pass) -> TRANSFER_SRC -> GENERAL)"
+                      : ", copied in GENERAL");
+    }
+    return v;
+}
+
+// (s233 amdtest3, issue 2, candidates 1 + 3: SAVAGEWIND_SORA_DEPTH_LAYOUT=1/2/3; default off = never called) Right before
+// Sora's pass (sora_draw.c draw_pass, outside any rendering), the live scene depth makes a REAL layout change out of
+// GENERAL, the bodies sample it in the new layout, and vk_scene_depth_layout_end (after the pass) puts it back in GENERAL,
+// where the engine keeps every image. GUESS being tested: AMD hands a sampler / copy in GENERAL the depth image as it is in
+// memory, still compressed / fast-cleared (HTILE); only a transition out of a layout the driver thinks may be compressed
+// makes it expand (decompress) the depth.
+//   1: GENERAL -> DEPTH_STENCIL_READ_ONLY_OPTIMAL
+//   2: GENERAL -> SHADER_READ_ONLY_OPTIMAL
+//   3: GENERAL -> DEPTH_STENCIL_ATTACHMENT_OPTIMAL, an empty pass with it as the depth attachment (LOAD / STORE, no draw),
+//      then DEPTH_STENCIL_ATTACHMENT_OPTIMAL -> DEPTH_STENCIL_READ_ONLY_OPTIMAL: in case the driver takes GENERAL as "never
+//      compressed" (then 1 / 2 change nothing), the step out of ATTACHMENT_OPTIMAL is one every driver must expand on.
+// view = the view sora_draw.c will sample; only the live target's own view is moved (a depth copy / preblend snapshot in
+// use: nothing done). Returns the layout to sample in (GENERAL = nothing done).
+static struct { VkImage img; VkImageAspectFlags aspect; VkImageLayout lay; } sd_lay;
+VkImageLayout vk_scene_depth_layout_begin(int mode, VkImageView view) {
+    if (sd_lay.img) {  // (never expected: a begin without its end; put it back first)
+        LOG("[sora-draw] depth layout: the last move was not ended: back to GENERAL first\n");
+        sd3_barrier(vk_cmd(), sd_lay.img, sd_lay.aspect, sd_lay.lay, VK_IMAGE_LAYOUT_GENERAL);
+        sd_lay.img = VK_NULL_HANDLE, sd3_stat.back++;
+    }
+    NvnTexture *t = scene_depth_pick();
+    TexBackend *b = t ? vk_tex(t, true) : NULL;
+    static const VkComponentMapping id = {0};
+    if (mode < 1 || mode > 3 || !b || !b->image || !(b->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || b->samples != 1 || b->in_feedback_layout ||
+        !view || view != vk_image_view(b, VK_IMAGE_VIEW_TYPE_2D, b->format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_DEPTH_BIT)) {
+        sd3_stat.skipped++;
+        return VK_IMAGE_LAYOUT_GENERAL;
+    }
+    vk_end_pass();  // (no-op when no pass is open)
+    VkCommandBuffer cb = vk_cmd();
+    VkImageLayout to = mode == 2 ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    if (mode == 3) {
+        if (!sd3_expand(cb, b, to)) { sd3_stat.skipped++; return VK_IMAGE_LAYOUT_GENERAL; }
+    } else sd3_barrier(cb, b->image, b->aspect, VK_IMAGE_LAYOUT_GENERAL, to);
+    sd3_stat.to++;
+    sd_lay.img = b->image, sd_lay.aspect = b->aspect, sd_lay.lay = to;
+    return to;
+}
+// (s233) after Sora's pass ended (outside any rendering): the scene depth back to GENERAL. No-op when nothing was moved.
+void vk_scene_depth_layout_end(void) {
+    if (!sd_lay.img) return;
+    sd3_barrier(vk_cmd(), sd_lay.img, sd_lay.aspect, sd_lay.lay, VK_IMAGE_LAYOUT_GENERAL);
+    sd_lay.img = VK_NULL_HANDLE;
+    sd3_stat.back++;
+}
+// (s233 amdtest3, issue 2) DEPTH SELF-TEST, SAVAGEWIND_SORA_DEPTH_DIAG=1 only (never without it). Twice a run, on the
+// draw passes with a scene depth number SD3_ST_AT1 / SD3_ST_AT2, right before Sora's pass (outside any rendering): the live
+// scene depth (level 0, layer 0, depth aspect) is copied into a host-readable buffer three ways, in this order (an expand
+// may change the memory, so raw first): A = straight from GENERAL (vkCmdCopyImageToBuffer in GENERAL); B = after a single
+// GENERAL -> TRANSFER_SRC_OPTIMAL barrier; C = after sd3_expand (GENERAL -> DS_ATTACHMENT_OPTIMAL, empty pass,
+// -> TRANSFER_SRC_OPTIMAL), the same step DEPTH_LAYOUT=3 / DEPTH_COPY=2 take. The image is back in GENERAL after each.
+// When that submission is done (a later frame), the stats of each go into the log ("[sora-draw] selftest"): min / max,
+// exact zeros, not in 0..1 / NaN, equal to the frame's last clear value, uniform 8x8 tiles, and a 16 x 9 grid of means.
+// Only D32_SFLOAT / D32_SFLOAT_S8_UINT (4-byte depth texels). Nothing else changes on any frame; the candidates of that
+// pass run after it as on every other pass.
+#define SD3_ST_AT1 600
+#define SD3_ST_AT2 5400
+static struct {
+    VkBuffer buf; VmaAllocation mem; float *ptr; uint64_t seq, frame;
+    uint32_t w, h, run, n_done; float clear; bool clear_known, pending;
+    uint64_t passes;
+} sd3_st;
+void vk_scene_depth_selftest(void) {
+    if (!sd3_diag()) return;
+    if (sd3_st.pending) {  // the copies of an earlier pass: done on the GPU? -> the log
+        if (vk_completed_seq() < sd3_st.seq || vk_frame_counter() < sd3_st.frame + 2) return;
+        vmaInvalidateAllocation(g_vk.vma, sd3_st.mem, 0, VK_WHOLE_SIZE);
+        const uint32_t w = sd3_st.w, h = sd3_st.h;
+        static const char *nm[3] = {"A raw GENERAL", "B GENERAL->TRANSFER_SRC", "C GENERAL->DS_ATTACHMENT(+empty pass)->TRANSFER_SRC"};
+        LOG("[sora-draw] selftest %u (recorded frame %llu, %ux%u, last clear value %s%.6f): A / B / C = three reads of the scene depth\n",
+            sd3_st.run, (unsigned long long)sd3_st.frame, w, h, sd3_st.clear_known ? "" : "UNKNOWN, taken as ", sd3_st.clear);
+        uint32_t tiles_x = w / 8, tiles_y = h / 8;
+        for (int k = 0; k < 3; k++) {
+            const float *d = sd3_st.ptr + (size_t)k * w * h;
+            float lo = INFINITY, hi = -INFINITY;
+            uint64_t zeros = 0, bad = 0, isclear = 0, uni = 0;
+            double gsum[9][16] = {{0}};
+            uint32_t gn[9][16] = {{0}};
+            for (uint32_t y = 0; y < h; y++)
+                for (uint32_t x = 0; x < w; x++) {
+                    float v = d[(size_t)y * w + x];
+                    if (!(v >= 0.0f && v <= 1.0f)) { bad++; continue; }  // (NaN too)
+                    if (v < lo) lo = v;
+                    if (v > hi) hi = v;
+                    if (v == 0.0f) zeros++;
+                    if (v == sd3_st.clear) isclear++;
+                    uint32_t gx = x * 16 / w, gy = y * 9 / h;
+                    gsum[gy][gx] += v, gn[gy][gx]++;
+                }
+            for (uint32_t ty = 0; ty < tiles_y; ty++)
+                for (uint32_t tx = 0; tx < tiles_x; tx++) {
+                    const float *t0 = d + (size_t)ty * 8 * w + tx * 8;
+                    bool same = true;
+                    for (uint32_t yy = 0; yy < 8 && same; yy++)
+                        for (uint32_t xx = 0; xx < 8 && same; xx++) same = memcmp(&t0[(size_t)yy * w + xx], &t0[0], 4) == 0;
+                    uni += same;
+                }
+            const double npx = (double)w * h;
+            LOG("[sora-draw] selftest %u %s: min %.6f max %.6f | zeros %.2f%% | not 0..1 / NaN %.2f%% | = clear value %.2f%% | uniform 8x8 tiles %.2f%%\n",
+                sd3_st.run, nm[k], lo, hi, 100.0 * zeros / npx, 100.0 * bad / npx, 100.0 * isclear / npx,
+                tiles_x * tiles_y ? 100.0 * uni / ((double)tiles_x * tiles_y) : 0.0);
+            for (int gy = 0; gy < 9; gy++) {
+                char line[16 * 8 + 8];
+                int o = 0;
+                for (int gx = 0; gx < 16; gx++)
+                    o += snprintf(line + o, sizeof line - o, gn[gy][gx] ? " %.4f" : "   --- ", gn[gy][gx] ? gsum[gy][gx] / gn[gy][gx] : 0.0);
+                LOG("[sora-draw] selftest %u %c row %d:%s\n", sd3_st.run, "ABC"[k], gy, line);
+            }
+        }
+        vmaDestroyBuffer(g_vk.vma, sd3_st.buf, sd3_st.mem);  // (its submission is done)
+        sd3_st.buf = VK_NULL_HANDLE, sd3_st.mem = VK_NULL_HANDLE, sd3_st.ptr = NULL, sd3_st.pending = false;
+        return;
+    }
+    sd3_st.passes++;
+    if (sd3_st.passes != SD3_ST_AT1 && sd3_st.passes != SD3_ST_AT2) return;
+    NvnTexture *t = scene_depth_pick();
+    TexBackend *b = t ? vk_tex(t, true) : NULL;
+    sd3_st.run++;
+    if (!b || !b->image || !(b->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) || b->samples != 1 || b->in_feedback_layout ||
+        (b->format != VK_FORMAT_D32_SFLOAT && b->format != VK_FORMAT_D32_SFLOAT_S8_UINT)) {
+        LOG("[sora-draw] selftest %u: not run (scene depth %p format %d samples %u)\n", sd3_st.run, (void *)b, b ? (int)b->format : -1,
+            b ? b->samples : 0u);
+        return;
+    }
+    const uint32_t w = b->width, h = b->height;
+    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = (uint64_t)w * h * 4 * 3, .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+    VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                                  .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
+    VmaAllocationInfo info;
+    if (vmaCreateBuffer(g_vk.vma, &bi, &ai, &sd3_st.buf, &sd3_st.mem, &info) != VK_SUCCESS || !info.pMappedData) {
+        LOG("[sora-draw] selftest %u: no host buffer (%ux%u)\n", sd3_st.run, w, h);
+        if (sd3_st.buf) vmaDestroyBuffer(g_vk.vma, sd3_st.buf, sd3_st.mem);
+        sd3_st.buf = VK_NULL_HANDLE, sd3_st.mem = VK_NULL_HANDLE;
+        return;
+    }
+    sd3_st.ptr = info.pMappedData, sd3_st.w = w, sd3_st.h = h;
+    sd3_st.clear = 1.0f, sd3_st.clear_known = false;
+    if (sd3_frame == vk_frame_counter())
+        for (int i = 0; i < 8; i++)
+            if (sd3_tab[i].t == t && sd3_tab[i].clears) sd3_st.clear = sd3_tab[i].val, sd3_st.clear_known = true;
+    vk_end_pass();  // (no-op when no pass is open)
+    VkCommandBuffer cb = vk_cmd();
+    vk_full_barrier(cb);
+    VkBufferImageCopy c = {.imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1}, .imageExtent = {w, h, 1}};
+    rec_CmdCopyImageToBuffer(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, sd3_st.buf, 1, &c);  // A
+    vk_full_barrier(cb);
+    sd3_barrier(cb, b->image, b->aspect, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);  // B
+    c.bufferOffset = (VkDeviceSize)w * h * 4;
+    rec_CmdCopyImageToBuffer(cb, b->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, sd3_st.buf, 1, &c);
+    sd3_barrier(cb, b->image, b->aspect, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+    c.bufferOffset = (VkDeviceSize)w * h * 4 * 2;  // C
+    bool cexp = sd3_expand(cb, b, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    rec_CmdCopyImageToBuffer(cb, b->image, cexp ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL, sd3_st.buf, 1, &c);
+    if (cexp) sd3_barrier(cb, b->image, b->aspect, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL);
+    vk_full_barrier(cb);
+    sd3_st.seq = vk_pending_seq(), sd3_st.frame = vk_frame_counter(), sd3_st.pending = true;
+    LOG("[sora-draw] selftest %u: recorded on scene-depth pass %llu, frame %llu: image %p %ux%u vkformat %d usage %#x made at frame %llu%s\n",
+        sd3_st.run, (unsigned long long)sd3_st.passes, (unsigned long long)sd3_st.frame, (void *)b->image, w, h, (int)b->format, b->usage,
+        (unsigned long long)b->made_frame, cexp ? "" : " (C: not attachable, read in GENERAL)");
+}
+
+// (s233 amdtest3, SAVAGEWIND_SORA_DEPTH_DIAG=1 log line) the scene depth image's usage, how it was cleared / attached in
+// the frame being recorded (exec.c clear() / begin_pass rows), and the counts of what the candidates really ran.
+void vk_scene_depth_describe3(char *out, size_t n) {
+    NvnTexture *t = scene_depth_pick();
+    TexBackend *b = t ? vk_tex(t, true) : NULL;
+    if (!b) { snprintf(out, n, "none this frame"); return; }
+    int r = -1;
+    if (sd3_frame == vk_frame_counter())
+        for (int i = 0; i < 8; i++) if (sd3_tab[i].t == t) r = i;
+    char row[320];
+    if (r < 0) snprintf(row, sizeof row, "no clear / pass seen this frame%s", sd3_diag() ? "" : " (diag off)");
+    else snprintf(row, sizeof row, "this frame: %u depth clears (vkCmdClearAttachments in its pass: %u whole, %u part; clear draws %u), "
+                  "last value %.4f; attached in %u passes, layout %u (1 = GENERAL) load op %u (0 = LOAD) store op %u (0 = STORE)",
+                  sd3_tab[r].clears, sd3_tab[r].ca_full, sd3_tab[r].ca_part, sd3_tab[r].cdraw, sd3_tab[r].val, sd3_tab[r].passes,
+                  sd3_tab[r].lay, sd3_tab[r].load, sd3_tab[r].store);
+    snprintf(out, n, "usage %#x (sampled %d, depth attachment %d, transfer src %d dst %d, feedback %d), made at frame %llu (now %llu) | %s | "
+             "ran so far: to %llu back %llu attach-pass %llu skipped %llu, copy1 %llu copy2 %llu",
+             b->usage, !!(b->usage & VK_IMAGE_USAGE_SAMPLED_BIT), !!(b->usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT),
+             !!(b->usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT), !!(b->usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT),
+             !!(b->usage & VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT), (unsigned long long)b->made_frame,
+             (unsigned long long)vk_frame_counter(), row,
+             (unsigned long long)sd3_stat.to, (unsigned long long)sd3_stat.back, (unsigned long long)sd3_stat.rpass,
+             (unsigned long long)sd3_stat.skipped, (unsigned long long)sd3_stat.copy1, (unsigned long long)sd3_stat.copy2);
 }
 
 // ---- (Sora-in-BotW, s57) the actors' pass at the 3D -> 2D boundary (runtime/sora_draw.c "where the pass goes";

@@ -161,7 +161,8 @@ def run_bugreport(base, name, short=False):
     names = [n.replace("\\", "/") for n in z.namelist()]
     blob = {n.replace("\\", "/"): z.read(n) for n in z.namelist() if not n.endswith("/")}
     need = ["logs/last.log", "logs/prev.log", "work_logs/install.log", "install_folder/manifest.json", "launchers/" + gameside.SOLO,
-            "launchers/" + gameside.BUGREPORT, "savagewind_folder/savagewind.ini", "systeminfo.txt", "data_listing.txt"]
+            "launchers/" + gameside.BUGREPORT, "savagewind_folder/savagewind.ini", "systeminfo.txt", "data_listing.txt",
+            "vulkaninfo.txt"]  # (s235) the driver's own report (or the "not found" / "failed" line)
     missing = [n for n in need if n not in names]
     bad = [n for n in names if "caption.sav" in n or "game.bin" in n or "save_0" in n]
     si = blob.get("systeminfo.txt", b"").decode("utf-8", "replace")

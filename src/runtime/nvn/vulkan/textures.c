@@ -631,7 +631,26 @@ static void create_image(NvnTexture *t, TexBackend *b) {
     // 2D color targets may be sampled by the draws that render into them (exec.c resolve_feedback: a feedback loop)
     b->feedback_ok = g_vk.feedback_loop && type == VK_IMAGE_TYPE_2D && samples == 1 && (usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
     if (b->feedback_ok) ci.usage |= VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
+    // (s233 amdtest3, issue 2, candidate: SAVAGEWIND_VK_DEPTH_FEEDBACK_USAGE=1, default off; read once, at the first image)
+    // depth images get the feedback-loop usage too when the extension is on (GUESS, Cemu #1176 / Ryujinx hint: AMD may
+    // keep such images uncompressed / readable in GENERAL). Nothing else treats them as feedback targets (feedback_ok
+    // stays false). Made without it again if the driver refuses the image.
+    static int dfb = -1;
+    if (dfb < 0) {
+        const char *e = getenv("SAVAGEWIND_VK_DEPTH_FEEDBACK_USAGE");
+        dfb = e && *e && atoi(e) == 1 ? 1 : 0;
+        if (dfb) LOG("[vk] depth images: feedback-loop usage %s (SAVAGEWIND_VK_DEPTH_FEEDBACK_USAGE=1)\n",
+                     g_vk.feedback_loop ? "ON" : "NOT possible: feedback loops are off on this device");
+    }
+    bool dfb_add = dfb && depthfmt && g_vk.feedback_loop && type == VK_IMAGE_TYPE_2D;
+    if (dfb_add) ci.usage |= VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
     VkResult r = vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL);
+    if (dfb_add && r != VK_SUCCESS) {
+        static int nlog;
+        if (nlog++ < 4) LOG("[vk] depth image %ux%u with feedback-loop usage refused (%d): made without it\n", tw, th, r);
+        ci.usage &= ~VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT;
+        r = vmaCreateImage(g_vk.vma, &ci, &ai, &b->image, &b->mem, NULL);
+    }
     if (sparse && image_out_of_memory(r)) {
         log_memory_budget("at image allocation failure");
         LOG("[vk] image allocation ran out of memory (%ux%ux%u, %u layers, %u levels); draining GPU work and retrying\n",
@@ -674,6 +693,8 @@ static void create_image(NvnTexture *t, TexBackend *b) {
         VK_CHECK(r);
     }
     b->cube_ok = (ci.flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) != 0;
+    b->usage = (uint32_t)ci.usage;  // (s233 amdtest3: for the SAVAGEWIND_SORA_DEPTH_DIAG log only)
+    b->made_frame = vk_frame_counter();
     b->not_attachable = !(ci.usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT));
     static uint64_t serials;
     b->serial = __atomic_add_fetch(&serials, 1, __ATOMIC_RELAXED);

@@ -125,6 +125,7 @@ static bool mw_frame(void) {
     }
     for (int k = 0; k < (rid ? 1 : 3); k++) {
         if (w[k].slot < 0) continue;
+        if (k > 0 && party_slot_off(k - 1)) { if (PD.off && w[k].id > 0) PD.off(w[k].id); continue; }  // (s233 dbgmenu: a None slot: nobody walks there)
         float feet[3];
         for (int j = 0; j < 3; j++) feet[j] = (tg[j] + rt[j] * w[k].x + up[j] * w[k].y) * s;
         PD.pose(w[k].id, w[k].slot, mw_clock(kh + w[k].ph, w[k].frames, w[k].loop), feet, w[k].f, s);

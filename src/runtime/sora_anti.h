@@ -27,6 +27,7 @@
 // (s89 trial) KH2: Anti comes with the first form (Valor, Mysterious Tower) = sora_unlock.h's "Anti" rule: any Drive
 // Form owned (always true while Valor / Wisdom are always owned).
 static bool anti_allowed(void) { return ul_form_unlocked("Anti"); }
+static bool dbm_inf_drive(void);  // (s233, sora_dbgmenu.h) the Debug Menu's Infinite Drive is ON
 
 #define ANTI_ENV "SORA_KH2_ANTI_STATE"
 static const struct { int pct, pts; } ANTI_CHANCE[] = {{25, 10}, {10, 5}, {0, 0}};  // 00battle fmlv 0x61..0x63
@@ -106,6 +107,10 @@ static int anti_choice(int f, bool free_cost) {
         return FORM_ANTI;
     }
     if (free_cost) return f;
+    if (dbm_inf_drive()) {  // (s233 dbgmenu: Infinite Drive ON = no Anti roll and no Anti point change, Final's -10 too)
+        LOG("[anti] no roll, no point: Debug Menu Infinite Drive is ON (%d points kept)\n", AN.pts);
+        return f;
+    }
     if (!strcmp(FM_FORMS[f].name, "Final")) {  // (by name: FORM_FINAL is another branch's enum)
         anti_set_pts(AN.pts - g_anti_final_sub, "Final Form picked (FinalFormSubCount)");
         return f;

@@ -664,6 +664,7 @@ static ULONGLONG g_rox_hint_at;
 static int rox_on_now(void);  // (sora_roxas.h) 1 Roxas is the body, 0 Sora
 static int g_char;            // (sora_roxas.h)
 static int g_dbm_sora;        // (s146 outfit, sora_roxas.h / sora_dbgmenu.h) Debug Menu "Become Sora" ON: Sora is the body whatever the story says; never saved
+static int g_dbm_mksora;      // (s233 dbgmenu) Debug Menu "Mickey Rescue: Now" on a Roxas body: Sora stands in until "Mickey mode over" (sora_roxas.h), never saved
 static bool g_rox_hold;  // (sora_mod_frame drops every draw actor after the body while set: Sora is not shown while Roxas loads; DLL-only)
 #define SL_SLOTS 8
 #define SL_SIDECAR "sora_kh2.json"
@@ -692,8 +693,10 @@ static int ml_lv(void);
 static int fl_lv(void);
 static struct { abm_t on, seen, dev_on, dev_seen, a_on, a_seen; int key; bool dirty, all; int hp, hp_max; } AB = {.key = -1};  // (s141 dbglv) all = the Debug Menu "All Abilities" layer is applied; a_* = the masks under it (real, or the test-level set)
 static bool ab_all(void) { return g_dbgall || AB.all; }  // every ability learned + equipped (debugall, or the Debug Menu row)
-static abm_t ab_real_on(void) { return SL.devlv ? AB.dev_on : AB.all ? AB.a_on : AB.on; }  // the masks a save / the env keep: never a debug layer
-static abm_t ab_real_seen(void) { return SL.devlv ? AB.dev_seen : AB.all ? AB.a_seen : AB.seen; }
+// (s233) the Dodge Roll bit while Become Sora is its only reason (no paraglider, chestfirst on): never in a save / the env
+static abm_t ab_roll_dbg_only(void) { return g_ab_roll_dbg && !g_ab_glider && g_chestfirst ? ab_bit(AB_DODGE_ROLL) : 0; }
+static abm_t ab_real_on(void) { return (SL.devlv ? AB.dev_on : AB.all ? AB.a_on : AB.on) & ~ab_roll_dbg_only(); }  // the masks a save / the env keep: never a debug layer
+static abm_t ab_real_seen(void) { return (SL.devlv ? AB.dev_seen : AB.all ? AB.a_seen : AB.seen) & ~ab_roll_dbg_only(); }
 static int dbm_set(int row, int val, const char *why);  // (s141, sora_dbgmenu.h)
 static void dbm_ab_tick(void);  // (s141, sora_dbgmenu.h)  // dev_*: stash while devlv  // hp: sora.c HUD (Experience Boost)
 // (s102 b16-chestabil) abilities BotW's treasure chests gave (sora_chestabil.h): CA.mask (sora_abil.h bits; popcount = rewards given).
@@ -1011,7 +1014,7 @@ static bool sl_sidecar_write(int slot, uint32_t exp, uint32_t kills, const SlSto
     GetLocalTime(&now);
     char roxs[80];  // (s111 roxload) auto mode only: a forced body (set char 1 / 2) says nothing about the story
     int rn = snprintf(roxs, sizeof roxs, "  \"wpnuse\": %d,\n", g_wpn_use != 0);  // (s128 wpnmenu) 1 = Link's BotW weapon, 0 = the Keyblade
-    if (g_char == 0 && !g_dbm_sora) snprintf(roxs + rn, sizeof roxs - rn, "  \"roxas\": %d,\n", rox_on_now());
+    if (g_char == 0 && !g_dbm_sora && !g_dbm_mksora) snprintf(roxs + rn, sizeof roxs - rn, "  \"roxas\": %d,\n", rox_on_now());
     int n = snprintf(b, sizeof b,
                      "{\n  \"version\": 1,\n  \"what\": \"Sora in BotW: Sora's KH2 level for this BotW save slot (sora_mod.dll, "
                      "recon/S55_HELPER_LEVELS23.md)\",\n  \"slot\": %d,\n  \"exp\": %u,\n  \"lv\": %d,\n  \"kills\": %u,\n"

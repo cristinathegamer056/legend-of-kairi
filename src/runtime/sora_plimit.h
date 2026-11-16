@@ -781,6 +781,7 @@ static const char *pl_gate(int k) {  // NULL = can start
     if (PLM.on) return "a Limit is running";
     if (IN_GUEST || fm_in_form()) return "not in base Sora";
     if (!P.on || g_party_id[mi] <= 0 || !PD.pose || !PD.slot_pose) return "the member is not drawn";
+    if (party_slot_off(mi)) return "the member is off (Debug Menu Party row None)";  // (s233)
     if (g_party_absorbed[mi]) return "the member is absorbed by a Drive Form";
     if (P.m[mi].hp <= 0 || P.m[mi].kd != KD_NONE) return "the member is down";
     if (mp_charging() || MP.mp <= 0) return "MP Charge";

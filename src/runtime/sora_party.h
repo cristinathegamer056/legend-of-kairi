@@ -37,6 +37,11 @@ _Static_assert(PARTY_N == PCH_SLOTS, "sora_pchar.h slots = the party's");
 static int g_pchar[PARTY_N] = {PCH_DONALD, PCH_GOOFY};  // (s217 riku) the character in each slot (Debug Menu "Party"; session only)
 static int g_pfx = 1;  // (s223 rikufx) live "set pfx": 1 = the stand-ins' own KH2 sparks + ribbon (sora_pfx.h), 0 = as before s223
 static bool g_party_absorbed[PARTY_N];  // (s68 drive: a Drive Form took him in - not ticked, drawn or shown on the HUD)
+// (s233 dbgmenu) Debug Menu Party row "None": the slot is empty this session. Held through g_party_absorbed (= what a Drive Form does:
+// not ticked, drawn, heard, shown on the HUD, warped) which the Drive Form revert / summon end / party code never clear while this is
+// set (sora_form.h fm_absorb, sora_summon.h sm_end); the slot keeps its own member underneath. Rides a hot reload in PPICK_ENV (" off=").
+static bool g_pslot_off[PARTY_N];
+static bool party_slot_off(int s) { return s >= 0 && s < PARTY_N && g_pslot_off[s]; }
 static bool g_plim_hold[PARTY_N];       // (s133 limits: a party Limit (sora_plimit.h) owns him - out of the follow / combat AI, drawn there; the HUD plate stays)
 #define PTRAIL_N 200            // Sora's last grounded points (PHH Trail n 200)
 #define PTRAIL_STEP_CM 40.0f    // ... at least this far apart (PHH step 40 UU) or PTRAIL_DY_CM up / down
@@ -983,6 +988,7 @@ static bool pc_low(float hp, float mx) { return mx > 0 && hp <= (float)((int)mx 
 static bool pc_below(float hp, float mx, float t) { return mx > 0 && hp < (float)(int)(mx * t); }
 static float pc_hp_of(const PIn *in, int who, float *mx) {
     if (who == 0) return *mx = in->sora_hp_max, in->sora_hp;
+    if (g_party_absorbed[who - 1]) return *mx = 1, 1;  // (s233: a member who is not in the field (None / a Drive Form / a summon) is never a Cure target)
     return *mx = P.m[who - 1].hp_max, P.m[who - 1].hp;
 }
 static int pc_heal_target(int i, const PIn *in) {  // re:0x1B53B0: the <= 25 % one: Sora, else me, else the other
@@ -2338,8 +2344,9 @@ static uint32_t party_have_mask(void) {
 }
 static void party_pick_persist(void) {
     char b[48];
-    snprintf(b, sizeof b, "0:%d 1:%d", g_pchar[0], g_pchar[1]);
-    SetEnvironmentVariableA(PPICK_ENV, pchar_home(g_pchar, 0) && pchar_home(g_pchar, 1) ? NULL : b);
+    int n = snprintf(b, sizeof b, "0:%d 1:%d", g_pchar[0], g_pchar[1]);
+    if (g_pslot_off[0] || g_pslot_off[1]) snprintf(b + n, sizeof b - (size_t)n, " off=%d%d", g_pslot_off[0], g_pslot_off[1]);  // (s233: an older DLL stops reading at the 2nd pair)
+    SetEnvironmentVariableA(PPICK_ENV, pchar_home(g_pchar, 0) && pchar_home(g_pchar, 1) && !g_pslot_off[0] && !g_pslot_off[1] ? NULL : b);
 }
 static int party_level(int i);
 // slot takes character c now; returns the character in the slot afterwards (the old one when refused: every refusal = one log line)
@@ -2356,7 +2363,8 @@ static int party_swap(int slot, int c, const char *why) {
     if (!PD.load || !PD.off) { LOG("[party] swap: %s refused, the party is not loaded (party off / old exe) (%s)\n", who, why); return old; }
     if (g_party_absorbed[slot] || g_plim_hold[slot] || P.m[slot].kd != KD_NONE) {
         LOG("[party] swap: %s refused, %s is %s right now (%s): try again in a moment\n", who, PCH_TAB[old].name,
-            g_party_absorbed[slot] ? "in a Drive Form / Summon" : g_plim_hold[slot] ? "in a party Limit" : "knocked down", why);
+            g_pslot_off[slot] ? "off (Debug Menu Party row None: pick a character on the row)" : g_party_absorbed[slot] ? "in a Drive Form / Summon"
+            : g_plim_hold[slot] ? "in a party Limit" : "knocked down", why);
         return old;
     }
     char mp[512], pp[512], mo[512], ht[512], miss[512] = "";
@@ -2425,6 +2433,13 @@ static void party_pick_restore(void) {
         LOG("[party] hot reload: this session's pick %s comes back in slot %d\n", pchar_valid(c[j]) ? PCH_TAB[c[j]].name : "?", s[j]);
         party_swap(s[j], c[j], "hot reload: the session's pick");
     }
+    const char *o = strstr(b, " off=");  // (s233 dbgmenu) the Party rows' "None"
+    for (int s2 = 0; o && s2 < PARTY_N; s2++)
+        if (o[5 + s2] == '1') {
+            g_pslot_off[s2] = true, g_party_absorbed[s2] = true;
+            if (g_party_id[s2] > 0 && PD.off) PD.off(g_party_id[s2]);
+            LOG("[party] hot reload: slot %d (%s's place) stays empty (Debug Menu None)\n", s2, s2 ? "Goofy" : "Donald");
+        }
     party_pick_persist();  // (what really stands now: a refused pick is gone from the env)
 }
 

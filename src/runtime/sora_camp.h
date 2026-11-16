@@ -52,6 +52,7 @@ static void camp_vals(CpVals *v) {
     memset(v, 0, sizeof *v);
     g_cp_solo = rm_actor() > 0;  // (s111 roxmenu: Roxas alone in the member rows / plates)
     if (g_cp_solo) LOG("[roxmenu] camp: Roxas is the body: one member, no Donald / Goofy\n");
+    else if (party_slot_off(0) && party_slot_off(1)) g_cp_solo = 2, LOG("[sora] camp: both Party rows None: Sora alone in the member rows\n");  // (s233 dbgmenu; one None slot keeps its member row)
     int32_t munny = -1, t = -1;
     if (!SLX.gdt_s32 || !SLX.gdt_s32("CurrentRupee", &munny)) munny = -1;
     if (!SLX.gdt_s32 || !SLX.gdt_s32("PlayReport_PlayTime", &t)) t = -1;  // seconds (checked s79: real saves tick ~65-71 per minute of play)
@@ -93,6 +94,7 @@ static void camp_vals(CpVals *v) {
     memcpy(v->kb, KB.kb, sizeof v->kb);  // (s85 slice 5 Equipment page)
     v->db_real_lv = SL.lv;
     v->db_party_have = party_have_mask();  // (s220 members: who the Party 1 / 2 rows may offer)
+    v->db_party_none = 1;  // (s233: the Party rows offer "None" after the characters)
     for (int r = 0; r < CP_DB_ROWS; r++) v->db_v[r] = dbm_state(r);  // (s146: by backend row)  // (s140 dbgmenu: the Debug page)
     v->kb_own = ul_kb_own_mask();  // (s89 kb: the picker lists the owned ones)
     v->arm_n = armor_worn(v->arm_name, v->arm_def);  // (s120 eqlook: the Armor rows; 0 = old exe / nothing named worn)

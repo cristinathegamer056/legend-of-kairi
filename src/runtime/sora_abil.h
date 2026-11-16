@@ -28,7 +28,10 @@ static int g_abilfix = 1;  // live "set abilfix 0" = the old list + classificati
 // (sora_chestabil.h); without a chest the story still teaches Guard at CHESTFIRST_LV (GUESS 10: an old save past that level
 // never loses it); Dodge Roll is learned once IsGet_PlayerStole2 (the paraglider = Roxas turns into Sora) is set: g_ab_glider,
 // written by sora_levels.h's world-level sweep.
-static int g_chestfirst = 1, g_ab_glider = 0;
+// (s233 player report, GitHub 0.1.8) g_ab_roll_dbg = the Debug Menu's Become Sora is ON (sora_dbgmenu.h dbm_ab_tick keeps it = g_dbm_sora):
+// Sora's body without the paraglider learns Dodge Roll as if the flag were set. Never saved: sora_levels.h ab_real_on / ab_real_seen
+// leave that bit out while it is the only reason (ab_roll_dbg_only), and the row going OFF drops it from the masks again.
+static int g_chestfirst = 1, g_ab_glider = 0, g_ab_roll_dbg = 0;
 #define CHESTFIRST_LV 10
 enum { AB_DODGE_ROLL = 564 };
 #define AB_N ((int)(sizeof AB_TAB / sizeof AB_TAB[0]))
@@ -64,7 +67,7 @@ static const AbStory AB_STORY[] = {
 static int ab_story_lv(int i) {
     int id = AB_STORY[i].id;
     if (!g_chestfirst) return AB_STORY[i].lv;
-    if (id == AB_DODGE_ROLL) return g_ab_glider ? 1 : 0;  // (0 = never: the LV loop starts at 1)
+    if (id == AB_DODGE_ROLL) return g_ab_glider || g_ab_roll_dbg ? 1 : 0;  // (0 = never: the LV loop starts at 1; s233: + Become Sora)
     return id == AB_GUARD ? CHESTFIRST_LV : AB_STORY[i].lv;
 }
 

@@ -683,6 +683,11 @@ static bool gpu_init(void) {
     return true;
 }
 
+// (s233 amdtest3, issue 2) the layout the scene depth (sdepth) is in during the pass sora_fx_draw draws in: GENERAL as
+// always, unless sora_draw.c moved it for SAVAGEWIND_SORA_DEPTH_LAYOUT (exec.c vk_scene_depth_layout_begin).
+static VkImageLayout g_sdepth_layout = VK_IMAGE_LAYOUT_GENERAL;
+void sora_fx_sdepth_layout(VkImageLayout l) { g_sdepth_layout = l; }
+
 void sora_fx_draw(VkCommandBuffer cb, const float pc_in[32], VkImageView sdepth, VkSampler nearest, VkFormat fmt) {
     if (g_state != 1 || G.failed || !pc_in) return;
     pthread_mutex_lock(&g_lock);
@@ -728,7 +733,7 @@ void sora_fx_draw(VkCommandBuffer cb, const float pc_in[32], VkImageView sdepth,
         if (tex != cur_tex || d->clamp != cur_clamp) {
             VkDescriptorSet set = vk_alloc_set(G.set_layout);
             VkDescriptorImageInfo ii[2] = {{d->clamp ? G.clamp : G.wrap, G.tex_view[tex], VK_IMAGE_LAYOUT_GENERAL},
-                                           {nearest, sdepth ? sdepth : G.tex_view[tex], VK_IMAGE_LAYOUT_GENERAL}};
+                                           {nearest, sdepth ? sdepth : G.tex_view[tex], sdepth ? g_sdepth_layout : VK_IMAGE_LAYOUT_GENERAL}};
             VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = set, .dstBinding = 0, .descriptorCount = 2,
                                       .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = ii};
             mod_update_set(&w);

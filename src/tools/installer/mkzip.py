@@ -103,6 +103,7 @@ SKIP_TOOLS = {"tools/installer/mkzip.py", "tools/sorabuild/config.thispc.json", 
               "tools/installer/test_shortcut.py", "tools/installer/test_play.py", "tools/installer/test_server.py", "tools/installer/signrel.py",
               "tools/installer/test_swsetup.py", "tools/installer/test_swinstall.py", "tools/installer/meltycheck.py",
               "tools/installer/test_meltycheck.py", "tools/installer/build_github_dll.sh", "tools/sorabuild/kit/rebuild_tools.py",   # (s223)
+              "tools/installer/test_amdclean.py",   # (s241)
               "tools/sorabuild/test_pesig.py",   # (s201) host test of pesig.py (reads the dev kit + Melty's signed copy)
               "tools/sorabuild/logo/dev/gen_layers.py", "tools/sorabuild/logo/dev/README.md",
               "tools/sorabuild/ragmap/dev/dump_old.c", "tools/sorabuild/ragmap/dev/dump_new.c", "tools/sorabuild/ragmap/dev/proof.sh",
