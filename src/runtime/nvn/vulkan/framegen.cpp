@@ -189,6 +189,10 @@ static FfxResource shared(int i) { return g.shared.fpGetResource(&g.shared, g.re
 
 extern "C" bool fg_dispatch(VkCommandBuffer cb, const FgConfig *c, const FgFrame *f) {
     if (g.live && memcmp(&g.cfg, c, sizeof *c)) {
+        // (Sora in BotW, s245: what changed, for the log)
+        LOG("[fg] made again: final image %ux%u -> %ux%u, scene %ux%u -> %ux%u, color format %d -> %d, hudless %d -> %d\n",
+            g.cfg.display_w, g.cfg.display_h, c->display_w, c->display_h, g.cfg.render_w, g.cfg.render_h, c->render_w,
+            c->render_h, (int)g.cfg.color_format, (int)c->color_format, (int)g.cfg.hudless_format, (int)c->hudless_format);
         g_fg_vk.wait_idle();
         fg_destroy();
     }

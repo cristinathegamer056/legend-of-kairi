@@ -76,6 +76,29 @@ is a new, remade sound). Both changed again: regenerate manifest.thispc.json bef
 (s217 review F2) Everything the step GENERATES (procedural positions / offsets / UVs, computed alphas / colours) is quantised through
 integers (`qz`: positions 1/1024 cm, UVs 1/65536, 0..255 values 2^-30) before it is written, so a last-bit difference of sin / cos / exp
 on another PC cannot change fx.bin's sha256 (the release pins it); KH2's copied elements stay byte-identical.
+(s247, step fxsfx_kbown2, after fx_party / sfx_party2) `kbownfx.py --part s247` appends Silent Princess ("p1") and Calamity's
+Gaze ("c1"): sparks, ribbons and the bits shed off the blade (`kbp1_*`, `kbc1_*`, incl. `kb<set>_shed_0..2`), ALL procedural (no KH2
+element is read), + `ours/kb/kbp1_hit.wav` / `kbc1_hit.wav` and the marker `kbse_v2`. Same rules (quantised, old rows checked);
+fx/fx.bin + sfx/sfx.bin change: regenerate manifest.thispc.json before a release.
+
+## Each KH2 Keyblade's own hit sounds (s247 kbse, step sfx_kbhitse)
+The last sfx step (after fxsfx_kbown2): `fx/kbhitse.py` appends, for every per-Keyblade effect file `obj/W_EX010_<x>0.a.us`, the
+sound bank its type-31 entry names (se501 .. se527; Y0 / Z0 share Oblivion's se502) at the se500 cues the hit table already uses
+(0..9 + 12), as names `kbh<set>_<atkp>` (one per se500 hit row) + marker `kbhitse_v1`. The sounds are recipe sounds (traced by
+sounds_mine like every sfx tool: kbhitse.py is in MINE_SRC and in mine_sounds.py's trace), decoded by sounds_build from the
+player's own SCDs, packed with their SCD volume as sfxpack.py packs se500's. +286 sounds, +113 MB sfx.bin (read whole at game start).
+kit/kh2_files.json lists se504..se527 for kh2pick. sfx/sfx.bin changes: regenerate manifest.thispc.json before a release.
+The DLL plays them only with live `set kbhitse 1` (runtime/sora_kbfx.h kbhitse_id; recon/s247/S247_HELPER_KBSE.md).
+
+## Each KH2 Keyblade's own swing whooshes + wall clank (s249 kbswing, step sfx_kbswingse)
+The last sfx step (after sfx_kbhitse): `fx/kbswingse.py` adds, for every per-Keyblade bank (as kbhitse), the cues of the whoosh rows
+(the bank-500 play_sound frame triggers of Sora's weapon msets W_EX010 / W_EX010_<form>_R / _L: 32, 35..60) + cue 10 (the wall clank,
+se 500010). The trigger rows of every Sora / form slot s < 0x10000 are copied to 0x1000000 + s (all but the whooshes) and to
+0x1000000 + ((1 + 2k + hand) << 16) + s (only that hand's whooshes, set k's sounds; k = base 36 of the set's first character, the
+Kingdom Key 0); names `kbswingse_v1`, `kbsw<set>`, `kbwallse_v1`, `kbwl<set>`. Which row is which hand comes from the KH2 weapon
+msets (matched by slot, frame, cue). +676 sounds, +60.5 MB sfx.bin (read whole at game start), +4781 trigger rows. The DLL plays
+them only with live `set kbswingse 1` / `set kbwallse 1` (runtime/sora_kbfx.h kbsw_motion / kbwall_play;
+recon/s249/S249_HELPER_KBSWING.md). sfx/sfx.bin changes: regenerate manifest.thispc.json before a release.
 
 ## Friend kit (s168): no SDK / clang / MSYS2 / Git bash / system Python
 `kit/mkkit.py` (dev PC only) builds one folder: the 6 C# tools (same `dotnet build -c Release` as the steps) + fxrec_boot.exe

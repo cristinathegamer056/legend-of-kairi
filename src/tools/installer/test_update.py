@@ -327,9 +327,40 @@ def test_relocated_folders(base):
     print("ok relocated folders")
 
 
+def test_invalidate_work_inputs(base):
+    """(s256) a step that is re-run takes its work-only inputs with it: the steps it depends on (also through other steps) that
+    only write into work/ lose their marker too. Found by the 0.1.10 -> 0.6.0 upgrade test: hud_lvup was re-run on the
+    lvup_labels.txt the OLD tools' hud_text had left in work/, and verify refused hud/lvup.bin."""
+    lst = ("step_v                   hud      done  deps=- out=-\n"
+           "step_w                   hud      done  deps=step_v out=-\n"
+           "step_u                   bakes    done  deps=- out=-\n"
+           "step_x                   bakes    done  deps=- out=-\n"
+           "step_a                   bakes    done  deps=step_u out=a.bin\n"
+           "step_b                   fx       done  deps=step_a,step_w out=fx/b.bin fx/c.bin\n"
+           "step_c                   hud      done  deps=step_x out=hud\n")
+    rel = make_release(os.path.join(base, "new"), "0.1.3-alpha", {"a.bin": "1", "fx/b.bin": "2-new", "fx/c.bin": "3", "hud/h.bin": "4"}, "B")
+    old = make_old_install(os.path.join(base, "old"), "0.1.1-alpha", {"a.bin": "1", "fx/b.bin": "2", "fx/c.bin": "3", "hud/h.bin": "4"}, "A")
+    for s in ("step_u", "step_v", "step_w", "step_x"):
+        w(os.path.join(old, "work", "done", s), "done")
+    logs = []
+    update.prepare(rel, old, logs.append)
+    assert update.invalidate(old, lst, logs.append) == ["step_b"]
+    done = os.path.join(old, "work", "done")
+    # step_u: reached through step_a, whose own file did not change. It goes too (step_b may read step_u's work file and name
+    # only step_a); step_a itself keeps its marker and its data file.
+    for s in ("step_b", "step_w", "step_v", "step_u"):
+        assert not os.path.exists(os.path.join(done, s)), s + ": the re-run step and its work-only inputs lose their marker"
+    for s in ("step_a", "step_c", "step_x", "_kh2pick"):
+        assert os.path.exists(os.path.join(done, s)), s + " must stay (a step with a data file of its own / not an input of step_b)"
+    assert os.path.exists(os.path.join(old, "data", "a.bin")), "an unchanged data file stays"
+    assert any("step_u, step_v, step_w" in l for l in logs), logs
+    assert update.read_journal(old)["invalidated_inputs"] == ["step_u", "step_v", "step_w"]
+    print("ok invalidate work inputs")
+
+
 def main():
     for t in (test_detect, test_swap_and_invalidate, test_unowned_rebuilds_all, test_crash_recovery, test_release_items, test_busy,
-              test_junction_escape, test_relocated_folders):
+              test_junction_escape, test_relocated_folders, test_invalidate_work_inputs):
         with tempfile.TemporaryDirectory(dir=os.environ.get("LOK_TEST_TMP")) as base:
             t(base)
     print("ok")

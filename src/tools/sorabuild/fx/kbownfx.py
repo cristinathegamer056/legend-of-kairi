@@ -3,6 +3,7 @@
 of fx.bin / sfx.bin. Nothing old is touched (checked at the end, byte for byte, like chickfx.py).
 
   python -E -P kbownfx.py --fx-in <fx.bin> --sfx-in <sfx.bin> --out <dir> --ours <tools/sorabuild/ours/kb> [--no-fx] [--no-sfx]
+                          [--part s216|s247]
 
 Inputs: the running packs of the fx chain (fx.bin already holds KH2's per-Keyblade sets kb<xx>_* of tools/sorabuild/fx/fxbake.py,
 made at install from the player's own KH2 data) + our synthesised WAVs (ours/kb/kbsynth.py). No KH2 / BotW byte is in this file
@@ -39,6 +40,22 @@ EFFECTS (fx.bin, SKFX v1). Set names: Sealing Blade "s1", Guardian Core "g1" (KH
   their indices.
 SOUNDS (sfx.bin, SKSF v1): + kbs1_hit, kbg1_hit, kbs1_beam, kbs1_beam_hit (keys "ours/kb/<name>.wav", names = the same) and the
   marker name "kbse_v1". No trigger / voice / hit-table row changes.
+
+(s247 kbfx2) --part s247 (its own chain step fxsfx_kbown2, after the party steps): the user's Silent Princess "p1" and Calamity's
+Gaze "c1", ALL PROCEDURAL (our shapes + colours, nothing taken from a source element), camera-facing (batch flags 1) like KH2's
+sparks, so the flower / the eye always face the camera:
+  kbp1_hit / _hit_finish / _hit_guard   = a flower blooming open (6 / 6 + 5 inner / 5 petals fanning out from a bud: an additive
+                                          blue glow under each, an alpha white-cyan petal with a lilac tip), a bright centre,
+                                          sparkle dust; the finisher x1.7 + a soft blue light burst and a light ring.
+  kbp1_trail                            = our ribbon (ADDITIVE): white core at the tip edge, cyan-white body, lilac toward the old end.
+  kbp1_shed_0..2                        = 2 / 2 / 3 glowing petals drifting down, swaying, fluttering, fading (48 frames).
+  kbc1_hit / _hit_finish / _hit_guard   = a Malice splash (black-purple goo blobs flung out and falling, alpha, with magenta rims;
+                                          dark smoke puffs; a magenta flash) and the pink-red slit eye opening in a dark cloud,
+                                          then closing (atlas of 6 lid stages); the finisher x1.6 + a dark shockwave ring with a
+                                          magenta edge; the guard hit = a small splash, no eye.
+  kbc1_trail                            = our ribbon (ALPHA): smoky black-purple body breaking into wisps, magenta edges.
+  kbc1_shed_0..2                        = 3 / 3 / 2 magenta embers rising a little, flickering, dying (36 frames).
+  Sounds kbp1_hit, kbc1_hit + the marker "kbse_v2".
 """
 import argparse
 import hashlib
@@ -96,6 +113,16 @@ NEW_FX = (["kbs1_" + k for k in KINDS] + ["kbs1_trail"] + ["kbg1_" + k for k in 
           + BEAM_ROLL_FX)
 SOUNDS = ["kbs1_hit", "kbg1_hit", "kbs1_beam", "kbs1_beam_hit"]
 SFX_MARKER = "kbse_v1"
+# (s247 kbfx2) PART "s247": the user's two new Keyblades, Silent Princess "p1" (0x7e03) and Calamity's Gaze "c1" (0x7e04). ALL
+# PROCEDURAL (our shapes, our colours; no source element), appended by its own chain step (fxsfx_kbown2, after fx_party /
+# sfx_party2) so a fresh install makes the same bytes as the live packs + this part. "<set>_shed_<k>" = the one-shot bits the
+# runtime (sora_kbfx.h kbfx_shed) drops off the blade while its ribbon is drawn: petals (p1) / embers (c1).
+SHED_N = 3
+NEW_FX_S247 = (["kbp1_" + k for k in KINDS] + ["kbp1_trail"] + ["kbp1_shed_%d" % k for k in range(SHED_N)]
+               + ["kbc1_" + k for k in KINDS] + ["kbc1_trail"] + ["kbc1_shed_%d" % k for k in range(SHED_N)])
+SOUNDS_S247 = ["kbp1_hit", "kbc1_hit"]
+SFX_MARKER_S247 = "kbse_v2"
+PARTS = {"s216": (NEW_FX, SOUNDS, SFX_MARKER), "s247": (NEW_FX_S247, SOUNDS_S247, SFX_MARKER_S247)}
 
 
 def die(msg):
@@ -579,15 +606,550 @@ def batch_rec(tex, flags, blend, clamp, first, n, upright=(0.0,) * 9):
     return [tex, flags, blend, clamp, first, n, upright]
 
 
-def build_fx(src_path, dst, log):
+# ================================================================================================================ s247: p1 + c1
+# Everything below is PROCEDURAL (ours). Space = KH effect space, cm: x right, y DOWN, z forward (Sora's facing; sora_fx.c turns it
+# by the spawn yaw only). Hit sparks / shed bits are camera-facing: batch flags bit 0 = the vertex offsets are CAMERA space
+# (x right, y down, z away from the camera), the way KH2's own sparks are drawn, so a flower / the eye always faces the camera.
+# blend 0 = additive (glow), 1 = alpha (src alpha / 1 - src alpha: can draw dark: the Malice). Colours GUESS (from the concept art).
+P1 = {"white": (238, 246, 255), "cyan": (165, 235, 245), "blue": (120, 175, 255), "lilac": (226, 200, 245), "pink": (240, 205, 240)}
+C1 = {"black": (26, 7, 34), "smoke": (52, 16, 70), "purple": (96, 30, 128), "magenta": (240, 45, 185), "hot": (255, 110, 215),
+      "eye": (250, 90, 125)}
+EYE_OPEN = (0.12, 0.3, 0.5, 0.7, 0.88, 1.0)  # the eye atlas's 6 cells (lid openness)
+
+
+def _grid(w, h):
+    """pixel centres -> x, y in -1..1 (x across w, y across h)"""
+    y, x = np.mgrid[0:h, 0:w]
+    return (x + 0.5) / w * 2 - 1, (y + 0.5) / h * 2 - 1
+
+
+def _smooth(e0, e1, x):
+    k = np.clip((x - e0) / (e1 - e0), 0, 1)
+    return k * k * (3 - 2 * k)
+
+
+def _noise(w, h, cells, seed, octaves=3):
+    """deterministic value noise 0..1 (h, w): bilinear-upsampled random grids, fbm"""
+    rng = np.random.default_rng(seed)
+    out, amp, tot = np.zeros((h, w)), 1.0, 0.0
+    for o in range(octaves):
+        c = cells * 2 ** o
+        g = rng.random((c + 1, c + 1))
+        gy, gx = (np.arange(h) + 0.5) / h * c, (np.arange(w) + 0.5) / w * c
+        iy, ix = np.minimum(gy.astype(int), c - 1), np.minimum(gx.astype(int), c - 1)
+        fy, fx = (gy - iy)[:, None], (gx - ix)[None, :]
+        a, b = g[iy][:, ix], g[iy][:, ix + 1]
+        cc, d = g[iy + 1][:, ix], g[iy + 1][:, ix + 1]
+        out += amp * ((a * (1 - fx) + b * fx) * (1 - fy) + (cc * (1 - fx) + d * fx) * fy)
+        tot += amp
+        amp *= 0.5
+    return out / tot
+
+
+def _bgra(rgb, a):
+    """rgb (h, w, 3) 0..255 floats, a (h, w) 0..255 -> BGRA uint8 (every value through rnd: review F2)"""
+    h, w = a.shape
+    out = np.zeros((h, w, 4), np.uint8)
+    rgb = np.broadcast_to(np.asarray(rgb, np.float64), (h, w, 3))
+    for c in range(3):
+        out[:, :, 2 - c] = np.clip(rnd(rgb[..., c]), 0, 255)
+    out[:, :, 3] = np.clip(rnd(a), 0, 255)
+    return out
+
+
+def petal_tex(w=32, h=64):
+    """a pointed lotus petal along v (row 0 = its base, the last row = its tip), white with a brighter middle vein"""
+    x, y = _grid(w, h)
+    v = (y + 1) / 2
+    hw = np.sin(np.pi * np.clip(v, 0, 1) ** 0.72) ** 0.85 * 0.96 + 1e-3
+    e = 1 - np.abs(x) / hw
+    a = _smooth(0.0, 0.3, e) * _smooth(0.0, 0.07, v) * 255
+    g = 255 * np.clip(0.8 + 0.2 * e + 0.12 * np.exp(-(x / 0.07) ** 2) * (1 - v), 0, 1)
+    return _bgra(np.stack([g, g, g], -1), a)
+
+
+def glow_tex(n=64):
+    x, y = _grid(n, n)
+    r = np.sqrt(x * x + y * y)
+    a = np.clip(1 - r, 0, 1) ** 1.6 * (0.35 + 0.65 * np.exp(-r * r / 0.05)) * 255
+    return _bgra((255, 255, 255), a)
+
+
+def ring_tex(n=64, r0=0.72, wr=0.13):
+    """a soft annulus (rims, the light ring)"""
+    x, y = _grid(n, n)
+    r = np.sqrt(x * x + y * y)
+    a = np.exp(-((r - r0) / wr) ** 2) * np.clip((1 - r) / 0.12, 0, 1) * 255
+    return _bgra((255, 255, 255), a)
+
+
+def blob_tex(cell=64, seed=2471):
+    """2 x 2 atlas of Malice goo blobs: a wobbly round edge + a few droplets, a little darker grain inside (white: the vertex
+    colour makes it black-purple)"""
+    rng = np.random.default_rng(seed)
+    out = np.zeros((2 * cell, 2 * cell, 4), np.uint8)
+    for k in range(4):
+        x, y = _grid(cell, cell)
+        r, th = np.sqrt(x * x + y * y), np.arctan2(y, x)
+        R = np.full_like(r, 0.6)
+        for m in range(2, 7):
+            R += rng.uniform(0.02, 0.09) / m ** 0.5 * np.cos(m * th + rng.uniform(0, 2 * np.pi))
+        a = _smooth(0.0, 0.07, R - r)
+        for _ in range(3):  # droplets near the edge
+            ang, d, s = rng.uniform(0, 2 * np.pi), rng.uniform(0.68, 0.84), rng.uniform(0.05, 0.1)
+            a = np.maximum(a, _smooth(0.0, 0.05, s - np.sqrt((x - d * np.cos(ang)) ** 2 + (y - d * np.sin(ang)) ** 2)))
+        a *= np.clip((1 - r) / 0.08, 0, 1)
+        g = 255 * (0.7 + 0.3 * _noise(cell, cell, 4, seed + 10 + k))
+        out[(k // 2) * cell:(k // 2 + 1) * cell, (k % 2) * cell:(k % 2 + 1) * cell] = _bgra(np.stack([g, g, g], -1), a * 255)
+    return out
+
+
+def smoke_tex(cell=64, seed=2472):
+    """2 x 2 atlas of soft noisy puffs (white)"""
+    out = np.zeros((2 * cell, 2 * cell, 4), np.uint8)
+    for k in range(4):
+        x, y = _grid(cell, cell)
+        r = np.sqrt(x * x + y * y)
+        n = _noise(cell, cell, 3, seed + k, 4)
+        a = np.clip(1 - r * (0.85 + 0.4 * n), 0, 1) ** 1.3 * (0.45 + 0.55 * n) * np.clip((1 - r) / 0.1, 0, 1) * 255
+        out[(k // 2) * cell:(k // 2 + 1) * cell, (k % 2) * cell:(k % 2 + 1) * cell] = _bgra((255, 255, 255), a)
+    return out
+
+
+def eye_tex(cw=128, ch=64):
+    """the Calamity eye, 2 x 3 atlas: cell k = the lids open EYE_OPEN[k]. Coloured (vertex colour white, alpha blend): a pink-red
+    glowing eye (bright middle, darker red toward the lids), a darker iris ring, a vertical purple slit pupil with a lilac rim, a
+    small highlight, a black lid outline. The lids cut the iris / pupil (they do not squash it)."""
+    out = np.zeros((3 * ch, 2 * cw, 4), np.uint8)
+    for k, o in enumerate(EYE_OPEN):
+        x, y = _grid(cw, ch)
+        X, Y = x, y * ch / cw  # the same scale on both axes (1 unit = cw / 2 px)
+        s = np.clip(1 - (X / 0.94) ** 2, 0, 1)
+        up, lo = -o * 0.44 * s ** 0.8, o * 0.36 * s ** 0.8
+        din = np.minimum(Y - up, lo - Y)  # > 0 inside the lids
+        px = 2.0 / cw  # one pixel in units
+        inside = _smooth(-px, px, din) * (np.abs(X) < 0.94)
+        line = np.exp(-((din - 0.0) / (2.2 * px)) ** 2) * (s > 0.002)
+        rr = np.sqrt(X * X + Y * Y)
+        base = np.array(C1["eye"], np.float64)
+        rgb = (base[None, None] * (0.55 + 0.45 * np.exp(-(rr / 0.55) ** 2))[..., None]
+               + np.array((255, 160, 180.0))[None, None] * (0.6 * np.exp(-(rr / 0.2) ** 2))[..., None])
+        ir = np.exp(-((rr - 0.32) / 0.035) ** 2)[..., None]  # the iris ring
+        rgb = rgb * (1 - 0.6 * ir) + np.array((150, 15, 60.0)) * 0.6 * ir
+        pe = (X / 0.07) ** 2 + (Y / 0.3) ** 2  # the slit
+        rim = _smooth(1.9, 1.3, pe)[..., None]
+        pup = _smooth(1.15, 0.85, pe)[..., None]
+        rgb = rgb * (1 - rim) + np.array((205, 125, 235.0)) * rim
+        rgb = rgb * (1 - pup) + np.array((72, 16, 104.0)) * pup
+        hl = np.exp(-(((X + 0.14) ** 2 + (Y + 0.1) ** 2) / 0.0012))[..., None]
+        rgb = rgb * (1 - 0.8 * hl) + np.array((255, 235, 245.0)) * 0.8 * hl
+        ln = np.clip(line, 0, 1)[..., None]
+        rgb = rgb * (1 - ln) + np.array((20, 4, 22.0)) * ln
+        a = np.maximum(inside, np.clip(line, 0, 1)) * 255
+        out[(k // 2) * ch:(k // 2 + 1) * ch, (k % 2) * cw:(k % 2 + 1) * cw] = _bgra(np.clip(rgb, 0, 255), a)
+    return out
+
+
+def eye_uv(k, cw=128, ch=64):
+    """uv rect (u0, v0, u1, v1) of eye cell k (half a texel in)"""
+    W, H = 2 * cw, 3 * ch
+    x0, y0 = (k % 2) * cw, (k // 2) * ch
+    return ((x0 + 0.5) / W, (y0 + 0.5) / H, (x0 + cw - 0.5) / W, (y0 + ch - 0.5) / H)
+
+
+def cell_uv(k, n=2):
+    """uv rect of cell k of an n x n atlas (half a texel in for 64 px cells)"""
+    e = 0.5 / (64 * n)
+    return ((k % n) / n + e, (k // n) / n + e, (k % n + 1) / n - e, (k // n + 1) / n - e)
+
+
+def ribbon_tex_s247(which, w=128, h=64):
+    """our ribbons: u (x) = the sample's age (0 = the blade now .. 1 = the old end), v (y) = across the blade, row 0 = the TIP
+    (sora_fx.c's GUESS default; "set kbfxflip 1" puts it at the grip). p1 is drawn ADDITIVE (moonlight glow), c1 ALPHA (smoke)."""
+    x, y = _grid(w, h)
+    u, v = (x + 1) / 2, (y + 1) / 2
+    if which == "p1":
+        b = 0.22 + 0.78 * np.exp(-(v / 0.38) ** 1.6)
+        core = np.exp(-((v - 0.05) / 0.05) ** 2) * (1 - u) ** 0.6
+        stops = [(0.0, P1["blue"]), (0.45, P1["cyan"]), (0.8, P1["white"]), (1.0, (255, 255, 255))]
+        rgb = ramp(np.clip(b + 0.4 * core, 0, 1), stops)
+        k = (np.clip(u, 0, 1) ** 1.2 * 0.85)[..., None]
+        rgb = rgb * (1 - k) + np.array(P1["lilac"], np.float64) * k
+        n = _noise(w, h, 6, 2473)
+        a = np.clip(b * (0.85 + 0.15 * n) + 0.5 * core, 0, 1) * (1 - u) ** 0.35 * _smooth(0.0, 0.04, v) * 255
+        rng = np.random.default_rng(2474)  # a few soft white-lilac motes (petal glints), fewer toward the old end
+        for _ in range(26):
+            mu, mv = float(qz(rng.random() ** 1.5 * 0.85, Q_VAL)), float(qz(0.08 + 0.7 * rng.random(), Q_VAL))
+            m = np.exp(-(((u - mu) * w / 2.2) ** 2 + ((v - mv) * h / 1.6) ** 2)) * (1 - mu / 0.85)
+            rgb = rgb * (1 - m[..., None]) + np.array((252, 240, 255.0)) * m[..., None]
+            a = np.maximum(a, 230 * m)
+        return _bgra(np.clip(rgb, 0, 255), a)
+    n = _noise(w, h, 5, 2475, 4)
+    n2 = _noise(w, h, 9, 2476, 3)
+    body = np.array(C1["black"], np.float64) * (1 - n[..., None]) + np.array(C1["purple"], np.float64) * (0.55 * n[..., None])
+    ab = (0.62 + 0.3 * n) * _smooth(1.02, 0.6, v + 0.25 * u)
+    e1 = np.exp(-((v - 0.07) / 0.06) ** 2)  # the tip edge: magenta, a brighter line in it
+    e2 = np.exp(-((v - 0.03) / 0.018) ** 2)
+    e3 = 0.6 * np.exp(-((v - 0.93) / 0.05) ** 2)  # a weaker one at the grip
+    rgb = body
+    for e, col in ((e3, C1["magenta"]), (e1, C1["magenta"]), (e2, C1["hot"])):
+        rgb = rgb * (1 - e[..., None]) + np.array(col, np.float64) * e[..., None]
+    a = np.clip(np.maximum(ab, 0.95 * np.maximum(e1, e3)), 0, 1)
+    a *= _smooth(0.0, 0.03, v)
+    a *= np.clip(1.25 - u * (0.5 + 0.9 * n2), 0, 1)  # older smoke breaks up into wisps
+    return _bgra(np.clip(rgb, 0, 255), a * 255)
+
+
+class Layer:
+    """one batch of a frame: camera-facing quads (flags 1) on one texture + blend"""
+
+    def __init__(self, tex, blend):
+        self.tex, self.blend, self.v = tex, blend, []
+
+    def quad(self, p, c, au, av, rgba, uv=(0.0, 0.0, 1.0, 1.0), oz=0.0):
+        """corners (camera space, KH cm) c - au - av (uv u0 v0), c + au - av (u1 v0), c - au + av (u0 v1), c + au + av (u1 v1);
+        rgba (4,) or per corner (4, 4); oz < 0 = nearer the camera (so a spark at a body's skin is not hidden in it)"""
+        rgba = np.broadcast_to(np.asarray(rgba, np.float64), (4, 4))
+        c, au, av = np.asarray(c, np.float64), np.asarray(au, np.float64), np.asarray(av, np.float64)
+        cs = [c - au - av, c + au - av, c - au + av, c + au + av]
+        u0, v0, u1, v1 = uv
+        uvs = [(u0, v0), (u1, v0), (u0, v1), (u1, v1)]
+        for q in (0, 1, 2, 1, 3, 2):
+            self.v.append((tuple(p), (cs[q][0], cs[q][1], oz), uvs[q], tuple(rgba[q])))
+
+    def sprite(self, p, size, rgba, rot=0.0, uv=(0.0, 0.0, 1.0, 1.0), oz=0.0, sx=1.0):
+        """a square billboard of side `size` turned by rot (rad, in the camera plane); sx squashes its width"""
+        cr, sr = np.cos(rot), np.sin(rot)
+        self.quad(p, (0.0, 0.0), (cr * size / 2 * sx, sr * size / 2 * sx), (-sr * size / 2, cr * size / 2), rgba, uv, oz)
+
+    def petal(self, p, base, ang, length, width, rgba_base, rgba_tip, oz=0.0):
+        """a petal quad in the camera plane from `base` (camera offset) pointing at angle ang (0 = right, pi / 2 = DOWN)"""
+        d = np.array((np.cos(ang), np.sin(ang)))
+        n = np.array((-d[1], d[0]))
+        c = np.asarray(base, np.float64) + d * length / 2
+        self.quad(p, c, n * width / 2, d * length / 2, [rgba_base, rgba_base, rgba_tip, rgba_tip], oz=oz)
+
+    def verts(self):
+        if not self.v:
+            return None
+        P = np.array([q[0] for q in self.v])
+        O = np.array([q[1] for q in self.v])
+        U = np.array([q[2] for q in self.v])
+        C = np.array([q[3] for q in self.v])
+        C = np.clip(rnd(C), 0, 255).astype(np.uint8)
+        return qverts(mkverts(P, U, C, off=O))
+
+
+def frame_rows(layers):
+    """[Layer] -> the frame's batch rows (texref, flags 1, blend, clamp 1, upright 0, verts); empty layers dropped"""
+    out = []
+    for L in layers:
+        v = L.verts()
+        if v is not None:
+            out.append((L.tex, 1, L.blend, 1, (0.0,) * 9, v))
+    if not out:  # (a frame must not be empty: one invisible quad)
+        L = Layer(layers[0].tex, 0)
+        L.sprite((0, 0, 0), 0.01, (0, 0, 0, 0))
+        out.append((L.tex, 1, 0, 1, (0.0,) * 9, L.verts()))
+    return out
+
+
+def _ease_out(k):
+    k = min(max(k, 0.0), 1.0)
+    return 1 - (1 - k) ** 3
+
+
+def _fade(f, f0, f1):
+    """1 before f0, 0 after f1, smooth between"""
+    if f <= f0:
+        return 1.0
+    if f >= f1:
+        return 0.0
+    k = (f - f0) / (f1 - f0)
+    return 1 - k * k * (3 - 2 * k)
+
+
+def _rgba(col, a):
+    return (col[0], col[1], col[2], a)
+
+
+def _mix(c0, c1, k):
+    return tuple(c0[i] * (1 - k) + c1[i] * k for i in range(3))
+
+
+def dust_init(rng, n, speed, spread_up=0.3):
+    """n sparkle / droplet starts: a random 3D direction (a little upward bias), a speed in [speed / 2, speed]"""
+    d = rng.normal(size=(n, 3))
+    d[:, 1] -= spread_up  # (y down: up = negative)
+    d /= np.linalg.norm(d, axis=1)[:, None]
+    return d * rng.uniform(speed / 2, speed, n)[:, None], rng.random(n), rng.uniform(0.7, 1.0, n)
+
+
+def dust_pos(vel, f, damp=0.9, grav=0.03):
+    """positions at frame f of particles leaving 0 with vel, damped per frame, falling (y down) by grav per frame^2"""
+    k = (1 - damp ** f) / (1 - damp)
+    p = vel * k
+    p[:, 1] += 0.5 * grav * f * f
+    return p
+
+
+def bloom_layers(T, f, n_frames, scale, petals, open_frames, oz, rng_seed, inner=0, light=False):
+    """Silent Princess's flower opening at the hit: `petals` petals fan out from a bud pointing up to a full ring in `open_frames`
+    frames (a soft additive glow under each, an alpha-blended white-blue petal over it with a lilac-pink tip), a bright centre,
+    sparkle dust flying out. inner = a second, smaller ring of petals between them (finisher); light = the soft blue light burst."""
+    rng = np.random.default_rng(rng_seed)
+    nd = {1: 10, 0: 5}[int(scale >= 0.9)] + (10 if light else 0)
+    vel, ph, br = dust_init(rng, nd, 2.6 * scale)
+    sz = rng.uniform(4.0, 7.0, nd) * scale
+    lil = rng.random(nd) < 0.35
+    glowL, petG, petL, cenL, dustL, burstL = (Layer(T["glow"], 0), Layer(T["petal"], 0), Layer(T["petal"], 1), Layer(T["glow"], 0),
+                                              Layer(T["spark"], 0), Layer(T["ring"], 0))
+    o = _ease_out(f / open_frames)
+    fade = _fade(f, n_frames * 0.5, n_frames - 1)
+    if f < 9:  # the hit flash
+        k = 1 - f / 9
+        glowL.sprite((0, 0, 0), (26 + 26 * (1 - k)) * scale, _rgba(P1["white"], 240 * k), oz=oz)
+    if light:  # the finisher's soft blue light burst + a thin light ring
+        kb = _ease_out(f / 14)
+        ab = 95 * _fade(f, 3, 22)
+        if ab > 0:
+            glowL.sprite((0, 0, 0), (60 + 140 * kb) * scale, _rgba(P1["blue"], ab), oz=oz)
+            burstL.sprite((0, 0, 0), (40 + 190 * kb) * scale, _rgba(P1["cyan"], 125 * _fade(f, 5, 20)), oz=oz)
+    rings = [(petals, 0.0, 1.0, 0)] + ([(inner, np.pi / inner, 0.62, 2)] if inner else [])
+    for npet, a0, sc, delay in rings:
+        ok = _ease_out((f - delay) / open_frames) if f >= delay else 0.0
+        if ok <= 0:
+            continue
+        grow = 1 + 0.12 * max(0.0, f - open_frames) / n_frames  # it keeps opening a little while it fades
+        L = 30 * scale * sc * (0.3 + 0.7 * ok) * grow
+        W = L * (0.34 + 0.16 * ok)
+        b = (2 + 4 * ok) * scale * sc
+        spin = 0.15 * ok + 0.004 * f
+        for i in range(npet):
+            fin = -np.pi / 2 + a0 + 2 * np.pi * i / npet + spin  # final angle (the first petal up: y down -> -pi / 2)
+            ang = -np.pi / 2 + (fin + np.pi / 2) * ok   # a bud pointing up fans out
+            base = (b * np.cos(ang), b * np.sin(ang))
+            a = 235 * fade
+            petG.petal((0, 0, 0), base, ang, L * 1.22, W * 1.45, _rgba(P1["blue"], 0.42 * a), _rgba(P1["lilac"], 0.3 * a), oz=oz)
+            petL.petal((0, 0, 0), base, ang, L, W, _rgba(_mix(P1["white"], P1["cyan"], 0.5), a), _rgba(P1["lilac"], 0.9 * a), oz=oz)
+    ac = 255 * _fade(f, n_frames * 0.35, n_frames * 0.8) * min(1.0, f / 2 + 0.5)
+    cenL.sprite((0, 0, 0), 14 * scale, _rgba((255, 250, 235), ac), oz=oz - 1)
+    for j in range(nd):
+        p = dust_pos(vel[j:j + 1], f, 0.9, 0.02)[0]
+        tw = 0.6 + 0.4 * np.sin(2 * np.pi * (ph[j] + f / 9.0))
+        a = 255 * br[j] * tw * _fade(f, n_frames * 0.45, n_frames - 1)
+        dustL.sprite(p, sz[j] * (0.75 + 0.25 * tw), _rgba(P1["lilac"] if lil[j] else P1["white"], a), rot=0.3 * f / 10, oz=oz * 0.6)
+    return [burstL, glowL, petG, petL, cenL, dustL]
+
+
+def p1_hit(T, kind):
+    n, scale, petals, op, inner, light = {"hit": (30, 1.0, 6, 7, 0, False), "hit_finish": (46, 1.7, 6, 9, 5, True),
+                                          "hit_guard": (18, 0.55, 5, 4, 0, False)}[kind]
+    seed = {"hit": 2481, "hit_finish": 2482, "hit_guard": 2483}[kind]
+    return [frame_rows(bloom_layers(T, f, n, scale, petals, op, -25.0 * scale, seed, inner, light)) for f in range(n)]
+
+
+def p1_shed(T, k):
+    """petals shed off the blade: 2 (variant 2: 3 smaller) glowing petals drifting down, swaying, turning, then fading; 48 frames.
+    The element is spawned with a random yaw, so its drift goes a different way each time."""
+    rng = np.random.default_rng(2490 + k)
+    npet = 3 if k == 2 else 2
+    n = 48
+    p0 = rng.uniform(-4, 4, (npet, 3))
+    v0 = rng.normal(size=(npet, 3)) * 0.35
+    v0[:, 1] = rng.uniform(-0.5, -0.1, npet)  # a small lift first (y down)
+    sway = rng.uniform(3, 6, npet)
+    sw_f = rng.uniform(0.07, 0.12, npet)
+    sw_ph = rng.uniform(0, 2 * np.pi, npet)
+    rot0 = rng.uniform(0, 2 * np.pi, npet)
+    spin = rng.uniform(-0.09, 0.09, npet)
+    flip = rng.uniform(0.08, 0.16, npet)
+    ln = rng.uniform(13, 16, npet) * (0.8 if k == 2 else 1.0)
+    frames = []
+    for f in range(n):
+        g, p_, = Layer(T["glow"], 0), Layer(T["petal"], 1)
+        fa = min(1.0, (f + 1) / 3) * _fade(f, n - 20, n - 1)
+        for i in range(npet):
+            k_ = (1 - 0.93 ** f) / 0.07
+            pos = p0[i] + v0[i] * k_
+            pos[1] += 0.5 * 0.012 * f * f if f < 30 else 0.5 * 0.012 * 900 + 0.36 * (f - 30)  # settles to a slow fall
+            d = np.array((np.cos(sw_ph[i]), 0.0, np.sin(sw_ph[i])))
+            pos = pos + d * sway[i] * np.sin(sw_f[i] * f * 2 * np.pi / 2 + sw_ph[i])
+            rot = rot0[i] + spin[i] * f
+            sx = 0.35 + 0.65 * abs(np.cos(flip[i] * f + sw_ph[i]))  # it flutters (turns edge-on now and then)
+            g.sprite(pos, ln[i] * 1.7, _rgba(P1["blue"], 105 * fa), oz=-3)
+            cr, sr = np.cos(rot), np.sin(rot)
+            p_.quad(pos, (0.0, 0.0), (cr * ln[i] * 0.3 * sx, sr * ln[i] * 0.3 * sx), (-sr * ln[i] / 2, cr * ln[i] / 2),
+                    [_rgba(_mix(P1["white"], P1["cyan"], 0.4), 235 * fa)] * 2 + [_rgba(P1["lilac"], 215 * fa)] * 2, oz=-3)
+        frames.append(frame_rows([g, p_]))
+    return frames
+
+
+def splash_layers(T, f, n, scale, nblob, npuff, seed, oz):
+    """Malice splash: black-purple goo blobs flung out and falling (alpha), each with a magenta rim light (additive), dark purple
+    smoke puffs swelling up (alpha), a magenta flash at the start (additive)"""
+    rng = np.random.default_rng(seed)
+    vel, ph, br = dust_init(rng, nblob, 5.0 * scale, 0.6)
+    vel[:, 2] *= 0.35  # (mostly across the view: a splash toward / away from the camera would not spread on screen)
+    bs = rng.uniform(12, 22, nblob) * scale
+    bc = rng.integers(0, 4, nblob)
+    brot = rng.uniform(0, 2 * np.pi, nblob)
+    pv = rng.normal(size=(npuff, 3)) * 0.5 * scale
+    pv[:, 1] = -rng.uniform(0.3, 0.7, npuff) * scale
+    pc = rng.integers(0, 4, npuff)
+    smokeL, blobL, rimL, flashL = Layer(T["smoke"], 1), Layer(T["blob"], 1), Layer(T["ring"], 1), Layer(T["glow"], 0)
+    if f < 7:
+        k = 1 - f / 7
+        flashL.sprite((0, 0, 0), (16 + 22 * (1 - k)) * scale, _rgba(C1["magenta"], 230 * k), oz=oz)
+    for j in range(npuff):
+        kk = f / n
+        p = pv[j] * f * 0.9 ** (f / 6)
+        a = 165 * _ease_out(f / 4) * _fade(f, n * 0.3, n - 1)
+        smokeL.sprite(p, (22 + 26 * _ease_out(kk * 1.4)) * scale, _rgba(C1["smoke"], a), rot=0.4 * j + 0.01 * f, uv=cell_uv(int(pc[j])),
+                      oz=oz * 0.5)
+    pos = dust_pos(vel, f, 0.86, 0.16 * scale)
+    for j in range(nblob):
+        grow = 0.6 + 0.4 * _ease_out(f / 4)
+        shrink = _fade(f, n * 0.45, n - 1)
+        s = bs[j] * grow * (0.4 + 0.6 * shrink)
+        a = 240 * min(1.0, shrink * 1.6)
+        blobL.sprite(pos[j], s, _rgba(C1["black"], a), rot=brot[j], uv=cell_uv(int(bc[j])), oz=oz * 0.6)
+        rimL.sprite(pos[j], s * 1.2, _rgba(C1["magenta"], 175 * _fade(f, n * 0.25, n * 0.8)), oz=oz * 0.6 + 0.5)
+    return [smokeL, flashL, rimL, blobL], []  # (all behind the eye: the goo bursts out around it; nothing in front)
+
+
+def eye_layers(T, f, scale, t_open, t_hold, t_close, oz):
+    """the slit eye at the hit point: lids open over t_open frames (atlas cells 0..5), stay, close over t_close, gone; a soft
+    pink-red glow behind it (additive) so it also reads on a dark night. Camera-facing, the pupil stays upright (camera y)."""
+    cl, gl, ey = Layer(T["smoke"], 1), Layer(T["glow"], 0), Layer(T["eye"], 1)
+    t1, t2 = t_open + t_hold, t_open + t_hold + t_close
+    ac = 215 * _ease_out((f + 1) / 3) * _fade(f, t1, t2 + 6)
+    if ac > 0:  # the eye sits in a dark Malice cloud (reads on a bright sky; the eye glows out of it at night)
+        cl.sprite((0, 0, 0), 62 * scale, _rgba(C1["black"], ac), uv=cell_uv(1), oz=oz + 2, sx=1.25)
+    if f >= t2:
+        return [cl, gl, ey]
+    if f < t_open:
+        o = (f + 1) / t_open
+    elif f < t1:
+        o = 1.0
+    else:
+        o = 1 - (f - t1 + 1) / (t_close + 1)
+    k = int(np.clip(round(o * (len(EYE_OPEN) - 1)), 0, len(EYE_OPEN) - 1))
+    pop = 1 + 0.12 * _fade(f, t_open, t_open + 4) * (f >= t_open - 1)
+    w, h = 40 * scale * pop, 20 * scale * pop
+    gl.quad((0, 0, 0), (0, 0), (w * 0.85, 0), (0, h * 0.95), _rgba(C1["eye"], 170 * EYE_OPEN[k]), oz=oz + 1)
+    ey.quad((0, 0, 0), (0, 0), (w / 2, 0), (0, h / 2), (255, 255, 255, 255), uv=eye_uv(k), oz=oz)
+    return [cl, gl, ey]
+
+
+def shock_layers(T, f, scale, oz, t_end=20):
+    """the finisher's dark shockwave: a camera-facing ring swelling out, dark (alpha) with a thin magenta edge inside (additive)"""
+    dk, mg = Layer(T["ringd"], 1), Layer(T["ringt"], 1)
+    if f >= t_end:
+        return [dk, mg]
+    k = _ease_out(f / t_end)
+    s = (30 + 230 * k) * scale
+    dk.sprite((0, 0, 0), s, _rgba(C1["black"], 225 * _fade(f, t_end * 0.35, t_end)), oz=oz)
+    mg.sprite((0, 0, 0), s * 0.9, _rgba(C1["magenta"], 200 * _fade(f, t_end * 0.25, t_end * 0.9)), oz=oz - 0.5)
+    return [dk, mg]
+
+
+def c1_hit(T, kind):
+    n, scale, nblob, npuff, eye = {"hit": (32, 1.0, 8, 3, (4, 9, 5)), "hit_finish": (48, 1.6, 12, 4, (6, 16, 6)),
+                                   "hit_guard": (18, 0.6, 4, 1, None)}[kind]
+    seed = {"hit": 2484, "hit_finish": 2485, "hit_guard": 2486}[kind]
+    out = []
+    for f in range(n):
+        ls = []
+        if kind == "hit_finish":
+            ls += shock_layers(T, f, scale, -20.0)
+        back, front = splash_layers(T, f, n, scale, nblob, npuff, seed, -22.0 * scale)
+        ls += back
+        if eye:
+            ls += eye_layers(T, f, scale, eye[0], eye[1], eye[2], -38.0 * scale)
+        ls += front
+        out.append(frame_rows(ls))
+    return out
+
+
+def c1_shed(T, k):
+    """Malice embers off the blade: 3 (variant 2: 2 + a smoke wisp) magenta embers rising a little, flickering, dying; 36 frames.
+    An ember = a magenta core (alpha: still reads on a bright sky) + a hot glow (additive) + a faint dark wisp (alpha)."""
+    rng = np.random.default_rng(2495 + k)
+    ne = 2 if k == 2 else 3
+    n = 36
+    p0 = rng.uniform(-4, 4, (ne, 3))
+    v0 = rng.normal(size=(ne, 3)) * 0.25
+    v0[:, 1] = -rng.uniform(0.45, 0.8, ne)  # rising (y down)
+    life = rng.integers(22, 35, ne)
+    fl = rng.uniform(0, 2 * np.pi, (ne, 3))
+    sz = rng.uniform(5.0, 7.0, ne)
+    frames = []
+    for f in range(n):
+        wisp, core, hot = Layer(T["smoke"], 1), Layer(T["glow"], 1), Layer(T["glow"], 0)
+        for i in range(ne):
+            if f >= life[i]:
+                continue
+            kk = (1 - 0.92 ** f) / 0.08
+            pos = p0[i] + v0[i] * kk
+            pos[0] += 1.5 * np.sin(0.21 * f + fl[i, 0])
+            flick = 0.7 + 0.3 * np.sin(0.9 * f + fl[i, 1]) * np.sin(0.37 * f + fl[i, 2])
+            fa = min(1.0, (f + 1) / 2) * _fade(f, life[i] * 0.5, life[i] - 1)
+            s = sz[i] * (1 - 0.5 * f / life[i])
+            wisp.sprite(pos + np.array((0, 3.0, 0)), (10 + 0.5 * f) * (1.4 if k == 2 else 1.0), _rgba(C1["smoke"], 95 * fa),
+                        uv=cell_uv(i % 4), rot=0.1 * f, oz=-2)
+            core.sprite(pos, s * 1.3, _rgba(C1["magenta"], 255 * fa * flick), oz=-3)
+            hot.sprite(pos, s * 2.8, _rgba(C1["hot"], 130 * fa * flick), oz=-3.2)
+        frames.append(frame_rows([wisp, core, hot]))
+    return frames
+
+
+def trail_elem(tref, blend):
+    """a ribbon style element: the runtime reads only its first batch's texture + blend and first vertex's colour (white)"""
+    L = Layer(tref, blend)
+    L.sprite((0, 0, 0), 0.01, (255, 255, 255, 0))
+    return [[(tref, 1, blend, 1, (0.0,) * 9, L.verts())]]
+
+
+def s247_textures(tx):
+    return {"petal": tx.add(petal_tex()), "glow": tx.add(glow_tex()), "ring": tx.add(ring_tex()), "ringd": tx.add(ring_tex(128, 0.76, 0.12)),
+            "ringt": tx.add(ring_tex(128, 0.82, 0.035)),
+            "spark": tx.add(sparkle_tex()), "blob": tx.add(blob_tex()), "smoke": tx.add(smoke_tex()), "eye": tx.add(eye_tex()),
+            "rib_p1": tx.add(ribbon_tex_s247("p1")), "rib_c1": tx.add(ribbon_tex_s247("c1"))}
+
+
+def elements_s247(tx, log):
+    """(name, frames [(texref, flags, blend, clamp, upright, verts)], loops, pax, bone, fade) for every NEW_FX_S247 element, in order"""
+    T = s247_textures(tx)
+    out = []
+    for k in KINDS:
+        out.append(("kbp1_" + k, p1_hit(T, k), 0, 0, 0, 0))
+    out.append(("kbp1_trail", trail_elem(T["rib_p1"], 0), 0, 0, 0, 0))
+    for k in range(SHED_N):
+        out.append(("kbp1_shed_%d" % k, p1_shed(T, k), 0, 0, 0, 0))
+    for k in KINDS:
+        out.append(("kbc1_" + k, c1_hit(T, k), 0, 0, 0, 0))
+    out.append(("kbc1_trail", trail_elem(T["rib_c1"], 1), 0, 0, 0, 0))
+    for k in range(SHED_N):
+        out.append(("kbc1_shed_%d" % k, c1_shed(T, k), 0, 0, 0, 0))
+    assert [e[0] for e in out] == NEW_FX_S247
+    log("  s247: Silent Princess p1 + Calamity's Gaze c1, %d procedural elements, %d textures of ours" % (len(out), len(T)))
+    return out
+
+
+def build_fx(src_path, dst, log, part="s216"):
     pk = Pack(src_path)
-    for n in NEW_FX:
-        if n in pk.eff:
-            die("the pack already has %s (run on the pack BEFORE this step)" % n)
-    need = ["kb%s_%s" % (SRC[w], k) for w in SRC for k in KINDS + ["trail"]]
-    miss = [n for n in need if n not in pk.eff]
-    if miss:
-        die("the pack has no %s (the s89 per-Keyblade sets of fxbake.py): cannot shape our sets" % ", ".join(miss))
+    for pn, (nfx, _, _) in PARTS.items():  # (s247: each part once, in order: s216's rows must already be there for s247)
+        have = [n for n in nfx if n in pk.eff]
+        if pn == part and have:
+            die("the pack already has %s (run on the pack BEFORE this step)" % have[0])
+        if pn == "s247" and part == "s216" and have:
+            die("the pack already has the s247 rows (%s): the s216 part must run before them" % have[0])
+    if part == "s216":
+        need = ["kb%s_%s" % (SRC[w], k) for w in SRC for k in KINDS + ["trail"]]
+        miss = [n for n in need if n not in pk.eff]
+        if miss:
+            die("the pack has no %s (the s89 per-Keyblade sets of fxbake.py): cannot shape our sets" % ", ".join(miss))
     old_last = pk.ntex - 1
     last = pk.tex[old_last]
     if last[2] != max(t[2] for t in pk.tex) or last[2] + last[0] * last[1] * 4 != pk.pixb:
@@ -598,59 +1160,61 @@ def build_fx(src_path, dst, log):
 
     tx = Textures(pk)
     elements = []  # (name, frames [(texref|None, flags, blend, clamp, upright, verts)], loops, pax, bone, fade)
+    if part == "s247":
+        elements = elements_s247(tx, log)
+    else:
+        def from_src(nm):
+            return [[(r, bt[1], bt[2], bt[3], bt[9:18], v) for bt, r, v in fr] for fr in nm]
 
-    def from_src(nm):
-        return [[(r, bt[1], bt[2], bt[3], bt[9:18], v) for bt, r, v in fr] for fr in nm]
-
-    for which in ("s1", "g1"):
-        for k in KINDS:
-            sname = "kb%s_%s" % (SRC[which], k)
-            log("  kb%s_%s <- %s" % (which, k, sname))
-            frs = resolve_frames(tx, recolour_element(pk, pk.element(sname), which, log))
+        for which in ("s1", "g1"):
+            for k in KINDS:
+                sname = "kb%s_%s" % (SRC[which], k)
+                log("  kb%s_%s <- %s" % (which, k, sname))
+                frs = resolve_frames(tx, recolour_element(pk, pk.element(sname), which, log))
+                e = pk.eff[sname]
+                elements.append(("kb%s_%s" % (which, k), from_src(frs), 0, e[3], e[4], e[5]))
+            sname = "kb%s_trail" % SRC[which]
+            src = pk.element(sname)
+            bt, v = src[0][0]
+            if bt[0] == 0xFFFF:
+                die("%s has no texture" % sname)
+            tref = tx.add(trail_tex(pk.pixels(bt[0]), which))
+            frs = []
+            for fr in src:
+                nf = []
+                for b, vv in fr:
+                    vv = vv.copy()
+                    vv["rgba"][:, :3] = 255
+                    nf.append((tref, b[1], b[2], b[3], b[9:18], vv))
+                frs.append(nf)
             e = pk.eff[sname]
-            elements.append(("kb%s_%s" % (which, k), from_src(frs), 0, e[3], e[4], e[5]))
-        sname = "kb%s_trail" % SRC[which]
-        src = pk.element(sname)
-        bt, v = src[0][0]
-        if bt[0] == 0xFFFF:
-            die("%s has no texture" % sname)
-        tref = tx.add(trail_tex(pk.pixels(bt[0]), which))
-        frs = []
-        for fr in src:
+            elements.append(("kb%s_trail" % which, frs, 0, e[3], e[4], e[5]))
+            log("  kb%s_trail <- %s (texture %d -> our ribbon)" % (which, sname, bt[0]))
+        band, spark = tx.add(band_tex()), tx.add(sparkle_tex())
+        bf = beam_frames(band, spark)
+        elements.append(("kbs1_beam", [[(t, fl, 0, 1, (0.0,) * 9, v) for t, fl, v in fr] for fr in bf], 1, 0, 0, 0))
+        log("  kbs1_beam: procedural crescent, %d frames (loop)" % len(bf))
+        fin = [e for e in elements if e[0] == "kbs1_hit_finish"][0]
+        hf = []
+        nfin = len(fin[1])
+        for f, fr in enumerate(fin[1]):
             nf = []
-            for b, vv in fr:
-                vv = vv.copy()
-                vv["rgba"][:, :3] = 255
-                nf.append((tref, b[1], b[2], b[3], b[9:18], vv))
-            frs.append(nf)
-        e = pk.eff[sname]
-        elements.append(("kb%s_trail" % which, frs, 0, e[3], e[4], e[5]))
-        log("  kb%s_trail <- %s (texture %d -> our ribbon)" % (which, sname, bt[0]))
-    band, spark = tx.add(band_tex()), tx.add(sparkle_tex())
-    bf = beam_frames(band, spark)
-    elements.append(("kbs1_beam", [[(t, fl, 0, 1, (0.0,) * 9, v) for t, fl, v in fr] for fr in bf], 1, 0, 0, 0))
-    log("  kbs1_beam: procedural crescent, %d frames (loop)" % len(bf))
-    fin = [e for e in elements if e[0] == "kbs1_hit_finish"][0]
-    hf = []
-    nfin = len(fin[1])
-    for f, fr in enumerate(fin[1]):
-        nf = []
-        for t, fl, bl, cl, up, v in fr:
-            v = v.copy()
-            v["p"] *= 1.5
-            v["off"] *= 1.5
-            nf.append((t, fl, bl, cl, up, v))
-        for rb in (ring_batch(f, 24, band, 20, 160, 22, (120, 170, 255), 220),
-                   ring_batch(f, 30, band, 10, 120, 8, (255, 206, 96), 230, delay=3)):
-            if rb:
-                nf.append((rb[0], 0, rb[1], 1, (0.0,) * 9, rb[2]))
-        hf.append(nf)
-    elements.append(("kbs1_beam_hit", hf, 0, fin[3], fin[4], fin[5]))
-    log("  kbs1_beam_hit: kbs1_hit_finish x1.5 + 2 rings, %d frames" % nfin)
-    for r, nm in zip(BEAM_ROLLS, BEAM_ROLL_FX):  # (s217: after every s216 row, so those keep their indices and bytes)
-        bf = beam_flat_frames(band, spark, r)
-        elements.append((nm, [[(t, fl, 0, 1, (0.0,) * 9, v) for t, fl, v in fr] for fr in bf], 1, 0, 0, 0))
-    log("  kbs1_beam_r000..r%03d: the swing-plane crescent, %d rolls x %d frames (loop)" % (BEAM_ROLLS[-1], len(BEAM_ROLLS), len(bf)))
+            for t, fl, bl, cl, up, v in fr:
+                v = v.copy()
+                v["p"] *= 1.5
+                v["off"] *= 1.5
+                nf.append((t, fl, bl, cl, up, v))
+            for rb in (ring_batch(f, 24, band, 20, 160, 22, (120, 170, 255), 220),
+                       ring_batch(f, 30, band, 10, 120, 8, (255, 206, 96), 230, delay=3)):
+                if rb:
+                    nf.append((rb[0], 0, rb[1], 1, (0.0,) * 9, rb[2]))
+            hf.append(nf)
+        elements.append(("kbs1_beam_hit", hf, 0, fin[3], fin[4], fin[5]))
+        log("  kbs1_beam_hit: kbs1_hit_finish x1.5 + 2 rings, %d frames" % nfin)
+        for r, nm in zip(BEAM_ROLLS, BEAM_ROLL_FX):  # (s217: after every s216 row, so those keep their indices and bytes)
+            bf = beam_flat_frames(band, spark, r)
+            elements.append((nm, [[(t, fl, 0, 1, (0.0,) * 9, v) for t, fl, v in fr] for fr in bf], 1, 0, 0, 0))
+        log("  kbs1_beam_r000..r%03d: the swing-plane crescent, %d rolls x %d frames (loop)" % (BEAM_ROLLS[-1], len(BEAM_ROLLS), len(bf)))
 
     # ---- the new rows
     k_new = len(tx.new)
@@ -717,10 +1281,10 @@ def build_fx(src_path, dst, log):
         (dst, os.path.getsize(dst) / 1e6, len(mm) / 1e6, len(newe) // 64, len(newf) // 8, len(newb) // 52, len(newv) // 40,
          pk.ntex, ntex2, k_new, ntex2 - 1))
     pk.close()
-    verify_fx(src_path, dst, log)
+    verify_fx(src_path, dst, log, PARTS[part][0])
 
 
-def verify_fx(old, new, log):
+def verify_fx(old, new, log, new_fx=NEW_FX):
     po, pn = Pack(old), Pack(new)
     mo, mn = po.mm, pn.mm
     SZ = (16, 64, 8, 52, 40, 12)
@@ -756,17 +1320,17 @@ def verify_fx(old, new, log):
         fb, n_ = struct.unpack_from("<II", mn, pn.o_fr + fi * 8)
         if fb + n_ > pn.nba:
             die("VERIFY FAILED: new frame %d out of range" % fi)
-    for nm in NEW_FX:
+    for nm in new_fx:
         if nm not in pn.eff:
             die("VERIFY FAILED: %s missing" % nm)
         ff, nf = pn.eff[nm][0], pn.eff[nm][1]
         if nf < 1 or ff + nf > pn.nfr:
             die("VERIFY FAILED: %s frames out of range" % nm)
-    if set(pn.eff) - set(po.eff) != set(NEW_FX):
-        die("VERIFY FAILED: unexpected new names %s" % sorted(set(pn.eff) - set(po.eff) - set(NEW_FX)))
+    if set(pn.eff) - set(po.eff) != set(new_fx):
+        die("VERIFY FAILED: unexpected new names %s" % sorted(set(pn.eff) - set(po.eff) - set(new_fx)))
     log("VERIFIED fx: old tex (%d) / eff (%d) / frame (%d) / batch (%d) / vert (%d) / trail (%d) rows and all old pixels (%d B) "
         "byte-identical; the gradient is still the last texture; %d new elements by name, every new row in range" %
-        (po.ntex - 1, po.neff, po.nfr, po.nba, po.nve, po.ntr, ol[2], len(NEW_FX)))
+        (po.ntex - 1, po.neff, po.nfr, po.nba, po.nve, po.ntr, ol[2], len(new_fx)))
     po.close()
     pn.close()
 
@@ -786,7 +1350,8 @@ def read_wav(path):
     return rate, ch, n, fr
 
 
-def build_sfx(src, dst, ours, log):
+def build_sfx(src, dst, ours, log, part="s216"):
+    _, SOUNDS, SFX_MARKER = PARTS[part]  # (s247: the part's sounds + marker)
     if not os.path.isfile(src):
         die("no sfx pack at %s" % src)
     d = open(src, "rb").read()
@@ -803,7 +1368,9 @@ def build_sfx(src, dst, ours, log):
         die("%s: sections overlap / cut short" % src)
     names = {sec["names"][i * 36:i * 36 + 32].split(b"\0")[0].decode("latin1") for i in range(nn)}
     if SFX_MARKER in names or any(s in names for s in SOUNDS):
-        die("the sfx pack already has our Keyblade sounds (run on the pack BEFORE this step)")
+        die("the sfx pack already has our Keyblade sounds %s (run on the pack BEFORE this step)" % SFX_MARKER)
+    if part == "s216" and (SFX_MARKER_S247 in names):
+        die("the sfx pack already has the s247 sounds: the s216 part must run before them")
     pcm = bytearray(d[data_off:data_off + data_bytes])
     new_s, new_names = bytearray(), []
     for i, nm in enumerate(SOUNDS):
@@ -857,15 +1424,18 @@ def main():
     ap.add_argument("--ours", required=True, help="tools/sorabuild/ours/kb (our synthesised WAVs)")
     ap.add_argument("--no-fx", action="store_true")
     ap.add_argument("--no-sfx", action="store_true")
+    ap.add_argument("--part", choices=sorted(PARTS), default="s216",
+                    help="s216 = Sealing Blade + Guardian Core (+ the s217 beam rolls; step fxsfx_kbown), s247 = Silent Princess + "
+                         "Calamity's Gaze (step fxsfx_kbown2, after the party steps)")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
 
     def log(m):
         print(m, flush=True)
     if not a.no_sfx:  # (sfx first: cheap, and it checks our WAVs before the big fx write)
-        build_sfx(a.sfx_in, os.path.join(a.out, "sfx.bin"), a.ours, log)
+        build_sfx(a.sfx_in, os.path.join(a.out, "sfx.bin"), a.ours, log, a.part)
     if not a.no_fx:
-        build_fx(a.fx_in, os.path.join(a.out, "fx.bin"), log)
+        build_fx(a.fx_in, os.path.join(a.out, "fx.bin"), log, a.part)
 
 
 if __name__ == "__main__":

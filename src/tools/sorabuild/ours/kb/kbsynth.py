@@ -10,6 +10,10 @@
                  + crackle) with a short rising whine (900 -> 2500 Hz, snapped off at 0.16 s) and a dull stone knock under it.
   kbs1_beam      Sealing Blade beam launch: an airy rising slash (band noise sweeping 700 -> 5500 Hz) + a faint rising chime.
   kbs1_beam_hit  where the beam lands: a bright impact (click + high bar modes + chime) with a short low thump for weight.
+  kbp1_hit       (s247) Silent Princess hit: a soft glassy chime (two near-pure tones a fifth apart, G6 then D7 45 ms later, only
+                 HARMONIC overtones, a slow shimmer: glass, not a struck bar) + an airy whoosh + a soft low tap for the impact.
+  kbc1_hit       (s247) Calamity's Gaze hit: a low rumble thump (110 -> 42 Hz, driven) + a rumbling low noise bed with a slow
+                 wobble + a dark wet splat + a hiss (bright noise with sparse crackle) that tails off.
 
 Loudness: each one is scaled so its loudest 100 ms has the RMS of KH2's own Keyblade hit in our sfx.bin ("hit", 0.078),
 peak kept under 0.6. Deterministic (fixed seeds): a re-run writes the same bytes.
@@ -172,7 +176,49 @@ def sealing_beam_hit():
     return fade_tail(x)
 
 
-SOUNDS = {"kbs1_hit": sealing_hit, "kbg1_hit": guardian_hit, "kbs1_beam": sealing_beam, "kbs1_beam_hit": sealing_beam_hit}
+def princess_hit():
+    """(s247) soft glassy chime + airy whoosh; no inharmonic bar modes (the s216 "cowbell"), the overtones are harmonic and quiet"""
+    rng = np.random.default_rng(2477)
+    t = t_axis(0.95)
+    n = rng.standard_normal(len(t))
+    # the impact: a soft low-passed tap + a small 220 -> 140 Hz body (quiet: this is a gentle hit)
+    tap = onepole_lp(n * env_exp(t, 0.012, 0.0005), 1800) * 1.6
+    body = np.sin(sweep_phase(140 + 80 * np.exp(-t / 0.02))) * env_exp(t, 0.04, 0.002) * 0.45
+    # the airy whoosh: band noise sweeping 2.5k -> 7k, swelling in 30 ms
+    fc = 2500 + 4500 * np.clip(t / 0.15, 0, 1) ** 0.7
+    sw = np.clip(t / 0.03, 0, 1) ** 1.5 * np.exp(-np.clip(t - 0.03, 0, None) / 0.13)
+    air = svf_bandpass(n, fc, 1.2) * sw * 0.55
+    # the glass chime: G6 then D7 (45 ms later), each a near-pure tone + quiet 2nd / 3rd harmonics, soft attack, a slow shimmer
+    chime = np.zeros_like(t)
+    for f0, d, tau, a in ((1568.0, 0.0, 0.42, 0.34), (2349.3, 0.045, 0.34, 0.26)):
+        tt = np.clip(t - d, 0, None)
+        e = env_exp(tt, tau, 0.006) * (t >= d) * (1 + 0.15 * np.sin(2 * np.pi * 5.5 * tt))
+        chime += a * e * (np.sin(2 * np.pi * f0 * tt) + 0.22 * np.sin(2 * np.pi * 2 * f0 * tt + 0.7)
+                          + 0.07 * np.sin(2 * np.pi * 3 * f0 * tt + 1.3))
+    # a brief glassy sparkle on top (6.3 kHz, 50 ms)
+    spark = np.sin(2 * np.pi * 6272 * t) * env_exp(t, 0.05, 0.003) * 0.06
+    x = tap + body + air + chime + spark
+    return fade_tail(x, 0.06)
+
+
+def calamity_hit():
+    """(s247) low rumble thump + hiss (+ a dark wet splat between them)"""
+    rng = np.random.default_rng(2478)
+    t = t_axis(0.9)
+    n = rng.standard_normal(len(t))
+    thump = np.tanh(1.8 * np.sin(sweep_phase(42 + 68 * np.exp(-t / 0.03)))) * env_exp(t, 0.16, 0.002) * 0.9
+    rum = onepole_lp(onepole_lp(rng.standard_normal(len(t)), 160), 160) * 9.0
+    rum *= env_exp(t, 0.32, 0.01) * (0.6 + 0.4 * np.sin(2 * np.pi * 11 * t))
+    splat = svf_bandpass(n, 250 + 350 * np.exp(-t / 0.04), 3.0) * env_exp(t, 0.07, 0.003) * 0.7
+    hn = rng.standard_normal(len(t))
+    hiss = (hn - onepole_lp(hn, 3000)) * env_exp(t, 0.22, 0.02) * 0.5
+    crackle = svf_bandpass((rng.random(len(t)) < 0.006) * rng.standard_normal(len(t)), 5000, 1.5) * env_exp(t, 0.25, 0.01) * 0.8
+    x = thump + rum + splat + hiss + crackle
+    return fade_tail(x, 0.06)
+
+
+SOUNDS = {"kbs1_hit": sealing_hit, "kbg1_hit": guardian_hit, "kbs1_beam": sealing_beam, "kbs1_beam_hit": sealing_beam_hit,
+          "kbp1_hit": princess_hit, "kbc1_hit": calamity_hit}
 
 
 def write_wav(path, x):
@@ -189,8 +235,11 @@ def write_wav(path, x):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.dirname(os.path.abspath(__file__)))
+    ap.add_argument("--only", nargs="*", help="(s247) just these names")
     a = ap.parse_args()
     for name, fn in SOUNDS.items():
+        if a.only and name not in a.only:
+            continue
         x = normalise(fn())
         p = os.path.join(a.out, name + ".wav")
         write_wav(p, x)

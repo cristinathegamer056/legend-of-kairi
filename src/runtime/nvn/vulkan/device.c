@@ -4,6 +4,7 @@
 #include <math.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -15,12 +16,14 @@
 #include "../../framepace.h"
 #include "../../imageload.h"
 #include "../../paths.h"
+#include "../../platform.h"
 #include "../../perfmon.h"
 #include "../../prof.h"
 #include "../../settings.h"
 #include "../../gpu_select.h"
 #include "../../ui/menu.h"
 #include "../../window_size.h"
+#include "../../sora_hdr_core.h"  // (Sora in BotW, s250: the HUD layer on the float HDR picture)
 #include "mvec.h"
 #include "vk.h"
 #include "shaders.h"
@@ -617,6 +620,8 @@ static void create_device(void) {
     if (g_vk.host_import) ext[n_ext++] = VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME;
     bool mem_budget = has_ext(ep, ne, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);  // what the OS grants (vram.c, exec.c's heap copy)
     if (mem_budget) ext[n_ext++] = VK_EXT_MEMORY_BUDGET_EXTENSION_NAME;
+    g_vk.hdr_metadata = has_ext(ep, ne, VK_EXT_HDR_METADATA_EXTENSION_NAME);
+    if (g_vk.hdr_metadata) ext[n_ext++] = VK_EXT_HDR_METADATA_EXTENSION_NAME;  // peak / game nits (device.c hdr_metadata_send)
 #ifdef __linux__
     // the guest heap as GPU memory mapped at the heap's addresses (exec.c backend_heap_set)
     g_vk.dmabuf = has_ext(ep, ne, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME) && has_ext(ep, ne, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
@@ -1439,11 +1444,47 @@ static VkImage hdr_sc_images[8];      // the swapchain's own images while g_hdr
 static VkImageView hdr_sc_views[8];
 static VmaAllocation hdr_mem[8];      // g_vk.sc_images' memory while g_hdr
 static uint32_t hdr_count;
+// The game's float picture (linear, HUD included) for an HDR frame, and the passes that turn it into PQ code values on
+// the HDR10 swapchain. The game's 8-bit present image is still made (g_vk.sc_images): the overlay menu is drawn there
+// and composed after the picture; its white is the HUD/menu white (hdr_ui_nits).
+static VkImage hdr_game_images[8];
+static VkImageView hdr_game_views[8];
+static VmaAllocation hdr_game_mem[8];
+static uint32_t hdr_game_count;
+static VkSampler hdr_pres_sampler;
+static VkDescriptorSetLayout hdr_pres_dsl;
+static VkPipelineLayout hdr_pq_layout, hdr_ui_layout;
+static VkPipeline hdr_pq_pipe, hdr_ui_pipe;
+static VkFormat hdr_pres_fmt;
 static VkDescriptorSetLayout hdr_dsl;
 static VkPipelineLayout hdr_layout;
 static VkPipeline hdr_pipe;
 static VkDescriptorPool hdr_pool;
 static VkDescriptorSet hdr_sets[8];
+
+// The Windows HDR calibration profile read at startup, for the peak setting's description.
+#ifdef _WIN32
+static char g_hdr_icc_profile[256];
+static int g_hdr_icc_peak;
+static atomic_int g_hdr_icc_done;
+#endif
+const char *vk_hdr_icc_description(void) {
+#ifdef _WIN32
+    static char desc[512];
+    if (!atomic_load_explicit(&g_hdr_icc_done, memory_order_acquire))
+        return "Windows HDR calibration profile: not read yet.";
+    if (g_hdr_icc_peak >= 80 && g_hdr_icc_profile[0])
+        snprintf(desc, sizeof desc, "Windows HDR calibration profile: %s, %d nits.", g_hdr_icc_profile,
+                 g_hdr_icc_peak);
+    else
+        snprintf(desc, sizeof desc, "No Windows HDR calibration profile found; peak defaults to 1000 nits.");
+    return desc;
+#else
+    return "No Windows HDR calibration profile on this platform; set the peak manually.";
+#endif
+}
+
+static bool hdr_game_off_for_mod(void);  // (Sora in BotW, below)
 
 // Video > HDR as it stands now: whether the swapchain should be HDR10, and SDR white's nits
 static bool hdr_wanted(float *white) {
@@ -1458,8 +1499,104 @@ static bool hdr_wanted(float *white) {
     // Windows 1.0 is the real lowest setting of the SDR content brightness slider.
     if (w <= 80) w = 0;
 #endif
-    *white = g_settings.hdr_white ? (float)g_settings.hdr_white : w >= 80 ? w : 200;
+#ifdef _WIN32
+    // Read the display's ICC peak once at startup. It is the first-run value of the peak setting (or 1000 nits if
+    // there is no profile) and is always shown in the setting's description.
+    static atomic_int icc_done;
+    if (!atomic_exchange_explicit(&icc_done, 1, memory_order_acq_rel)) {
+        void *hwnd = SDL_GetPointerProperty(p, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+        char profile[256] = "";
+        int peak = plat_hdr_peak_nits(hwnd, profile, sizeof profile);
+        if (peak >= 80) {
+            g_hdr_icc_peak = peak;
+            snprintf(g_hdr_icc_profile, sizeof g_hdr_icc_profile, "%s", profile[0] ? profile : "unknown");
+            LOG("[hdr] Windows HDR calibration profile: \"%s\", %d nits\n", g_hdr_icc_profile, peak);
+        } else {
+            LOG("[hdr] no Windows HDR calibration profile found\n");
+        }
+        atomic_store_explicit(&g_hdr_icc_done, 1, memory_order_release);
+        if (g_settings.hdr_peak_nits <= 0) {  // (a fresh config, or an old 0 from before this was first filled)
+            g_settings.hdr_peak_nits = peak >= 80 ? peak : 1000;
+            settings_save();
+            LOG("[hdr] peak brightness set to %d nits (%s)\n", g_settings.hdr_peak_nits,
+                peak >= 80 ? "from the ICC profile" : "no ICC profile");
+        }
+        hdr_look_init_peak();  // (default preset slots: now that the peak is known, keep it in them)
+    }
+#endif
+    *white = g_settings.hdr_ui_nits >= 80 ? (float)g_settings.hdr_ui_nits
+             : g_settings.hdr_game_nits   ? (float)g_settings.hdr_game_nits
+             : g_settings.hdr_white       ? (float)g_settings.hdr_white
+                                          : w >= 80 ? w : 200;
+    // (Sora in BotW, s245) While the mod keeps the 8-bit picture (hdr_game_off_for_mod), its white is found as 0.5.3
+    // found it: hdr_paper_white in the ini, else Windows' "SDR content brightness" for this display, else 200. So the
+    // game is as bright as with HDR off on the same desktop. 0.6.0's HUD / game nits belong to the float picture.
+    if (hdr_game_off_for_mod()) *white = g_settings.hdr_white ? (float)g_settings.hdr_white : w >= 80 ? w : 200;
     return on && g_cs_ext;
+}
+
+// (Sora in BotW, s244: the port to Savage Wind 0.6.0) The KH2 HUD, Sora's present-time draws (sora_hud.c, sora_draw.c:
+// pipelines for g_vk.sc_format into vk_frame_view) and his pass into the game's final image are made for the 8-bit /
+// 10-bit display-encoded picture, as on 0.5.3. 0.6.0's float game picture (hdr.c: RGBA16F targets, the extended tonemap,
+// the frame drawn into hdr_game_views) would put them into an image of another format and encoding, so it stays OFF
+// while the mod is on (main.c read kairi_env.txt before this). HDR10 output itself is unchanged: the 8-bit picture is
+// shown through hdr_write, as 0.5.3 did. SAVAGEWIND_SORA_HDR_GAME=1: the float path anyway, with the mod's draws made
+// for it (s250 hdr, hdr_mod_float below: the HUD layer, Sora's scene pass, the F5 shot; runtime/sora_hdr_core.h).
+// Read once at start: the picture's format is chosen when the targets are made.
+static bool hdr_game_off_for_mod(void) {
+    static int off = -1;
+    if (off < 0) {
+        const char *e = getenv("SAVAGEWIND_SORA"), *f = getenv("SAVAGEWIND_SORA_HDR_GAME");
+        off = e && atoi(e) != 0 && !(f && atoi(f) != 0);
+        if (off) LOG("[hdr] Sora mod on (SAVAGEWIND_SORA): the game's float HDR picture stays off, HDR output shows the 8-bit picture\n");
+    }
+    return off == 1;
+}
+// (s250 hdr) The mod is on AND SAVAGEWIND_SORA_HDR_GAME=1: the game's float picture with the mod's draws on it. Off
+// (the default, or no mod at all): nothing below that asks this changes anything.
+static bool hdr_mod_float(void) {
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("SAVAGEWIND_SORA"), *f = getenv("SAVAGEWIND_SORA_HDR_GAME");
+        on = e && atoi(e) != 0 && f && atoi(f) != 0;
+        if (on) LOG("[hdr] Sora mod on with SAVAGEWIND_SORA_HDR_GAME=1: the game's float HDR picture, the KH2 HUD in a layer of "
+                    "its own composed at the HUD white (frame generation stays off with it, as upstream)\n");
+    }
+    return on == 1;
+}
+bool vk_hdr_game_enabled(void) { return g_hdr && !hdr_game_off_for_mod(); }
+bool vk_hdr_targets_wanted(void) {  // (hdr.c: the final linear 10-bit image as RGBA16F)
+    static int off = -1;
+    if (off < 0) off = getenv("SAVAGEWIND_HDR_RT8") ? atoi(getenv("SAVAGEWIND_HDR_RT8")) != 0 : 0;  // (testing: the old 10-bit targets)
+    if (off || !window || hdr_game_off_for_mod()) return false;
+    float white;
+    return hdr_wanted(&white);  // (On, or Automatic while the display is in HDR; otherwise the SDR path is unchanged)
+}
+
+static void hdr_metadata_send(VkSwapchainKHR sc) {
+    if (!g_vk.hdr_metadata || !sc) return;
+    PFN_vkSetHdrMetadataEXT set = (PFN_vkSetHdrMetadataEXT)vkGetDeviceProcAddr(g_vk.dev, "vkSetHdrMetadataEXT");
+    if (!set) return;
+    float peak, game, ui;
+    vk_hdr_nits(&peak, &game, &ui);
+    VkHdrMetadataEXT m = {.sType = VK_STRUCTURE_TYPE_HDR_METADATA_EXT,
+                          .displayPrimaryRed = {0.708f, 0.292f}, .displayPrimaryGreen = {0.170f, 0.797f},
+                          .displayPrimaryBlue = {0.131f, 0.046f}, .whitePoint = {0.3127f, 0.3290f},
+                          .maxLuminance = peak, .minLuminance = 0.0f, .maxContentLightLevel = peak,
+                          .maxFrameAverageLightLevel = game};
+    set(g_vk.dev, 1, &sc, &m);
+}
+
+// Presets and the peak/game sliders are live, so the HDR metadata has to follow them: re-send it when the values
+// change (a display or compositor that honors MaxCLL would otherwise tone-map against the old peak).
+static void hdr_metadata_tick(VkSwapchainKHR sc) {
+    if (!g_vk.hdr_metadata || !sc) return;
+    static float last_peak = -1.0f, last_game = -1.0f;
+    float peak, game, ui;
+    vk_hdr_nits(&peak, &game, &ui);
+    if (peak == last_peak && game == last_game) return;
+    last_peak = peak, last_game = game;
+    hdr_metadata_send(sc);
 }
 
 static const char k_hdr_vs[] =
@@ -1540,10 +1677,15 @@ static void hdr_release(void) {
         vkDestroyImageView(g_vk.dev, hdr_sc_views[i], NULL);
         vmaDestroyImage(g_vk.vma, g_vk.sc_images[i], hdr_mem[i]);
     }
-    hdr_count = 0;
+    for (uint32_t i = 0; i < hdr_game_count; i++) {
+        vkDestroyImageView(g_vk.dev, hdr_game_views[i], NULL);
+        vmaDestroyImage(g_vk.vma, hdr_game_images[i], hdr_game_mem[i]);
+    }
+    hdr_count = hdr_game_count = 0;
 }
 
 static void hdr_make_images(uint32_t n, VkExtent2D ext) {
+    bool game = !hdr_game_off_for_mod();
     for (uint32_t i = 0; i < n; i++) {
         hdr_sc_images[i] = g_vk.sc_images[i];  // (the swapchain's)
         VkImageViewCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = hdr_sc_images[i],
@@ -1557,8 +1699,22 @@ static void hdr_make_images(uint32_t n, VkExtent2D ext) {
                                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT};
         VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
         VK_CHECK(vmaCreateImage(g_vk.vma, &ci, &ai, &g_vk.sc_images[i], &hdr_mem[i], NULL));
+        if (!game) continue;  // (Sora in BotW, s245: nothing draws into the float images while the mod is on)
+        // The game's float picture for an HDR frame: linear, at the window's size.
+        VkImageCreateInfo gi = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
+                                .format = VK_FORMAT_R16G16B16A16_SFLOAT, .extent = {ext.width, ext.height, 1},
+                                .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+                                .tiling = VK_IMAGE_TILING_OPTIMAL,
+                                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
+        VK_CHECK(vmaCreateImage(g_vk.vma, &gi, &ai, &hdr_game_images[i], &hdr_game_mem[i], NULL));
+        VkImageViewCreateInfo gv = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = hdr_game_images[i],
+                                    .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+                                    .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+        VK_CHECK(vkCreateImageView(g_vk.dev, &gv, NULL, &hdr_game_views[i]));
     }
     hdr_count = n;
+    hdr_game_count = game ? n : 0;  // (0: frame_begin never takes the float path, hdr_release has nothing to free)
 }
 
 static void create_swapchain(void) {
@@ -1617,7 +1773,7 @@ static void create_swapchain(void) {
     g_vk.sc_count = 8;
     vkGetSwapchainImagesKHR(g_vk.dev, g_vk.swapchain, &g_vk.sc_count, g_vk.sc_images);
     g_hdr = hdr_found;
-    if (g_hdr) hdr_make_images(g_vk.sc_count, ext);
+    if (g_hdr) hdr_make_images(g_vk.sc_count, ext), hdr_metadata_send(g_vk.swapchain);
     for (uint32_t i = 0; i < g_vk.sc_count; i++) {
         VkImageViewCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = g_vk.sc_images[i],
                                     .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = draw.format,
@@ -1739,8 +1895,27 @@ static void *pt_waiter(void *arg) {
     }
 }
 
+// (testing) SAVAGEWIND_DEBUG_PRESENT_LIMIT=<fps>: each present held until 1/fps after the last one, inside the present
+// call, as an external frame limiter does (RivaTuner hooks vkQueuePresentKHR, Radeon Chill holds it in the driver):
+// the thread that presents waits there, not the game
+static void external_limiter(void) {
+    static double iv = -1;
+    static uint64_t next;
+    if (iv < 0) {
+        const char *e = getenv("SAVAGEWIND_DEBUG_PRESENT_LIMIT");
+        iv = e && atof(e) > 0 ? 1e9 / atof(e) : 0;
+        if (iv > 0) LOG("[vk] presents held to %.1f fps inside the present (an external limiter, testing)\n", 1e9 / iv);
+    }
+    if (iv <= 0) return;
+    uint64_t now = SDL_GetTicksNS();
+    if (next > now) SDL_DelayPrecise(next - now), now = next;
+    next = next && now - next < (uint64_t)iv ? next + (uint64_t)iv : now + (uint64_t)iv;
+}
+
 // vkQueuePresentKHR, timed and given a present id for the waiter when SAVAGEWIND_LOG_PRESENT asks
 static VkResult queue_present(VkQueue q, const VkPresentInfoKHR *info) {
+    external_limiter();
+    if (info->swapchainCount > 0 && info->pSwapchains) hdr_metadata_tick(info->pSwapchains[0]);
     if (pt_every < 0) {
         const char *e = getenv("SAVAGEWIND_LOG_PRESENT");
         pt_every = e ? atoi(e) : 0;
@@ -1800,6 +1975,7 @@ static void recreate_swapchain(void) {
 // one frame at a time otherwise, as before); a swapchain change and teardown wait for them all.
 // Only with SAVAGEWIND_VK_PRESENT_THREAD=1 now (create_device: one queue by default, #36, #293); otherwise presents on
 // the calling thread.
+pthread_mutex_t g_vk_queue_lock = PTHREAD_MUTEX_INITIALIZER;  // (vk.h)
 static pthread_mutex_t pres_m = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t pres_cv = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t sc_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -1858,7 +2034,9 @@ static void *present_thread(void *arg) {
                                .swapchainCount = 1, .pSwapchains = &q.sc, .pImageIndices = &q.img};
         pthread_mutex_lock(&sc_lock);
         uint64_t tq = SDL_GetTicksNS();
+        pthread_mutex_lock(&g_vk_queue_lock);  // (one queue: the recorder submits on it meanwhile)
         VkResult r = queue_present(g_vk.present_queue, &pi);
+        pthread_mutex_unlock(&g_vk_queue_lock);
         tq = SDL_GetTicksNS() - tq;
         pthread_mutex_unlock(&sc_lock);
         if (tq > 200000000ull) {  // (#224: a present the driver held on to)
@@ -1882,6 +2060,25 @@ static bool present_threaded(void) {
         on = g_vk.present_queue != g_vk.queue && !(e && !strcmp(e, "0"));
         if (on) { pthread_t t; pthread_create(&t, NULL, present_thread, NULL); }
         LOG("[vk] presents on %s\n", on ? "a thread of their own (second queue)" : "the calling thread");
+    }
+    return on;
+}
+
+// Frame generation's pair with one queue (the default): each of the two is presented once the GPU has drawn it, the
+// game's frame half an interval after the generated one (present_wait_turn). The translating thread did those waits
+// itself: it stood still for the GPU's whole frame and then for half the interval it had just made longer, so the game
+// drew at a quarter of its rate with the GPU half idle (RTX 3060, 1440p, no frame limit, Great Plateau: 101 fps
+// without frame generation, 47 presented with it). The present thread makes them instead, on the same queue
+// (g_vk_queue_lock), and the translating thread goes on to the next frame; present_wait_room still holds it at two
+// pairs ahead. Plain presents stay with the recorder, except while the thread still has some to make (their order).
+// SAVAGEWIND_VK_FG_PACER=0: on the calling thread, as before.
+static bool fg_pacer(void) {
+    static int on = -1;
+    if (on < 0) {
+        const char *e = getenv("SAVAGEWIND_VK_FG_PACER");
+        on = !(e && !strcmp(e, "0"));
+        if (on) { pthread_t t; pthread_create(&t, NULL, present_thread, NULL); }
+        LOG("[vk] frame generation's presents made by %s\n", on ? "the present thread, on the game's queue" : "the calling thread");
     }
     return on;
 }
@@ -1962,7 +2159,9 @@ static void rec_present_run(void *arg) {
     VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .waitSemaphoreCount = 1, .pWaitSemaphores = &q->sem,
                            .swapchainCount = 1, .pSwapchains = &q->sc, .pImageIndices = &q->img};
     pthread_mutex_lock(&sc_lock);
+    pthread_mutex_lock(&g_vk_queue_lock);
     VkResult r = queue_present(g_vk.queue, &pi);
+    pthread_mutex_unlock(&g_vk_queue_lock);
     pthread_mutex_unlock(&sc_lock);
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) atomic_store(&rec_present_stale, 1);
 }
@@ -1979,18 +2178,27 @@ static bool present_on_recorder(void) {
 // Present window image img once sem is signalled (kind, seq: frame generation's pair and the frame's submission, see
 // present_wait_turn). Returns false when the swapchain must be made again.
 static bool present_image(uint32_t img, VkSemaphore sem, int kind, uint64_t seq) {
-    if (!present_threaded() && kind == PRES_PLAIN && present_on_recorder()) {
+    bool threaded = present_threaded();
+    if (!threaded) {
+        pthread_mutex_lock(&pres_m);
+        bool queued = presq_n != 0;
+        pthread_mutex_unlock(&pres_m);
+        threaded = (kind != PRES_PLAIN || queued) && fg_pacer();
+    }
+    if (!threaded && kind == PRES_PLAIN && present_on_recorder()) {
         __typeof__(recp[0]) *q = &recp[recp_n++ % RECP_N];
         *q = (__typeof__(recp[0])){g_vk.swapchain, sem, img};
         rec_custom(rec_present_run, q);
         return !atomic_exchange(&rec_present_stale, 0);
     }
-    if (!present_threaded()) {
+    if (!threaded) {
         VkPresentInfoKHR pi = {.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR, .waitSemaphoreCount = 1, .pWaitSemaphores = &sem,
                                .swapchainCount = 1, .pSwapchains = &g_vk.swapchain, .pImageIndices = &img};
         rec_wait_submitted(seq);  // (as present_thread)
         present_wait_turn(kind, seq);
+        pthread_mutex_lock(&g_vk_queue_lock);
         VkResult r = queue_present(g_vk.queue, &pi);
+        pthread_mutex_unlock(&g_vk_queue_lock);
         return !(r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR);
     }
     pthread_mutex_lock(&pres_m);
@@ -2045,7 +2253,11 @@ static void hdr_write(VkCommandBuffer cb, uint32_t i) {
     rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, hdr_layout, 0, 1, &hdr_sets[i], 0, NULL);
     static int srgb = -1;
     if (srgb < 0) srgb = getenv("SAVAGEWIND_HDR_SRGB") != NULL;
-    float pc[2] = {g_hdr_white, (float)srgb};
+    float peak;
+    { float g, u; vk_hdr_nits(&peak, &g, &u); }
+    float white = g_hdr_white < peak ? g_hdr_white : peak;  // (the peak caps this fallback path too)
+    if (hdr_game_off_for_mod()) white = g_hdr_white;  // (Sora in BotW, s245: as 0.5.3, no cap: hdr_wanted)
+    float pc[2] = {white, (float)srgb};
     rec_CmdPushConstants(cb, hdr_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, pc);
     rec_CmdDraw(cb, 3, 1, 0, 0);
     rec_CmdEndRendering(cb);
@@ -2053,14 +2265,327 @@ static void hdr_write(VkCommandBuffer cb, uint32_t i) {
     image_barrier(cb, hdr_sc_images[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 }
 
+// ---- HDR present: the game's float picture (linear, HUD included) and the overlay menu onto the HDR10 swapchain.
+// The picture goes to PQ code values in Rec. 2020 at the HUD/menu white (pc.p.z; the tonemap's output is already scaled
+// so 1.0 is the HUD's white); the menu, drawn sRGB-encoded into g_vk.sc_images, is decoded and put at that white,
+// then blended over it with its coverage. pc.p.w is the peak: the final signal (scene, flashes, particles and menu) is
+// clamped to it, so no element can exceed the display's peak. The menu is drawn into an 8-bit image of its own, so
+// ImGui keeps its normal sRGB pipelines.
+static const char k_hdr_present_vs[] =
+    "#version 450\n"
+    "void main() {\n"
+    "  vec2 p = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);\n"
+    "  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
+    "}\n";
+static const char k_hdr_pq_fs[] =
+    "#version 450\n"
+    "layout(set = 0, binding = 0) uniform sampler2D src;\n"
+    "layout(push_constant) uniform P { vec4 p; } pc;\n"
+    "layout(location = 0) out vec4 o;\n"
+    "vec3 pq(vec3 nits) {\n"
+    "  const float m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;\n"
+    "  vec3 y = pow(clamp(nits / 10000.0, 0.0, 1.0), vec3(m1));\n"
+    "  return pow((c1 + c2 * y) / (1.0 + c3 * y), vec3(m2));\n"
+    "}\n"
+    "void main() {\n"
+    "  vec3 c = max(texelFetch(src, ivec2(gl_FragCoord.xy), 0).rgb, vec3(0.0));\n"
+    "  const mat3 to2020 = mat3(0.6274, 0.0691, 0.0164, 0.3293, 0.9195, 0.0880, 0.0433, 0.0114, 0.8956);\n"
+    "  vec3 nits = to2020 * c * pc.p.z;\n"
+    "  if (pc.p.w > 0.0) nits = min(nits, vec3(pc.p.w));\n"
+    "  o = vec4(pq(nits), 1.0);\n"
+    "}\n";
+static const char k_hdr_ui_fs[] =
+    "#version 450\n"
+    "layout(set = 0, binding = 0) uniform sampler2D ui;\n"
+    "layout(push_constant) uniform P { vec4 p; } pc;\n"
+    "layout(location = 0) out vec4 o;\n"
+    "vec3 srgb_decode(vec3 c) {\n"
+    "  return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), greaterThan(c, vec3(0.04045)));\n"
+    "}\n"
+    "vec3 pq(vec3 nits) {\n"
+    "  const float m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;\n"
+    "  vec3 y = pow(clamp(nits / 10000.0, 0.0, 1.0), vec3(m1));\n"
+    "  return pow((c1 + c2 * y) / (1.0 + c3 * y), vec3(m2));\n"
+    "}\n"
+    "void main() {\n"
+    "  vec4 u = texelFetch(ui, ivec2(gl_FragCoord.xy), 0);\n"
+    "  if (u.a <= 0.0) discard;\n"
+    "  vec3 c = srgb_decode(clamp(u.rgb / u.a, 0.0, 1.0));\n"
+    "  const mat3 to2020 = mat3(0.6274, 0.0691, 0.0164, 0.3293, 0.9195, 0.0880, 0.0433, 0.0114, 0.8956);\n"
+    "  vec3 nits = max(to2020 * c, vec3(0.0)) * pc.p.z;\n"
+    "  if (pc.p.w > 0.0) nits = min(nits, vec3(pc.p.w));\n"
+    "  o = vec4(pq(nits), u.a);\n"
+    "}\n";
+
+// (Sora in BotW, s250 hdr) hdr_mod_float: the same picture pass, with the mod's layer (binding 1: the KH2 HUD, camp menu,
+// name tags and Sora's present-time draws; premultiplied, sRGB-encoded, a = coverage) composed over the picture first
+// in the sRGB encoding, so it looks as on the 8-bit window and sits at the HUD white (runtime/sora_hdr_core.h).
+static const char k_hdr_pq_sora_fs[] =
+    "#version 450\n"
+    "layout(set = 0, binding = 0) uniform sampler2D src;\n"
+    "layout(set = 0, binding = 1) uniform sampler2D lay;\n"
+    "layout(push_constant) uniform P { vec4 p; } pc;\n"
+    "layout(location = 0) out vec4 o;\n"
+    SHC_GLSL
+    "vec3 pq(vec3 nits) {\n"
+    "  const float m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;\n"
+    "  vec3 y = pow(clamp(nits / 10000.0, 0.0, 1.0), vec3(m1));\n"
+    "  return pow((c1 + c2 * y) / (1.0 + c3 * y), vec3(m2));\n"
+    "}\n"
+    "void main() {\n"
+    "  vec3 c = max(texelFetch(src, ivec2(gl_FragCoord.xy), 0).rgb, vec3(0.0));\n"
+    "  c = shc_compose(c, texelFetch(lay, ivec2(gl_FragCoord.xy), 0));\n"
+    "  const mat3 to2020 = mat3(0.6274, 0.0691, 0.0164, 0.3293, 0.9195, 0.0880, 0.0433, 0.0114, 0.8956);\n"
+    "  vec3 nits = to2020 * c * pc.p.z;\n"
+    "  if (pc.p.w > 0.0) nits = min(nits, vec3(pc.p.w));\n"
+    "  o = vec4(pq(nits), 1.0);\n"
+    "}\n";
+static VkDescriptorSetLayout hdr_sora_dsl;
+static VkPipelineLayout hdr_sora_layout;
+static VkPipeline hdr_sora_pipe;
+
+static VkPipeline hdr_fullscreen_pipe_in(const char *fs, bool blend, VkPipelineLayout layout);
+static VkPipeline hdr_fullscreen_pipe(const char *fs, bool blend) {
+    return hdr_fullscreen_pipe_in(fs, blend, blend ? hdr_ui_layout : hdr_pq_layout);
+}
+static VkPipeline hdr_fullscreen_pipe_in(const char *fs, bool blend, VkPipelineLayout layout) {
+    VkShaderModule vs = vk_compile_glsl(k_hdr_present_vs, STAGE_VERTEX, "hdr_present.vert");
+    VkShaderModule fm = vk_compile_glsl(fs, STAGE_FRAGMENT, "hdr_present.frag");
+    if (!vs || !fm) {
+        if (vs) vkDestroyShaderModule(g_vk.dev, vs, NULL);
+        if (fm) vkDestroyShaderModule(g_vk.dev, fm, NULL);
+        return VK_NULL_HANDLE;
+    }
+    VkPipelineShaderStageCreateInfo st[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fm, .pName = "main"}};
+    VkPipelineVertexInputStateCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo ia = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+                                                 .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
+    VkPipelineViewportStateCreateInfo vp = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1,
+                                            .scissorCount = 1};
+    VkPipelineRasterizationStateCreateInfo rs = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                                                 .polygonMode = VK_POLYGON_MODE_FILL, .cullMode = VK_CULL_MODE_NONE, .lineWidth = 1};
+    VkPipelineMultisampleStateCreateInfo ms = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+                                               .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
+    VkPipelineColorBlendAttachmentState ba = {.colorWriteMask = 0xF};
+    if (blend) {
+        ba.blendEnable = VK_TRUE;
+        ba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        ba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        ba.colorBlendOp = VK_BLEND_OP_ADD;
+        ba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        ba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        ba.alphaBlendOp = VK_BLEND_OP_ADD;
+    }
+    VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+                                              .attachmentCount = 1, .pAttachments = &ba};
+    VkDynamicState dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo ds = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+                                           .dynamicStateCount = 2, .pDynamicStates = dyn};
+    VkPipelineRenderingCreateInfo ri = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+                                        .colorAttachmentCount = 1, .pColorAttachmentFormats = &hdr_format};
+    VkPipelineDepthStencilStateCreateInfo dss = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    VkGraphicsPipelineCreateInfo gi = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &ri, .stageCount = 2,
+                                       .pStages = st, .pVertexInputState = &vi, .pInputAssemblyState = &ia, .pViewportState = &vp,
+                                       .pRasterizationState = &rs, .pMultisampleState = &ms, .pDepthStencilState = &dss,
+                                       .pColorBlendState = &cb, .pDynamicState = &ds, .layout = layout};
+    VkPipeline p = VK_NULL_HANDLE;
+    if (vkCreateGraphicsPipelines(g_vk.dev, VK_NULL_HANDLE, 1, &gi, NULL, &p) != VK_SUCCESS) p = VK_NULL_HANDLE;
+    vkDestroyShaderModule(g_vk.dev, vs, NULL);
+    vkDestroyShaderModule(g_vk.dev, fm, NULL);
+    return p;
+}
+
+static void hdr_present_release(void) {
+    if (hdr_pq_pipe) vkDestroyPipeline(g_vk.dev, hdr_pq_pipe, NULL), hdr_pq_pipe = VK_NULL_HANDLE;
+    if (hdr_ui_pipe) vkDestroyPipeline(g_vk.dev, hdr_ui_pipe, NULL), hdr_ui_pipe = VK_NULL_HANDLE;
+    if (hdr_pq_layout) vkDestroyPipelineLayout(g_vk.dev, hdr_pq_layout, NULL), hdr_pq_layout = VK_NULL_HANDLE;
+    if (hdr_ui_layout) vkDestroyPipelineLayout(g_vk.dev, hdr_ui_layout, NULL), hdr_ui_layout = VK_NULL_HANDLE;
+    if (hdr_pres_dsl) vkDestroyDescriptorSetLayout(g_vk.dev, hdr_pres_dsl, NULL), hdr_pres_dsl = VK_NULL_HANDLE;
+    if (hdr_pres_sampler) vkDestroySampler(g_vk.dev, hdr_pres_sampler, NULL), hdr_pres_sampler = VK_NULL_HANDLE;
+    hdr_pres_fmt = VK_FORMAT_UNDEFINED;
+    // (s250 hdr: the mod's picture pass, made only with hdr_mod_float; NULL otherwise)
+    if (hdr_sora_pipe) vkDestroyPipeline(g_vk.dev, hdr_sora_pipe, NULL), hdr_sora_pipe = VK_NULL_HANDLE;
+    if (hdr_sora_layout) vkDestroyPipelineLayout(g_vk.dev, hdr_sora_layout, NULL), hdr_sora_layout = VK_NULL_HANDLE;
+    if (hdr_sora_dsl) vkDestroyDescriptorSetLayout(g_vk.dev, hdr_sora_dsl, NULL), hdr_sora_dsl = VK_NULL_HANDLE;
+}
+
+// (s250 hdr) The mod's picture pass (k_hdr_pq_sora_fs), after hdr_present_init; false: not available (the layer is then
+// left out and the picture goes out as upstream draws it, logged once).
+static bool hdr_sora_present_init(void) {
+    if (hdr_sora_pipe) return true;
+    static bool failed;
+    if (failed) return false;
+    VkDescriptorSetLayoutBinding b[2] = {{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
+                                         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL}};
+    VkDescriptorSetLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 2,
+                                          .pBindings = b};
+    VkPushConstantRange pr = {VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16};
+    VkPipelineLayoutCreateInfo pl = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1,
+                                     .pSetLayouts = &hdr_sora_dsl, .pushConstantRangeCount = 1, .pPushConstantRanges = &pr};
+    if (vkCreateDescriptorSetLayout(g_vk.dev, &li, NULL, &hdr_sora_dsl) == VK_SUCCESS &&
+        vkCreatePipelineLayout(g_vk.dev, &pl, NULL, &hdr_sora_layout) == VK_SUCCESS)
+        hdr_sora_pipe = hdr_fullscreen_pipe_in(k_hdr_pq_sora_fs, false, hdr_sora_layout);
+    if (!hdr_sora_pipe) {
+        failed = true;
+        LOG("[hdr] Sora: the HUD layer's present pass could not be made: the layer is left out (no KH2 HUD in HDR)\n");
+        if (hdr_sora_layout) vkDestroyPipelineLayout(g_vk.dev, hdr_sora_layout, NULL), hdr_sora_layout = VK_NULL_HANDLE;
+        if (hdr_sora_dsl) vkDestroyDescriptorSetLayout(g_vk.dev, hdr_sora_dsl, NULL), hdr_sora_dsl = VK_NULL_HANDLE;
+        return false;
+    }
+    return true;
+}
+
+static bool hdr_present_init(void) {
+    if (hdr_pq_pipe && hdr_pres_fmt == hdr_format) return true;
+    hdr_present_release();
+    VkSamplerCreateInfo si = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO, .magFilter = VK_FILTER_NEAREST,
+                              .minFilter = VK_FILTER_NEAREST, .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+                              .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                              .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                              .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, .maxLod = 0};
+    VkDescriptorSetLayoutBinding b = {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL};
+    VkDescriptorSetLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 1,
+                                          .pBindings = &b};
+    VkPushConstantRange pr = {VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16};
+    VkPipelineLayoutCreateInfo pl = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1,
+                                     .pSetLayouts = &hdr_pres_dsl, .pushConstantRangeCount = 1, .pPushConstantRanges = &pr};
+    if (vkCreateSampler(g_vk.dev, &si, NULL, &hdr_pres_sampler) != VK_SUCCESS ||
+        vkCreateDescriptorSetLayout(g_vk.dev, &li, NULL, &hdr_pres_dsl) != VK_SUCCESS) {
+        LOG("[vk] HDR present resources unavailable; the picture goes out unconverted\n");
+        hdr_present_release();
+        return false;
+    }
+    VkPipelineLayoutCreateInfo plq = pl, plu = pl;
+    if (vkCreatePipelineLayout(g_vk.dev, &plq, NULL, &hdr_pq_layout) != VK_SUCCESS) hdr_pq_layout = VK_NULL_HANDLE;
+    plu.pSetLayouts = &hdr_pres_dsl;
+    if (vkCreatePipelineLayout(g_vk.dev, &plu, NULL, &hdr_ui_layout) != VK_SUCCESS) hdr_ui_layout = VK_NULL_HANDLE;
+    if (hdr_pq_layout) hdr_pq_pipe = hdr_fullscreen_pipe(k_hdr_pq_fs, false);
+    if (hdr_ui_layout) hdr_ui_pipe = hdr_fullscreen_pipe(k_hdr_ui_fs, true);
+    if (!hdr_pq_pipe || !hdr_ui_pipe) {
+        LOG("[vk] HDR present passes unavailable; the picture goes out unconverted\n");
+        hdr_present_release();
+        return false;
+    }
+    hdr_pres_fmt = hdr_format;
+    return true;
+}
+
+// (Sora in BotW, s250 hdr) the mod's layer over the float picture (hdr_mod_float; sora_layer_begin below): one RGBA16F
+// image the window's size, cleared each frame it is used, read by the picture pass of the same frame.
+static VkImage sl_image;
+static VmaAllocation sl_mem;
+static VkImageView sl_view;
+static VkExtent2D sl_ext;
+
+// After the game's frame, the float picture in hdr_game_images[i] into the HDR10 swapchain. menu: g_vk.sc_images[i]
+// holds the overlay menu (premultiplied sRGB over a clear 0) and is blended on at the UI white. lay (s250 hdr): the
+// mod's layer was drawn this frame and is composed over the picture first (k_hdr_pq_sora_fs).
+static void hdr_game_write(VkCommandBuffer cb, uint32_t i, bool menu, bool lay) {
+    if (!hdr_present_init()) {
+        image_barrier(cb, hdr_sc_images[i], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        return;
+    }
+    if (lay && (!sl_view || !hdr_sora_present_init())) lay = false;
+    image_barrier(cb, hdr_game_images[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    if (lay) image_barrier(cb, sl_image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    if (menu) image_barrier(cb, g_vk.sc_images[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    image_barrier(cb, hdr_sc_images[i], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = hdr_sc_views[i],
+                                    .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                    .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE, .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
+    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, g_vk.sc_extent}, .layerCount = 1,
+                          .colorAttachmentCount = 1, .pColorAttachments = &ca};
+    rec_CmdBeginRendering(cb, &ri);
+    VkViewport vp = {0, 0, (float)g_vk.sc_extent.width, (float)g_vk.sc_extent.height, 0, 1};
+    VkRect2D sc = {{0, 0}, g_vk.sc_extent};
+    rec_CmdSetViewport(cb, 0, 1, &vp);
+    rec_CmdSetScissor(cb, 0, 1, &sc);
+    float nits[4];
+    vk_hdr_nits(&nits[0], &nits[1], &nits[2]);  // peak, game white, UI white: .z scale, .w final cap
+    nits[3] = nits[0];  // the display peak is the final cap for every element: scene, flashes, particles, menu
+    static int logged;
+    if (!logged++) LOG("[hdr] present: paper white %.0f nits, peak %.0f nits (final cap)\n", nits[2], nits[0]);
+    VkDescriptorSet ds;
+    if (lay) {  // (s250 hdr) the picture + the mod's layer: binding 0 / 1 (the recorder takes one descriptor per write)
+        static int said;
+        if (!said++) LOG("[hdr] Sora: the KH2 HUD layer is composed over the float picture (HUD white %.0f nits, peak %.0f)\n",
+                         nits[2], nits[0]);
+        ds = vk_alloc_set(hdr_sora_dsl);
+        VkDescriptorImageInfo ii[2] = {{hdr_pres_sampler, hdr_game_views[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+                                       {hdr_pres_sampler, sl_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL}};
+        VkWriteDescriptorSet w[2] = {{.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = 0,
+                                      .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                      .pImageInfo = &ii[0]},
+                                     {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = 1,
+                                      .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                      .pImageInfo = &ii[1]}};
+        rec_UpdateDescriptorSets(2, w);
+        rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, hdr_sora_pipe);
+        vk_dyn_forget();
+        rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, hdr_sora_layout, 0, 1, &ds, 0, NULL);
+        rec_CmdPushConstants(cb, hdr_sora_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof nits, nits);
+        rec_CmdDraw(cb, 3, 1, 0, 0);
+    } else {
+    ds = vk_alloc_set(hdr_pres_dsl);
+    VkDescriptorImageInfo ii = {hdr_pres_sampler, hdr_game_views[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = 0,
+                              .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                              .pImageInfo = &ii};
+    rec_UpdateDescriptorSets(1, &w);
+    rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, hdr_pq_pipe);
+    vk_dyn_forget();
+    rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, hdr_pq_layout, 0, 1, &ds, 0, NULL);
+    rec_CmdPushConstants(cb, hdr_pq_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof nits, nits);
+    rec_CmdDraw(cb, 3, 1, 0, 0);
+    }
+    if (menu) {
+        ds = vk_alloc_set(hdr_pres_dsl);
+        VkDescriptorImageInfo mi = {hdr_pres_sampler, g_vk.sc_views[i], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet mw = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = 0,
+                                   .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                   .pImageInfo = &mi};
+        rec_UpdateDescriptorSets(1, &mw);
+        rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, hdr_ui_pipe);
+        rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, hdr_ui_layout, 0, 1, &ds, 0, NULL);
+        rec_CmdPushConstants(cb, hdr_ui_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof nits, nits);
+        rec_CmdDraw(cb, 3, 1, 0, 0);
+    }
+    rec_CmdEndRendering(cb);
+    vk_dyn_forget();
+    image_barrier(cb, hdr_sc_images[i], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+}
+
 uint64_t g_present_split[6];  // (VK_PROF) acquire, end pass, draw + menu, submit, present, slot wait
-typedef struct { uint32_t image; VkSemaphore acquired; bool ok; } Frame;
+// (s250 hdr) layer: the mod's draws go into sl_image right now (sora_layer_begin .. _end); layer_used: it was drawn
+// this frame (the picture pass composes it). Both stay false unless hdr_mod_float.
+typedef struct { uint32_t image; VkSemaphore acquired; bool ok; bool hdr_game, menu, layer, layer_used; } Frame;
 static Frame cur_frame;
 
-// Acquire the next window image and begin rendering into it (cleared to `clear`). Returns false when there is
-// nothing to draw into (minimised window).
-bool vk_frame_begin(const float clear[4]) {
+// The image the frame is drawn into: the game's float picture for an HDR frame, else the 8-bit window image (game
+// frames without a float source: menus, movies, the start screen; it is also where the overlay menu is drawn).
+static VkImage frame_image(void) {
+    return cur_frame.hdr_game ? hdr_game_images[cur_frame.image] : g_vk.sc_images[cur_frame.image];
+}
+static VkImageView frame_view(void) {
+    return cur_frame.hdr_game ? hdr_game_views[cur_frame.image] : g_vk.sc_views[cur_frame.image];
+}
+static VkFormat frame_format(void) {
+    return cur_frame.hdr_game ? VK_FORMAT_R16G16B16A16_SFLOAT : g_vk.sc_format;
+}
+VkFormat vk_frame_format(void) { return frame_format(); }
+bool vk_frame_hdr(void) { return cur_frame.hdr_game; }
+
+// Acquire the next window image and begin rendering into it (cleared to `clear`). hdr_game: the caller has the game's
+// float picture (hdr.c) and draws it into RGBA16F. Returns false when there is nothing to draw into (minimised window).
+static bool frame_begin(const float clear[4], bool hdr_game) {
     cur_frame.ok = false;
+    cur_frame.hdr_game = false;
+    cur_frame.menu = false;
+    cur_frame.layer = cur_frame.layer_used = false;  // (s250 hdr)
     int w, h;
     SDL_GetWindowSizeInPixels(window, &w, &h);
     // minimised (Windows keeps the window's size then, but its surface is 0 x 0: every acquire was out of date)
@@ -2107,14 +2632,15 @@ bool vk_frame_begin(const float clear[4]) {
         return false;
     }
     cur_frame.acquired = acquire_sem[slot];
+    cur_frame.hdr_game = hdr_game && g_hdr && cur_frame.image < hdr_game_count;
     slot_seq[slot] = vk_pending_seq();
     VkCommandBuffer cb = vk_cmd();
     // The window pass reads the game's image, written by an earlier submission's passes: only the full barrier that
     // ends an upload command buffer made those writes visible, when this submission had uploads (validation:
     // READ_AFTER_WRITE on the present draw once the recorder thread changed when they come)
     vk_full_barrier(cb);
-    image_barrier(cb, g_vk.sc_images[cur_frame.image], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = g_vk.sc_views[cur_frame.image],
+    image_barrier(cb, frame_image(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = frame_view(),
                                     .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                     .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
                                     .clearValue.color.float32 = {clear[0], clear[1], clear[2], clear[3]}};
@@ -2130,6 +2656,8 @@ bool vk_frame_begin(const float clear[4]) {
     return true;
 }
 
+bool vk_frame_begin(const float clear[4]) { return frame_begin(clear, false); }
+
 // Passes of their own between vk_frame_begin and vk_frame_end (exec.c post passes): end the window image's
 // rendering, and begin it again keeping what was drawn.
 void vk_frame_suspend(void) {
@@ -2138,7 +2666,8 @@ void vk_frame_suspend(void) {
 void vk_frame_resume(void) {
     if (!cur_frame.ok) return;
     VkCommandBuffer cb = vk_cmd();
-    VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = g_vk.sc_views[cur_frame.image],
+    VkImageView v = cur_frame.layer ? sl_view : frame_view();  // (s250 hdr: Sora's own pass inside the mod's layer)
+    VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = v,
                                     .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                                     .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD, .storeOp = VK_ATTACHMENT_STORE_OP_STORE};
     VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, g_vk.sc_extent}, .layerCount = 1,
@@ -2151,8 +2680,94 @@ void vk_frame_resume(void) {
     vk_dyn_forget();
 }
 
+// The overlay menu into the 8-bit window image while the game's float picture is in hdr_game (it is composed after
+// the PQ encode at the HUD's white, so the menu keeps its colours).
+static void frame_menu_begin(VkCommandBuffer cb) {
+    if (!cur_frame.ok || !cur_frame.hdr_game) return;
+    rec_CmdEndRendering(cb);
+    image_barrier(cb, g_vk.sc_images[cur_frame.image], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    const float zero[4] = {0, 0, 0, 0};
+    VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                                    .imageView = g_vk.sc_views[cur_frame.image],
+                                    .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                                    .clearValue.color.float32 = {zero[0], zero[1], zero[2], zero[3]}};
+    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, g_vk.sc_extent}, .layerCount = 1,
+                          .colorAttachmentCount = 1, .pColorAttachments = &ca};
+    rec_CmdBeginRendering(cb, &ri);
+    VkViewport vp = {0, 0, (float)g_vk.sc_extent.width, (float)g_vk.sc_extent.height, 0, 1};
+    VkRect2D sc = {{0, 0}, g_vk.sc_extent};
+    rec_CmdSetViewport(cb, 0, 1, &vp);
+    rec_CmdSetScissor(cb, 0, 1, &sc);
+    vk_dyn_forget();
+    cur_frame.menu = true;
+}
+
 VkExtent2D vk_frame_extent(void) { return g_vk.sc_extent; }
-VkImageView vk_frame_view(void) { return cur_frame.ok ? g_vk.sc_views[cur_frame.image] : VK_NULL_HANDLE; }  // (runtime/sora_draw.c)
+VkImageView vk_frame_view(void) {  // (runtime/sora_draw.c, sora_hud.c; s250 hdr: the mod's layer while it is open)
+    return !cur_frame.ok ? VK_NULL_HANDLE : cur_frame.layer ? sl_view : g_vk.sc_views[cur_frame.image];
+}
+// (s250 hdr) What the mod's present-time draws draw into now: the layer (RGBA16F, premultiplied sRGB-encoded, alpha =
+// coverage: sora_hud.c / sora_draw.c / sora_fx.c pick pipelines with coverage blending for it), else the window image
+// (g_vk.sc_format, as before).
+bool vk_frame_sora_layer(void) { return cur_frame.ok && cur_frame.layer; }
+VkFormat vk_frame_sora_format(void) { return vk_frame_sora_layer() ? VK_FORMAT_R16G16B16A16_SFLOAT : g_vk.sc_format; }
+
+// (s250 hdr) hdr_mod_float, a frame drawn into the game's float picture: the mod's present-time draws (KH2 HUD, camp
+// menu, name tags, Sora's screen-mode / fallback passes) into their own layer instead (cleared to 0), composed over the
+// picture in hdr_game_write. Rendering on the picture is ended first and resumed (LOAD) by sora_layer_end.
+static void sora_layer_begin(void) {
+    if (!cur_frame.ok || !cur_frame.hdr_game || cur_frame.layer || !hdr_mod_float()) return;
+    if (!hdr_present_init() || !hdr_sora_present_init()) return;  // (no pass to compose it: the draws stay as upstream's)
+    VkExtent2D e = g_vk.sc_extent;
+    if (!sl_image || sl_ext.width != e.width || sl_ext.height != e.height) {
+        if (sl_image) vk_defer_view(sl_view), vk_defer_image(sl_image, sl_mem);  // (the last frames may still read it)
+        sl_image = VK_NULL_HANDLE, sl_view = VK_NULL_HANDLE;
+        VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
+                                .format = VK_FORMAT_R16G16B16A16_SFLOAT, .extent = {e.width, e.height, 1}, .mipLevels = 1,
+                                .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
+                                .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                         VK_IMAGE_USAGE_TRANSFER_SRC_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        if (vmaCreateImage(g_vk.vma, &ci, &ai, &sl_image, &sl_mem, NULL) != VK_SUCCESS) {
+            static int said;
+            if (!said++) LOG("[hdr] Sora: no memory for the HUD layer (%ux%u): the KH2 HUD is left out in HDR\n", e.width, e.height);
+            sl_image = VK_NULL_HANDLE;
+            return;
+        }
+        VkImageViewCreateInfo vi = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = sl_image,
+                                    .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+                                    .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+        if (vkCreateImageView(g_vk.dev, &vi, NULL, &sl_view) != VK_SUCCESS) {
+            vk_defer_image(sl_image, sl_mem), sl_image = VK_NULL_HANDLE, sl_view = VK_NULL_HANDLE;
+            return;
+        }
+        sl_ext = e;
+        LOG("[hdr] Sora: HUD layer %ux%u (RGBA16F) made\n", e.width, e.height);
+    }
+    VkCommandBuffer cb = vk_cmd();
+    rec_CmdEndRendering(cb);
+    image_barrier(cb, sl_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    VkRenderingAttachmentInfo ca = {.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO, .imageView = sl_view,
+                                    .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                    .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                                    .clearValue.color.float32 = {0, 0, 0, 0}};
+    VkRenderingInfo ri = {.sType = VK_STRUCTURE_TYPE_RENDERING_INFO, .renderArea = {{0, 0}, e}, .layerCount = 1,
+                          .colorAttachmentCount = 1, .pColorAttachments = &ca};
+    rec_CmdBeginRendering(cb, &ri);
+    VkViewport vp = {0, 0, (float)e.width, (float)e.height, 0, 1};
+    VkRect2D sc = {{0, 0}, e};
+    rec_CmdSetViewport(cb, 0, 1, &vp);
+    rec_CmdSetScissor(cb, 0, 1, &sc);
+    vk_dyn_forget();
+    cur_frame.layer = cur_frame.layer_used = true;
+}
+static void sora_layer_end(void) {
+    if (!cur_frame.ok || !cur_frame.layer) return;
+    rec_CmdEndRendering(vk_cmd());
+    cur_frame.layer = false;
+    vk_frame_resume();  // (the picture again, LOAD: the boot picture's fade and the overlay menu draw after this)
+}
 void *vk_frame_cmd(void) {  // (the start screen's ImGui records into it itself: what was queued before goes first)
     VkCommandBuffer cb = vk_cmd();
     rec_drain();
@@ -2162,11 +2777,25 @@ void *vk_frame_cmd(void) {  // (the start screen's ImGui records into it itself:
 static void save_window_image(VkCommandBuffer cb, VkSpan *out) {
     uint32_t w = g_vk.sc_extent.width, h = g_vk.sc_extent.height;
     *out = vk_readback((uint64_t)w * h * 4);
-    image_barrier(cb, g_vk.sc_images[cur_frame.image], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    image_barrier(cb, frame_image(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     VkBufferImageCopy rg = {.bufferOffset = out->off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                             .imageExtent = {w, h, 1}};
-    rec_CmdCopyImageToBuffer(cb, g_vk.sc_images[cur_frame.image], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, out->buf, 1, &rg);
-    image_barrier(cb, g_vk.sc_images[cur_frame.image], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    rec_CmdCopyImageToBuffer(cb, frame_image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, out->buf, 1, &rg);
+    image_barrier(cb, frame_image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+}
+
+// The HDR game picture is RGBA16F: 8 bytes a pixel, converted to sRGB for the PNG (linear 1.0 is white) when the
+// submission has completed.
+static void save_hdr_game_image(VkCommandBuffer cb, VkSpan *out) {
+    uint32_t w = g_vk.sc_extent.width, h = g_vk.sc_extent.height;
+    *out = vk_readback((uint64_t)w * h * 8);
+    image_barrier(cb, hdr_game_images[cur_frame.image], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                  VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    VkBufferImageCopy rg = {.bufferOffset = out->off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                            .imageExtent = {w, h, 1}};
+    rec_CmdCopyImageToBuffer(cb, hdr_game_images[cur_frame.image], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, out->buf, 1, &rg);
+    image_barrier(cb, hdr_game_images[cur_frame.image], VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 }
 
 // (s111) sora_mod.dll's F5 marks / live "shot <name>": save the next presented window image (HUD + KH2 draws) as PNG.
@@ -2192,10 +2821,25 @@ static int frame_kind;  // (frame generation: PRES_GEN / PRES_AFTER_GEN for the 
 void vk_frame_end(const char *shot_path) {
     if (!cur_frame.ok) return;
     VkCommandBuffer cb = vk_cmd();
+    bool hdr_game = cur_frame.hdr_game;
+    bool lay = hdr_game && cur_frame.layer_used && sl_image;  // (s250 hdr: only with hdr_mod_float)
     rec_CmdEndRendering(cb);
-    VkSpan shot = {0};
-    if (shot_path) save_window_image(cb, &shot);
-    if (g_hdr) hdr_write(cb, cur_frame.image);
+    VkSpan shot = {0}, lshot = {0};
+    if (shot_path) {
+        if (hdr_game) save_hdr_game_image(cb, &shot);
+        else save_window_image(cb, &shot);
+        if (lay) {  // (s250 hdr) the mod's layer too: the PNG gets the KH2 HUD as the display shows it (sora_hdr_core.h)
+            uint32_t w = g_vk.sc_extent.width, h = g_vk.sc_extent.height;
+            lshot = vk_readback((uint64_t)w * h * 8);
+            image_barrier(cb, sl_image, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            VkBufferImageCopy rg = {.bufferOffset = lshot.off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                                    .imageExtent = {w, h, 1}};
+            rec_CmdCopyImageToBuffer(cb, sl_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, lshot.buf, 1, &rg);
+            image_barrier(cb, sl_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        }
+    }
+    if (hdr_game) hdr_game_write(cb, cur_frame.image, cur_frame.menu, lay);
+    else if (g_hdr) hdr_write(cb, cur_frame.image);
     else image_barrier(cb, g_vk.sc_images[cur_frame.image], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     uint32_t img = cur_frame.image;
     if (!done_sem[img]) done_sem[img] = binary_semaphore();
@@ -2210,14 +2854,52 @@ void vk_frame_end(const char *shot_path) {
     frame_kind = PRES_PLAIN;
     g_present_split[4] += SDL_GetTicksNS() - ts;
     cur_frame.ok = false;
+    cur_frame.menu = false;
+    cur_frame.hdr_game = false;
+    cur_frame.layer = cur_frame.layer_used = false;  // (s250 hdr)
     if (shot_path) {
         vk_wait_seq(seq);
         uint32_t w = g_vk.sc_extent.width, h = g_vk.sc_extent.height;
-        uint8_t *px = shot.ptr;
-        bool bgr = g_vk.sc_format == VK_FORMAT_B8G8R8A8_UNORM || g_vk.sc_format == VK_FORMAT_B8G8R8A8_SRGB;
-        for (uint64_t i = 0; bgr && i < (uint64_t)w * h; i++) { uint8_t t = px[i * 4]; px[i * 4] = px[i * 4 + 2]; px[i * 4 + 2] = t; }
-        for (uint64_t i = 0; i < (uint64_t)w * h; i++) px[i * 4 + 3] = 255;
-        vk_save_png(shot_path, px, w, h);
+        if (hdr_game) {
+            _Float16 *hp = shot.ptr;
+            uint8_t *px = shot.ptr;
+            if (lshot.ptr) {  // (s250 hdr) the layer over the picture first, as the present pass does it
+                const _Float16 *lp = lshot.ptr;
+                uint64_t touched = 0;
+                for (uint64_t i = 0; i < (uint64_t)w * h; i++) {
+                    float bg[3] = {(float)hp[i * 4], (float)hp[i * 4 + 1], (float)hp[i * 4 + 2]};
+                    float L[4] = {(float)lp[i * 4], (float)lp[i * 4 + 1], (float)lp[i * 4 + 2], (float)lp[i * 4 + 3]}, o[3];
+                    if (L[0] == 0 && L[1] == 0 && L[2] == 0 && L[3] == 0) continue;
+                    for (int c = 0; c < 3; c++) bg[c] = bg[c] > 0.0f ? bg[c] : 0.0f;
+                    shc_compose(bg, L, o);
+                    for (int c = 0; c < 3; c++) hp[i * 4 + c] = (_Float16)o[c];
+                    touched++;
+                }
+                LOG("[hdr] Sora: HUD layer in the picture: %.1f %% of the pixels\n", 100.0 * (double)touched / ((double)w * h));
+            }
+            float mx = 0.0f;
+            double sum = 0.0;
+            for (uint64_t i = 0; i < (uint64_t)w * h; i++)
+                for (int c = 0; c < 3; c++) {
+                    float l = (float)hp[i * 4 + c];
+                    if (!(l > 0.0f)) l = 0.0f;
+                    if (l > mx) mx = l;
+                    sum += l;
+                    float s = l <= 0.0031308f ? 12.92f * l : 1.055f * powf(l, 1.0f / 2.4f) - 0.055f;
+                    if (s > 1.0f) s = 1.0f;
+                    px[i * 4 + c] = (uint8_t)(s * 255.0f + 0.5f);
+                }
+            LOG("[hdr] float picture: max %.3f (%.0f nits), mean %.3f (%.0f nits)\n", mx, mx * g_hdr_white,
+                (float)(sum / ((double)w * h * 3)), (float)(sum / ((double)w * h * 3)) * g_hdr_white);
+            for (uint64_t i = 0; i < (uint64_t)w * h; i++) px[i * 4 + 3] = 255;
+            vk_save_png(shot_path, px, w, h);
+        } else {
+            uint8_t *px = shot.ptr;
+            bool bgr = g_vk.sc_format == VK_FORMAT_B8G8R8A8_UNORM || g_vk.sc_format == VK_FORMAT_B8G8R8A8_SRGB;
+            for (uint64_t i = 0; bgr && i < (uint64_t)w * h; i++) { uint8_t t = px[i * 4]; px[i * 4] = px[i * 4 + 2]; px[i * 4 + 2] = t; }
+            for (uint64_t i = 0; i < (uint64_t)w * h; i++) px[i * 4 + 3] = 255;
+            vk_save_png(shot_path, px, w, h);
+        }
     }
 }
 
@@ -2311,14 +2993,29 @@ static void write_runtime_profile(void) {
 static char fg_real_shot[256];  // (SAVAGEWIND_FG_SHOT_AT: the game's frame after a generated one saved)
 
 void vk_fg_wait_idle(void) {
+    // (Sora in BotW, s245) On the recorder thread (fg_dispatch, when frame generation's images changed size or format
+    // mid-game) the queued presents can't be waited for: the present thread waits for a submission (rec_wait_submitted)
+    // whose packet comes AFTER this one in the recorder's stream, so both threads stood still for good (the game froze
+    // with a dark picture: run A2, stacks in sb/s245/run/stacks_A2.txt). A queued present only hands over a window image,
+    // it uses none of frame generation's resources: the GPU idle is enough here (the queue lock: one queue, the
+    // present thread presents on it).
+    if (rec_on_recorder()) {
+        pthread_mutex_lock(&g_vk_queue_lock);
+        vkDeviceWaitIdle(g_vk.dev);
+        pthread_mutex_unlock(&g_vk_queue_lock);
+        return;
+    }
     vk_present_idle();
-    rec_drain();
+    if (!rec_on_recorder()) rec_drain();
     vkDeviceWaitIdle(g_vk.dev);
 }
 
 static bool fg_wanted(void) {
     static int forced = -2;
     if (forced == -2) forced = getenv("SAVAGEWIND_FG") ? atoi(getenv("SAVAGEWIND_FG")) : -1;
+    // (frame generation's copies are 8-bit and would clip the HDR picture. Sora in BotW, s245: only the float picture
+    // is in the way; with the mod on the picture is the 8-bit one under HDR10 too, so it runs, as it did on 0.5.3)
+    if (vk_hdr_game_enabled()) return false;
     if (!(forced >= 0 ? forced : g_settings.frame_gen)) return false;
     static int log = -1;
     static uint64_t n;
@@ -2465,9 +3162,43 @@ static void present_locked(NvnTexture *t) {
     t0 += pso_wait();  // (not the acquire's time)
     bool held = boot_held();
     if (!held && boot_splash_active()) boot_splash_close();  // (the game's own frames from here on)
-    // Frame generation: the frame between the last one and this (exec.c vk_fg_generate), presented first
+    // HDR: the game copied its float 10-bit image (linear, HUD included) into the 8-bit image it presents (hdr.c). Use
+    // the float source instead, so the picture keeps the tonemap's highlights. The boot picture is SDR and has its own
+    // 8-bit pipeline, so HDR waits until it is gone.
+    VkImage hsrc = VK_NULL_HANDLE;
+    VkFormat hfmt = VK_FORMAT_UNDEFINED;
+    uint32_t hw = 0, hh = 0;
+    bool hdr_game_on = vk_hdr_game_enabled();  // (g_hdr, and not the Sora mod: hdr_game_off_for_mod)
+    bool hdr_src = hdr_game_on && !held && vk_hdr_source(b->image, &hsrc, &hfmt, &hw, &hh);
+    if (!hdr_src && hdr_game_on && !held && b->hdr_upgraded) {  // (a game that presents its float image directly)
+        hdr_src = true;
+        hsrc = b->image, hfmt = b->format, hw = b->width, hh = b->height;
+    }
+
+    // The float source as its own backend. Static, so its cached views survive frames; forgotten below when the
+    // source changes (resize, reload, reboot: the old view must not be reused for new image memory).
+    static TexBackend hb;
+    static VkImage hb_image;
+    static VkFormat hb_fmt;
+    TexBackend *src = b;
+    if (hdr_src && (hsrc != hb_image || hfmt != hb_fmt || b->image != hb.image)) {
+        hb = *b;
+        hb.image = hsrc, hb.format = hfmt, hb.width = hw, hb.height = hh;
+        vk_views_forget(&hb);  // (the previous source's cached views must not be reused for the new image)
+        hb_image = hsrc, hb_fmt = hfmt;
+    }
+    if (hdr_src) src = &hb;
+    static int hdr_missing, hdr_found_told;
+    if (hdr_src) {
+        hdr_missing = 0;
+        if (!hdr_found_told++) LOG("[hdr] presenting the game's float picture (HDR)\n");
+    } else if (hdr_game_on && !held && ++hdr_missing == 10) {
+        LOG("[hdr] HDR10 output, but the game's float picture was not found (the 8-bit copy is shown)\n");
+    }
+    // Frame generation: the frame between the last one and this (exec.c vk_fg_generate), presented first. Its copies
+    // are 8-bit and would clip the HDR picture, so it stays off while the game's float picture is presented.
     TexBackend *gen;
-    { SW_ZONE("present/frame_gen"); gen = held ? NULL : vk_fg_generate(t, b); }
+    { SW_ZONE("present/frame_gen"); gen = (held || hdr_src) ? NULL : vk_fg_generate(t, b); }
     {   // (measuring) SAVAGEWIND_FG_TEST=1: the frame made, not presented
         static int test = -1;
         if (test < 0) test = getenv("SAVAGEWIND_FG_TEST") ? atoi(getenv("SAVAGEWIND_FG_TEST")) : 0;
@@ -2476,7 +3207,12 @@ static void present_locked(NvnTexture *t) {
     g_fg_active = gen != NULL;
     static const float black[4] = {0, 0, 0, 1};
     bool have;
-    { SW_ZONE("present/frame_begin"); have = vk_frame_begin(black); }
+    { SW_ZONE("present/frame_begin"); have = frame_begin(black, hdr_src); }
+    if (hdr_src && !vk_frame_hdr()) {  // (HDR was turned off while the swapchain was remade)
+        hdr_src = false;
+        src = b;
+        gen = NULL;  // (the generated frame path was skipped above for HDR)
+    }
     uint64_t nd = SDL_GetTicksNS() - t0;
     if (nd > 30000000) {
         static int warned;
@@ -2512,6 +3248,16 @@ static void present_locked(NvnTexture *t) {
         uint64_t td = SDL_GetTicksNS();
         if (gen) {  // the generated frame, as the game's are (crop, anti-aliasing, menu), then this one half a frame later
             vk_present_draw(cb, gen, (float)vx, (float)vy, (float)vw, (float)vh, pv);
+            {   // (Sora in BotW, s245) the KH2 HUD and Sora's present-time draws on the generated frame too: they are
+                // drawn over the window image, not into the game's, so without this every other shown frame had no
+                // command menu / HP gauge / party faces (a 30 Hz flicker with frame generation on). Same order as below.
+                extern void sora_hud_present_under(float, float, float, float);
+                extern void sora_draw_present(float, float, float, float);
+                extern void sora_hud_present(float, float, float, float);
+                sora_hud_present_under((float)vx, (float)vy, (float)vw, (float)vh);
+                sora_draw_present((float)vx, (float)vy, (float)vw, (float)vh);
+                sora_hud_present((float)vx, (float)vy, (float)vw, (float)vh);
+            }
             if (menu_render_needed()) rec_drain();  // (ImGui records into cb itself, and may upload its fonts on the queue)
             menu_render((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height);
             // SAVAGEWIND_FG_SHOT_AT=<frame>,... (counted as SAVAGEWIND_SHOT_AT): the window at two presents in a row
@@ -2544,17 +3290,23 @@ static void present_locked(NvnTexture *t) {
             if (!vk_frame_begin(black)) { renderer_submit(); goto presented; }
             cb = vk_cmd();
         }
-        { SW_ZONE("present/draw"); vk_present_draw(cb, b, (float)vx, (float)vy, (float)vw, (float)vh, pv); }
+        { SW_ZONE("present/draw"); vk_present_draw(cb, src, (float)vx, (float)vy, (float)vw, (float)vh, pv); }
+        if (hdr_src) sora_layer_begin();  // (s250 hdr: hdr_mod_float only, else nothing: the three below into the mod's layer)
         { extern void sora_hud_present_under(float, float, float, float); sora_hud_present_under((float)vx, (float)vy, (float)vw, (float)vh); }  // (s94) the camp menu under the party (runtime/sora_hud.c)
         { extern void sora_draw_present(float, float, float, float); sora_draw_present((float)vx, (float)vy, (float)vw, (float)vh); }  // Sora (runtime/sora_draw.c)
         { extern void sora_hud_present(float, float, float, float); sora_hud_present((float)vx, (float)vy, (float)vw, (float)vh); }  // his HP / MP gauge (runtime/sora_hud.c)
+        sora_layer_end();  // (s250 hdr: back to the picture; nothing when no layer was begun)
         if (held)  // (fading into the game's title screen: the boot picture over it, less each frame)
             boot_splash_draw(vk_frame_cmd(), g_vk.sc_extent.width, g_vk.sc_extent.height, boot_alpha);
         static long menu_at = -1;
         if (menu_at < 0) menu_at = getenv("SAVAGEWIND_MENU_AT") ? atol(getenv("SAVAGEWIND_MENU_AT")) : 0;
         if (menu_at && (long)total_frames + 1 == menu_at) { extern void menu_test_open(void); menu_test_open(); }
-        if (menu_render_needed()) rec_drain();  // (ImGui records into cb itself, and may upload its fonts on the queue)
-        { SW_ZONE("present/menu"); menu_render((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height); }
+        bool menu = menu_render_needed();
+        if (menu) {
+            rec_drain();  // (ImGui records into cb itself, and may upload its fonts on the queue)
+            if (hdr_src) frame_menu_begin(cb);  // (the float picture is not the menu's target)
+            { SW_ZONE("present/menu"); menu_render((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height); }
+        }
         g_present_split[2] += SDL_GetTicksNS() - td;
         static long win_shot = -1;
         if (win_shot < 0) win_shot = getenv("SAVAGEWIND_WINDOW_SHOT") ? atol(getenv("SAVAGEWIND_WINDOW_SHOT")) : 0;
@@ -2682,7 +3434,7 @@ presented:
             g_settings.upscaler = UPSCALE_OFF;
             for (int i = 0; i < 5; i++)
                 if (!strncmp(m, names[i], strlen(names[i]))) g_settings.upscaler = tu, g_settings.upscale_quality = i;
-            if ((f3 || f4) && !strncmp(m, "native", 6)) g_settings.upscaler = tu, g_settings.upscale_quality = UPQ_COUNT;
+            if ((f3 || f4) && !strncmp(m, "native", 6)) g_settings.upscaler = tu, g_settings.upscale_quality = UPQ_NATIVE;
             LOG("[test] frame %llu: upscaler %d mode %d\n", (unsigned long long)total_frames, g_settings.upscaler,
                 g_settings.upscale_quality);
             next = strchr(m, ',');
@@ -2851,6 +3603,7 @@ void ui_window_init(void) {
     atexit(quick_exit_handler);
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     settings_load();
+    { extern void motion_before_sdl_init(void); motion_before_sdl_init(); }  // (hle/motion.c: Steam Input's hidden pads)
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) FATAL("SDL_Init: %s\n", SDL_GetError());
     // Video > Window size (runtime/window_size.c: pixels; SDL's window size is pixels / the display's pixel density)
     winsize_refresh(NULL);

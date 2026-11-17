@@ -15,7 +15,7 @@ KH2's full sound list instead of PHH's table:
      work/sounds (mined/kh2_sounds.kh.json with --tables' actors, our effects + system, bdx/motions.kh.json, a 16-frame
      silent wav per sound);
   2. the sfx.bin chain of steps/fx.py runs on it with SB_WAVTRACE (sfxpack, sfxadd_s98, sfxadd_s107, sfxroxas, sfxmickey,
-     chickfx --no-fx, stitchfx --no-fx, sumsfx, ksse, dfse, sfxparty2 (s220); sfxskate reads no recipe sound and is skipped); it needs the
+     chickfx --no-fx, stitchfx --no-fx, sumsfx, ksse, dfse, sfxparty2 (s220), kbhitse (s247), kbswingse (s249); sfxskate reads no recipe sound and is skipped); it needs the
      trig_*.json (fx_trigjson) and the baked summon motions (fxsumdata) of a sorabuild work dir (--sbwork, read only);
   3. selection = the traced wavs + LVUP_WAV (sfx_lvup_wav reads it directly), minus the sounds our tools bring themselves
      (sfxpack EXTRA: se500 #10 comes from step sfx_extra_se500) and KEEP_OUT (gaps of the old table kept for identity; empty since s182).
@@ -159,6 +159,10 @@ def trace(work, full, tables, effects, system, trigdir, sumdata, kh2):
         run(script, "build", "--sfx-in", cur, "--out", d)
         os.replace(os.path.join(d, "sfx.bin"), cur)
     run("sfxparty2.py", cur, cur + ".new")  # (s220 riku2: the party stand-ins' voices / steps / swings / hits)
+    os.replace(cur + ".new", cur)
+    run("kbhitse.py", cur, cur + ".new")  # (s247 kbse: every KH2 Keyblade's bank at the hit table's se500 cues; reads SB_KH2's a.us)
+    os.replace(cur + ".new", cur)
+    run("kbswingse.py", cur, cur + ".new")  # (s249 kbswing: every KH2 Keyblade's bank at the whoosh cues + cue 10; reads SB_KH2's a.us + msets)
     os.replace(cur + ".new", cur)
     seen, order = set(), []
     for ln in open(tr, encoding="utf-8"):

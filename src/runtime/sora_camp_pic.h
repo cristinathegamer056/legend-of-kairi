@@ -7,7 +7,7 @@
 
 #define CP_COLS 6
 #define CP_CELL 256
-#define CP_N 26  // = KB_N (sora_kb.h; s214: + our own two, cells 24 / 25 = our renders)
+#define CP_N 28  // = KB_N (sora_kb.h; s214: + our own two, cells 24 / 25 = our renders; s247: cells 26 / 27, still 5 atlas rows)
 #define CP_ATLAS_W (CP_COLS * CP_CELL)
 #define CP_LOGICAL 128.0f
 

@@ -164,6 +164,7 @@ static void camp_pad(uint64_t *b, int32_t *lx, int32_t *ly, int32_t *rx, int32_t
 static void camp_flags(const CpOut *o) { g_camp_eat = o->eat, g_camp_pass_plus = o->pass_plus, g_camp_pulse = o->pulse_plus; }
 
 // first thing in the frame (paused or playing): true = the camp owns it (the caller hides Sora + the HUD and returns)
+static int g_camp_time = 1;  // (s249) live `camptime`
 static bool camp_frame(uint64_t present) {
     (void)present;
     bool req = g_camp_req;
@@ -187,6 +188,20 @@ static bool camp_frame(uint64_t present) {
     int row0 = CAMP.page.row, st0 = CAMP.page.state;
     CsOut o = {.q = g_camp_q, .n = 0, .cap = CAMP_QUADS};
     CpOut out;
+    {   // (s249) time based: this present = how many 60 Hz steps (KH frame = ms * 0.06). Was one step per present: the cursor
+        // hand, the open / close animations and the stick repeat ran 2.4x fast at 144 fps, 4x at 240
+        static double t_prev, acc;
+        double now = cxp_now();
+        if (CAMP.page.state == CP_WAIT_PAUSE && CAMP.page.timer == 0) acc = 0.5, g_cp_steps = 1;  // a fresh open: centred, so 60 fps jitter stays 1 step
+        else {
+            acc += (now - t_prev) * 0.06;
+            int st = (int)acc;
+            if (st > 4) st = 4, acc = 0.5; else acc -= st;  // a hitch: no long catch-up
+            g_cp_steps = st < 0 ? 0 : st;
+        }
+        t_prev = now;
+        if (!g_camp_time) g_cp_steps = 1;
+    }
     mw_pre();
     cp_tick(&CAMP.page, &CAMP.seq, &o, pause, press, kh_axis(g_ly), &CAMP.v, &out);
     camp_flags(&out);
@@ -261,6 +276,8 @@ static bool camp_live_set(const char *key, int v) {
     if (!strcmp(key, "camp")) { g_camp_on = v != 0; if (!v) camp_abort("live off"); }
     else if (!strcmp(key, "campopen")) { if (v && !*(volatile uint32_t *)(uintptr_t)PAUSE_STATE) g_camp_req = 1; }
     else if (!strcmp(key, "camplog")) CAMP.log = v != 0;
+    else if (!strcmp(key, "camptime")) g_camp_time = v != 0;  // (s249) 1 = the menu runs on time (60 steps a second), 0 = one step per present (old)
+    else if (!strcmp(key, "abnum")) g_cp_abnum = v != 0;      // (s249) 1 = AP numbers right-anchored (KH2), 0 = old
     else if (mw_live_set(key, v)) {}
     else return false;
     return true;

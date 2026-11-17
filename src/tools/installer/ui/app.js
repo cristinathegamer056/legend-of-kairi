@@ -33,7 +33,7 @@ function demoState() {
     upd: { path: "", ok: false, msg: "" }, disk: { free: 200, need: 40, ok: true }, phases, frac: status === "setup" ? 0 : run,
     elapsed: Math.max(0, t - 3) * 36, eta: status === "running" ? Math.round((1 - run) * 900) : null, build_id: "demo",
     error: status === "failed" ? "Some files did not come out right; press Install again to rebuild them. (2 file(s): fx/kh2_fx.bin, sora_model.bin)" : "",
-    launchers: status === "done" ? { solo: true } : {}, seq: 0, lines: [], sw_version: "0.5.3-alpha.5" };
+    launchers: status === "done" ? { solo: true } : {}, seq: 0, lines: [], sw_version: "0.6.0-alpha.6" };
 }
 async function api(path, body) {
   if (DEMO && path === "/api/install") { DEMO_T0 = performance.now() - Math.max(3, Math.min(27, DEMO_FROM)) * 1000; return {}; }

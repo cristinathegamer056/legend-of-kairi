@@ -67,7 +67,7 @@ typedef struct { uint8_t db_set /* (s140) Debug page: BACKEND row + 1 changed */
 #define CP_ROW_DEBUG 5            // (s140 dbgmenu) "Debug Menu": opens the Debug page (page 5): test level + unlock-all toggles
 #define CP_BTN_LEFT (1ull << 12)  // = sora.c BTN_LEFT / BTN_RIGHT (d-pad)
 #define CP_BTN_RIGHT (1ull << 14)
-#define CP_OPEN_WAIT 30           // presents to wait for BotW's pause (state 2) after the + edge
+#define CP_OPEN_WAIT 30           // presents (s249: at most 60 counted a second) to wait for BotW's pause (state 2) after the + edge
 #define CP_PULSE_WAIT 60          // presents of + pulses before giving up on BotW unpausing
 #define CP_SWITCH_MAX 120         // presents of page end anims before switching anyway (guard)
 #define CP_REPEAT_FIRST 18        // cursor repeat (GUESS: KH2 feel)
@@ -161,6 +161,10 @@ static void cp_build_(CampPage *p, const CpVals *v) {
 }
 
 // slice 1 backdrop: one solid opaque black quad over any aspect (spec 3.3: BotW's own pause screen stays hidden)
+// (s249) the menu runs on TIME, not on presents: the 60 Hz steps this present stands for (the glue sets it before cp_tick:
+// 0 = the present came early (144 / 240 fps): draw only; 2+ = a slow present). The sequences (the cursor hand too), the stick /
+// Debug page repeats and the waits all count steps. 1 = one step per present (the old way; the host tests).
+static int g_cp_steps = 1;
 static int g_cp_split;  // (s94) quads before the top page's name plates (root 3) in the last draw; 0 = none
 static int g_cp_nobackdrop;  // (s92 b6-menuwalk) 1 = the actors behind the menu show: no black quad in the open / steady / closing frames
 static void cp_backdrop_(CsOut *o) {
@@ -189,9 +193,18 @@ static void cp_abort(CampPage *p, const char *why, CpOut *out) {
 
 // = run_top's per-frame step, in two halves: Update (not on the first frame) + the layout L2 0 -> 1 switch, then the
 // draw (Draw moves the state on); a close lands between them, as run_top's close frame
-static void cp_update_(CampPage *p, const CampSeq *s, bool first) {
-    if (!first) { p->layout_f++; for (int k = 0; k < cp_nroot_(p); k++) cs_update(&p->tree, p->root[k], 1 / 60.0); }
+static void cp_layout_step_(CampPage *p, const CampSeq *s) {
     if (p->layout_l2 == 0 && cs_layout_last(s, 0, p->layout_f)) { p->layout_f = 0; p->layout_l2 = 1; }
+}
+static void cp_update_(CampPage *p, const CampSeq *s, bool first) {
+    if (first || g_cp_steps < 1) { cp_layout_step_(p, s); return; }
+    for (int i = 0; i < g_cp_steps; i++) {
+        // (s249) a step nobody sees: a draw without quads moves its state on (start -> loop, IsEnd), as the seen ones do
+        if (i) for (int k = 0; k < cp_nroot_(p); k++) cs_draw(&p->tree, s, NULL, p->root[k], 0, 0);
+        p->layout_f++;
+        for (int k = 0; k < cp_nroot_(p); k++) cs_update(&p->tree, p->root[k], 1 / 60.0);
+        cp_layout_step_(p, s);
+    }
 }
 static void cp_draw_(CampPage *p, const CampSeq *s, CsOut *o) {
     if (!g_cp_nobackdrop) cp_backdrop_(o);
@@ -209,10 +222,10 @@ static int cp_dir_(CampPage *p, uint64_t press, float stick_y) {
     if (d) { p->held = 0; return d; }
     int sd = stick_y > 0.5f ? -1 : stick_y < -0.5f ? 1 : 0;
     if (!sd) { p->held = 0; return 0; }
-    int h = p->held++;
-    if (h == 0) return sd;
-    if (h >= CP_REPEAT_FIRST && (h - CP_REPEAT_FIRST) % CP_REPEAT_NEXT == 0) return sd;
-    return 0;
+    if (p->held == 0) { p->held = 1; return sd; }
+    bool fire = false;  // (s249) the repeat counts 60 Hz steps, not presents
+    for (int i = 0; i < g_cp_steps; i++) { int h = p->held++; if (h >= CP_REPEAT_FIRST && (h - CP_REPEAT_FIRST) % CP_REPEAT_NEXT == 0) fire = true; }
+    return fire ? sd : 0;
 }
 
 // rebuild for a new row (top) / who (Status), already past the open animations (cs_skip: start -> loop)
@@ -467,7 +480,7 @@ static void cp_tick(CampPage *p, const CampSeq *s, CsOut *o, uint32_t pause_stat
         }
         if (pause_state == 2) p->state = CP_OPEN;
         else if (p->timer >= CP_OPEN_WAIT) { cp_abort(p, "abort no-pause", out); return; }
-        p->timer++;
+        p->timer += first ? 1 : (g_cp_steps > 0);  // (s249) one per present that carries a step: 60 a second at high fps, every present at 60 fps and below (BotW's pause needs its game frames: never fewer presents than before)
         out->eat = out->draw = 1;
         cp_update_(p, s, first);
         cp_draw_(p, s, o);
@@ -561,7 +574,7 @@ static void cp_tick(CampPage *p, const CampSeq *s, CsOut *o, uint32_t pause_stat
         cp_draw_(p, s, o);
         bool done = true;
         for (int k = 0; k < cp_nroot_(p) && done; k++) if (!cs_is_end(&p->tree, p->root[k])) done = false;
-        if (!done && ++p->timer < CP_SWITCH_MAX) return;
+        if (!done && (p->timer += (g_cp_steps > 0)) < CP_SWITCH_MAX) return;
         if (!done) out->log = "switch timeout";
         int from = p->page;
         p->page = p->next;
@@ -589,7 +602,7 @@ static void cp_tick(CampPage *p, const CampSeq *s, CsOut *o, uint32_t pause_stat
         if (p->timer >= CP_PULSE_WAIT) { cp_abort(p, "abort close-timeout", out); return; }
         out->eat = out->draw = 1;
         out->pulse_plus = (p->timer / 4) % 2 == 0;
-        p->timer++;
+        p->timer += (g_cp_steps > 0);  // (s249) as the open wait
         cp_backdrop_(o);
         return;
     }

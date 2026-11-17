@@ -30,6 +30,8 @@ import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import meltycheck  # noqa: E402  (s223: nothing of Melty's in the GitHub release)
+import gameside    # noqa: E402  (s254: its SW_WANT must be swsetup's)
+import swsetup     # noqa: E402  (s254: the Savage Wind version + game code ids this release is for)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
@@ -42,9 +44,10 @@ DEFAULT_DLL = "D:/SoraBotW/src/sw-a41/build/sora_mod.dll"
 RUNTIME_DLLS = ["SDL3.dll", "avcodec-63.dll", "avformat-63.dll", "avutil-61.dll", "swscale-10.dll", "libshaderc_shared.dll",
                 "libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll", "libiconv-2.dll"]
 SYSTEM_DLLS = {"kernel32.dll", "user32.dll", "shell32.dll", "winmm.dll", "ws2_32.dll", "pdh.dll", "vulkan-1.dll",
-               "advapi32.dll"}  # (s212: Savage Wind 0.5.3's exe imports ADVAPI32 too, as stock 0.5.3-alpha.5's does)
+               "advapi32.dll",  # (s212: Savage Wind 0.5.3's exe imports ADVAPI32 too, as stock 0.5.3-alpha.5's does)
+               "gdi32.dll", "winhttp.dll"}  # (s250: Savage Wind 0.6.0's exe imports GDI32 + WINHTTP too, objdump -p of our build)
 # (s187) Windows DLLs the RUNTIME DLLs import (never shipped). Checked with objdump -p on the stock 0.4.1-alpha.4 DLLs (s212: stock
-# 0.5.3-alpha.5 ships the very same DLL files, sha256 equal).
+# 0.5.3-alpha.5 ships the very same DLL files, sha256 equal; s250: so does stock 0.6.0-alpha.6, all ten cmp-equal to 0.5.3's).
 SYSTEM_DLLS_RT = {"advapi32.dll", "gdi32.dll", "imm32.dll", "ole32.dll", "oleaut32.dll", "setupapi.dll", "version.dll", "bcrypt.dll",
                   "secur32.dll", "crypt32.dll", "ncrypt.dll", "msvcrt.dll", "ucrtbase.dll", "ntdll.dll", "iphlpapi.dll", "dbghelp.dll",
                   "dwmapi.dll", "uxtheme.dll", "shlwapi.dll", "comctl32.dll", "hid.dll", "cfgmgr32.dll", "rpcrt4.dll", "psapi.dll",
@@ -55,7 +58,7 @@ BIN_LICENSE_NOTE = """Legend of Kairi - the runtime DLLs in bin/
 ==========================================
 
 bin/savagewind.exe and bin/sora_mod.dll are built from Savage Wind (MIT, SavageWind-MIT.txt) plus this mod. The other DLLs in
-bin/ are the unchanged runtime libraries from the Savage Wind 0.5.3-alpha.5 Windows release:
+bin/ are the unchanged runtime libraries from the Savage Wind 0.6.0-alpha.6 Windows release:
 
 File(s)                                              Library                      License
 ---------------------------------------------------  ---------------------------  -------------------------------------------
@@ -73,6 +76,10 @@ NotoSansThai-Medium.ttf                              Noto Sans Thai             
 NotoSansHebrew-Medium.ttf                            Noto Sans Hebrew             SIL Open Font License 1.1 (NotoSansHebrew-OFL.txt)
 vk_pipelines.seed                                    Savage Wind's pipeline seed  MIT (SavageWind-MIT.txt; hashes and render state,
                                                                                   nothing of the game)
+amd_fidelityfx_loader_vk.dll                         AMD FSR API (FSR 3 / FSR 4)  AMD's binary licence, redistribution allowed with its
+  amd_fidelityfx_upscaler_vk.dll                                                  notice (AMD-FidelityFX-DLL-LICENSE.txt, beside them
+                                                                                  and in LICENSES/). Loaded only when present; they need
+                                                                                  the Microsoft Visual C++ runtime, as in stock.
 The OFL texts are next to the fonts in bin/ and in LICENSES/. bin/kairi_env.txt is ours (SAVAGEWIND_SORA=1: the mod on, Savage
 Wind's update check and installs off, also when bin/savagewind.exe is started by hand).
 
@@ -84,9 +91,12 @@ your own build of the same library version.
 # the fonts (menus, button labels, Thai / Hebrew menus) with their licenses, and the pipeline seed (precompile.c seed_find).
 # From the --runtime-dlls folder (the stock release), unchanged.
 STOCK_RESOURCES = ["FiraSans-Medium.ttf", "FiraSans-SemiBold.ttf", "FiraSans-OFL.txt", "NotoSansThai-Medium.ttf", "NotoSansThai-OFL.txt",
-                   "NotoSansHebrew-Medium.ttf", "NotoSansHebrew-OFL.txt", "vk_pipelines.seed"]
+                   "NotoSansHebrew-Medium.ttf", "NotoSansHebrew-OFL.txt", "vk_pipelines.seed",
+                   # (s250, Savage Wind 0.6.0) AMD's FSR API: fsr_api.cpp loads amd_fidelityfx_loader_vk.dll from the exe's folder
+                   # (stock ships both + AMD's licence there; the bigger 0.6.0 vk_pipelines.seed comes from the same folder)
+                   "amd_fidelityfx_loader_vk.dll", "amd_fidelityfx_upscaler_vk.dll", "AMD-FidelityFX-DLL-LICENSE.txt"]
 # (s212) license texts of stock files that the kit's LICENSES/ lacks (FidelityFX: the FSR 1 code built into savagewind.exe)
-STOCK_LICENSES = ["NotoSansThai-OFL.txt", "NotoSansHebrew-OFL.txt", "FidelityFX-LICENSE.txt"]
+STOCK_LICENSES = ["NotoSansThai-OFL.txt", "NotoSansHebrew-OFL.txt", "FidelityFX-LICENSE.txt", "AMD-FidelityFX-DLL-LICENSE.txt"]
 # (s212, review R1) bin/kairi_env.txt (runtime/kairi_env.h, read first in main): a plain start of bin/savagewind.exe is the mod with
 # Savage Wind's updater off (post_update.c update_off_for_mod). The real environment wins, so the launchers can still say otherwise.
 KAIRI_ENV = ("# Legend of Kairi: read by savagewind.exe at start (runtime/kairi_env.h). Unset variables only; the environment wins.\n"
@@ -95,7 +105,10 @@ KAIRI_ENV = ("# Legend of Kairi: read by savagewind.exe at start (runtime/kairi_
 KAIRI_ENV_GITHUB = KAIRI_ENV + "SAVAGEWIND_SORA_SOLO=1\n"
 # (s212, review R1) Savage Wind's updater files: with sw-manifest.txt beside the exe the stock update check, the Configuration detour
 # and SW Update (which would put the STOCK savagewind.exe over ours) come back. Never in a release, anywhere.
-FORBIDDEN = {"sw-manifest.txt", "sw update.exe", "savage wind configuration.exe"}
+FORBIDDEN = {"sw-manifest.txt", "sw update.exe", "savage wind configuration.exe",
+             # (s250, Savage Wind 0.6.0) RecompLauncher's setup file (it would set the folder up as STOCK Savage Wind), and NVIDIA's
+             # DLSS library + its licence (never ours to ship: the stock setup downloads it on an NVIDIA PC, dlss_fetch.c)
+             "recomplauncher.json", "nvngx_dlss.dll", "nvidia-dlss-license.txt"}
 SKIP_TOOLS = {"tools/installer/mkzip.py", "tools/sorabuild/config.thispc.json", "tools/sorabuild/config.fxrec.json",
               # host tests and the dev-only PHH-oracle proof scripts (they name C:/Users/... paths; the build steps never call them)
               "tools/installer/test_gameside.py", "tools/installer/test_recover.py", "tools/installer/test_lock.py",
@@ -143,10 +156,63 @@ def imports(exe):
     return sorted({ln.split(":", 1)[1].strip() for ln in out.splitlines() if ln.strip().startswith("DLL Name:")})
 
 
+def dll_misses(exe, dll, dump=None):
+    """(s255, the s254 review's finding 6) the names sora_mod.dll takes from savagewind.exe that this exe does not export
+    ([] = the pair fits). The DLL links the exe's exports by name: one built against another exe build's import library
+    would not load on a player's PC. objdump -p of both (dump: tests)."""
+    dump = dump or (lambda p: subprocess.run(["objdump", "-p", p], capture_output=True, text=True, check=True).stdout)
+    want, on = set(), False
+    for ln in dump(dll).splitlines():
+        s = ln.strip()
+        if s.startswith("DLL Name:"):
+            on = s.split(":", 1)[1].strip().lower() == "savagewind.exe"
+        elif on:
+            parts = s.split()       # "<vma>  <ordinal | <none>>  <hint>  <name>"
+            if len(parts) >= 4 and len(parts[0]) >= 8 and all(c in "0123456789abcdef" for c in parts[0]):
+                want.add(parts[3])
+            elif not s:
+                on = False
+    have, on = set(), False
+    for ln in dump(exe).splitlines():
+        s = ln.strip()
+        if s.startswith("[Ordinal/Name Pointer] Table"):
+            on = True
+        elif on and s.startswith("["):
+            have.add(s.rsplit(None, 1)[-1])     # "[   0] +base[   1]  0000 <name>"
+        elif on and s and not s.startswith("Ordinal"):
+            on = False
+    if not want:
+        return ["(objdump shows no import from savagewind.exe in %s)" % dll]
+    return sorted(want - have)
+
+
 def forbidden_files(out):
     """(s212, review R1) Savage Wind's updater files anywhere in the release folder (by name, any case) -> their paths"""
-    return [os.path.relpath(os.path.join(d, n), out) + "  (Savage Wind's updater: never in a release)"
+    return [os.path.relpath(os.path.join(d, n), out) + "  (Savage Wind's updater / RecompLauncher / DLSS file: never in a release)"
             for d, dirs, fs in os.walk(out) for n in dirs + fs if n.lower() in FORBIDDEN]
+
+
+def version_mismatch(exe, stock_dir):
+    """(s254, the s252 review's finding 4) -> the reasons this package would not fit ONE Savage Wind version ([] = fine): the
+    installer (swsetup.SW_WANT + its pinned stock zip), the launcher's check (gameside.SW_WANT), the stock folder the runtime
+    files come from (its sw-manifest.txt), the licence note, and the game code ids the exe carries (swsetup.GAME_IDS: what
+    stock's setup builds on a player's PC). s250's package had 0.6.0 files with a 0.5.3 installer."""
+    want = swsetup.SW_WANT
+    bad = []
+    if gameside.SW_WANT != want:
+        bad.append("gameside.SW_WANT is %s, swsetup.SW_WANT is %s" % (gameside.SW_WANT, want))
+    if want not in swsetup.STOCK["name"] or ("/v%s/" % want) not in swsetup.STOCK["url"]:
+        bad.append("swsetup.STOCK (%s) is not the Savage Wind %s zip" % (swsetup.STOCK["name"], want))
+    have = swsetup.manifest_version(stock_dir)
+    if have != want:
+        bad.append("--runtime-dlls %s has Savage Wind %s, the installer is for %s" % (stock_dir, have or "(no sw-manifest.txt)", want))
+    if ("Savage Wind %s Windows release" % want) not in BIN_LICENSE_NOTE:
+        bad.append("BIN_LICENSE_NOTE does not name the Savage Wind %s Windows release" % want)
+    lacks = [g for g in swsetup.GAME_IDS if not swsetup.exe_has_id(exe, g)]
+    if lacks:
+        bad.append("%s does not carry the game code id(s) %s of stock Savage Wind %s (built from another Savage Wind version, or "
+                   "from a tree whose game code sources changed)" % (exe, ", ".join(lacks), want))
+    return bad
 
 
 def main():
@@ -157,8 +223,9 @@ def main():
     ap.add_argument("--exe", default=DEFAULT_EXE)
     ap.add_argument("--dll", default=DEFAULT_DLL)
     ap.add_argument("--src-commit", required=True, help='e.g. "exe=42a9182 dll=96ec63d" (recorded in manifest.json)')
-    ap.add_argument("--runtime-dlls", default="D:/recompiled games/SavageWind-0.5.3-alpha.5-windows/Savage Wind",
-                    help="the stock Savage Wind folder the runtime DLLs, fonts and pipeline seed come from (s212: 0.5.3-alpha.5)")
+    ap.add_argument("--runtime-dlls", default="D:/recompiled games/SavageWind-0.6.0-alpha.6-windows/Savage Wind",
+                    help="the stock Savage Wind folder the runtime DLLs, fonts, pipeline seed and AMD FSR DLLs come from "
+                         "(s250: 0.6.0-alpha.6; s212: 0.5.3-alpha.5). Best an unpacked stock zip: only the named files are read")
     ap.add_argument("--no-runtime-dlls", action="store_true", help="do not ship the exe's runtime DLLs (the friend's Savage Wind folder has them)")
     ap.add_argument("--version", default="0.1.0-alpha", help="THE release version: written into manifest.json, which the installer window shows")
     ap.add_argument("--allow-dirty", action="store_true", help="ship tools/ with uncommitted edits (the release is then not reproducible)")
@@ -177,6 +244,13 @@ def main():
     for p in (a.exe, a.dll, os.path.join(a.kit, "kit.json")):
         if not os.path.isfile(p):
             raise SystemExit("mkzip: missing %s" % p)
+    mism = version_mismatch(a.exe, a.runtime_dlls)   # (s254) before anything is written
+    if mism:
+        raise SystemExit("mkzip: Savage Wind version mismatch, nothing was packed:\n  " + "\n  ".join(mism))
+    miss = dll_misses(a.exe, a.dll)                  # (s255) the DLL was linked against THIS exe's exports
+    if miss:
+        raise SystemExit("mkzip: %s does not fit %s, nothing was packed: the exe does not export %s%s" % (
+            a.dll, a.exe, ", ".join(miss[:8]), " (+%d more)" % (len(miss) - 8) if len(miss) > 8 else ""))
     os.makedirs(out, exist_ok=True)
 
     # launcher + kit + tools + licenses

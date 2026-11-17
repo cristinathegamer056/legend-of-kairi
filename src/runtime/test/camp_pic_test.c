@@ -20,6 +20,8 @@ int main(int argc, char **argv) {
     CHECK((q.col[0] >> 24) == 64);
     q.tex = 9;
     CHECK(cp_pic_quad(&q, 25, 0, 0, 1, 1, 255) && q.u[0] == 256 && q.v[0] == 4 * 256);  // (s214) Guardian Core's cell
+    CHECK(CP_N == 28 && cp_pic_quad(&q, 26, 0, 0, 1, 1, 255) && q.u[0] == 512 && q.v[0] == 4 * 256);  // (s247) Silent Princess
+    CHECK(cp_pic_quad(&q, 27, 0, 0, 1, 1, 255) && q.u[0] == 768 && q.v[0] == 4 * 256 && q.v[2] == 5 * 256);  // Calamity's Gaze
     q.tex = 9;
     CHECK(!cp_pic_quad(&q, CP_N, 0, 0, 1, 1, 255) && q.tex == 9);
     CHECK(!cp_pic_quad(&q, -1, 0, 0, 1, 1, 255) && !cp_pic_quad(NULL, 0, 0, 0, 1, 1, 255));

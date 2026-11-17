@@ -271,6 +271,26 @@ def owners(steps_list_text):
     return out
 
 
+def work_inputs(steps_list_text, hit):
+    """(s256) sorabuild --list text + the steps to re-run -> the steps they depend on (directly or through other steps) that
+    write only into work/ (out=-) and are not in `hit` themselves. A changed data file says the new tools make it differently,
+    and a work-only step's files (a label list, a built tool) are part of how: left in place they are the OLD tools' files."""
+    deps, work_only = {}, set()
+    for ln in steps_list_text.splitlines():
+        m = re.match(r"(\S+)\s+(\S+)\s+(done|-)\s+deps=(\S+)\s+out=(.*)$", ln.rstrip())
+        if m:
+            deps[m.group(1)] = [] if m.group(4) == "-" else m.group(4).split(",")
+            if m.group(5).strip() == "-":
+                work_only.add(m.group(1))
+    seen, todo = set(), list(hit)
+    while todo:
+        for d in deps.get(todo.pop(), ()):
+            if d not in seen:
+                seen.add(d)
+                todo.append(d)
+    return sorted((seen & work_only) - set(hit))
+
+
 def changed_files(old_man, new_man):
     """data files whose reference differs (new, changed or gone) between two manifest.thispc.json dicts"""
     a, b = (old_man or {}).get("files", {}), (new_man or {}).get("files", {})
@@ -316,12 +336,16 @@ def invalidate(root, steps_list_text, log=print):
                 os.remove(p)
             elif os.path.lexists(os.path.join(data, f)) and not p:
                 log("[update] skipped %s (it is not an ordinary file inside data/)" % f)
-        for s in hit:
+        inputs = work_inputs(steps_list_text, hit)      # (s256) their work-only inputs are made again by the new tools too
+        for s in list(hit) + inputs:
             m = safe_member(done, s)
             if m and os.path.exists(m):
                 os.remove(m)
         log("[update] %d data file(s) changed since %s: re-running %s" % (len(files), j.get("from_version", "?"),
                                                                        ", ".join(sorted(hit)) or "no build step"))
+        if inputs:
+            log("[update] and the steps that prepare their input: %s" % ", ".join(inputs))
+        j["invalidated_inputs"] = inputs
     j["phase"], j["invalidated"], j["invalidated_for"] = "invalidated", sorted(hit), new_man.get("build_id")
     write_journal(root, j)
     return sorted(hit)

@@ -53,6 +53,10 @@ int sora_fx_trail_slots(void);
 // (s97 b11-trail) ribbon smoothing: n 0 = straight quads between the per-frame samples (old), 1 = adaptive
 // Catmull-Rom subdivision (default), 2..8 = that many sub-steps per segment. Env SAVAGEWIND_SORA_FX_TRAIL_SMOOTH sets it at load.
 void sora_fx_trail_smooth(int n);
+// (s247) ribbon life in KH frames (default 9) and fade mode (0 old double fade, 1 the texture's gradient alone, 2 that + a
+// vertex fade over the last quarter); an exe before s247 has neither export (the DLL asks GetProcAddress).
+void sora_fx_trail_life(float kh_frames);
+void sora_fx_trail_fade(int mode);
 
 bool sora_fx_ready(void);
 int sora_fx_count(void);  // live elements (for logs)
@@ -64,5 +68,8 @@ int sora_fx_count(void);  // live elements (for logs)
 // (s57) fmt: the colour format of that rendering (the window image's or, with the ui order on, the game image's).
 void sora_fx_draw(VkCommandBuffer cb, const float pc[32], VkImageView sdepth, VkSampler nearest, VkFormat fmt);
 #endif
+// (s250 hdr, render thread) what the next sora_fx_draw draws into (sora_draw.c PK_*): 0 = as before, 1 = the mod's HDR
+// layer (the alpha pipeline adds coverage), 2 = the game's float final image (the colour times the scene's white, z.w)
+void sora_fx_set_kind(int kind);
 
 #endif

@@ -191,6 +191,10 @@ static WpnNameFn g_wpn_name_fn;  // (s128b exe) NULL = an older exe: then sora.c
 static WpnHandFn g_wpn_hand_fn, g_wpn_hand2_fn;
 static WpnWearFn g_wpn_wear_fn, g_wpn_lead_fn;
 static WpnCur g_wpn_cur;  // this frame's (def NULL = the Keyblade)
+// (s251 user: "if your holding a botw weapon while you use the bow you can still see it ... make them disapear the same way the
+// keyblade does") sora.c sets this while the bow mimic is on: the exe is told "not in his hand", so the weapon is Link's hidden gear
+// again until the shot is over. Only the drawing changes (g_wpn_cur and the damage rules stay).
+static volatile int g_wpn_bow_hide;
 static void wpn_tick(bool drawn) {
     static int tried;
     if (!tried) {
@@ -222,8 +226,8 @@ static void wpn_tick(bool drawn) {
         float off[8] = {c.def ? -(float)wpn_gz(c.def) / 100.0f : 0,  // (minus: the exe puts the origin at grip - Z*off; we want grip + Z*wgz, hands on the handle)
                         (float)(g_wroll + (rx ? g_wroll_rox : 0) + (a ? g_wroll_arm : 0)), (float)(g_wpitch + (rx ? g_wpitch_rox : 0) + (a ? g_wpitch_arm : 0)), (float)(g_wyaw + (rx ? g_wyaw_rox : 0) + (a ? g_wyaw_arm : 0)),
                         a ? (float)a->s_pct / 100.0f : 1.0f, a ? (float)a->gx_cm / 100.0f : 0, a ? a->gy : 0, a ? a->gz : 0};
-        if (g_wpn_hand2_fn) g_wpn_hand2_fn(on && !g_wpn_fake, off);
-        else g_wpn_hand_fn(on && !g_wpn_fake, off);
+        if (g_wpn_hand2_fn) g_wpn_hand2_fn(on && !g_wpn_fake && !g_wpn_bow_hide, off);
+        else g_wpn_hand_fn(on && !g_wpn_fake && !g_wpn_bow_hide, off);
     }
 }
 // the damage of one hit with the weapon (user s128 option a): (Attack + Attack up) x the KH2 window's power % x wpace %

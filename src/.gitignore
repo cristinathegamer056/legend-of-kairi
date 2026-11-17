@@ -60,3 +60,6 @@ tools_s119/hudbake/obj/
 /amiibo/
 /amiibo_data/
 /vk_pipelines.seed
+
+# Discord Rich Presence names: the game's own text (make writes it from extracted/)
+runtime/game_place_table.inc

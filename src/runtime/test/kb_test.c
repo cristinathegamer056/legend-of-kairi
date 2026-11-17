@@ -1,5 +1,6 @@
 // host tests for runtime/sora_kb.h (pause menu slice 5 Equipment / Keyblades): sh D:/SoraBotW/recon/make_kb_test.sh
 #include <stdio.h>
+#include <string.h>
 #include "sora_kb.h"
 
 static int fails, runs;
@@ -37,10 +38,15 @@ int main(void) {
     // alt ids = the bake's (sorabake SORABAKE_KB_ID / _ALT: 1 KK, 2 Star Seeker, 3 Oathkeeper, 4 Oblivion)
     CHECK(kb_alt(0x29) == 1 && kb_alt(0x1e0) == 2 && kb_alt(0x2a) == 3 && kb_alt(0x2b) == 4 && kb_alt(0x777) == 0);
     // (s89 kb) every KH2 FM Keyblade: 24 rows, 03system.bin stats / abilities, alt ids in table order, text keys
-    CHECK(KB_N == 26 && kb_alt(0x1e1) == 5 && kb_alt(0x220) == 24 && kb_index(0x1f3) == 20);
+    CHECK(KB_N == 28 && kb_alt(0x1e1) == 5 && kb_alt(0x220) == 24 && kb_index(0x1f3) == 20);
     // (s214 kb) our own two: rows 25 / 26 (alt 25 / 26), GUESS stats, no ability, text keys 450..453
     CHECK(kb_alt(0x7e01) == 25 && kb_alt(0x7e02) == 26 && kb_str(0x7e01) == 5 && kb_mag(0x7e02) == 3 && kb_ability(0x7e01) == 0 && kb_ability(0x7e02) == 0);
     CHECK(kb_text_key(24) == 450 && kb_text_key(25) == 452 && kb_own_bit(0x7e02) == 1u << 25);
+    // (s247 kb) the user's two: rows 27 / 28 (alt 27 / 28), GUESS stats, no ability, text keys 454..457, owned bits 26 / 27
+    CHECK(kb_alt(0x7e03) == 27 && kb_alt(0x7e04) == 28 && kb_str(0x7e03) == 3 && kb_mag(0x7e03) == 5 && kb_str(0x7e04) == 6 &&
+          kb_mag(0x7e04) == 2 && kb_ability(0x7e03) == 0 && kb_ability(0x7e04) == 0);
+    CHECK(kb_text_key(26) == 454 && kb_text_key(27) == 456 && kb_own_bit(0x7e03) == 1u << 26 && kb_own_bit(0x7e04) == 1u << 27);
+    CHECK(!strcmp(KB_TAB[26].name, "Silent Princess") && !strcmp(KB_TAB[27].name, "Calamity's Gaze"));
     CHECK(kb_str(0x1f3) == 7 && kb_mag(0x1f3) == 1 && kb_ability(0x1f3) == 394);   // Fenrir
     CHECK(kb_str(0x1f4) == 6 && kb_mag(0x1f4) == 4 && kb_ability(0x1f4) == 422);   // Ultima Weapon
     CHECK(kb_str(0x1ef) == 0 && kb_mag(0x1ef) == 4 && kb_ability(0x1ef) == 540);   // Sweet Memories
@@ -52,7 +58,7 @@ int main(void) {
     kb[KB_MAIN] = 0x1f4, kb[KB_VALOR] = 0x2b;
     CHECK(kb_own_fix(0, kb) == (0x3u | 1u << 21 | 1u << 3));
     CHECK(kb_owned(kb_own_fix(0, kb), 0x1f4) && !kb_owned(kb_own_fix(0, kb), 0x1f3) && kb_own_bit(0x777) == 0);
-    CHECK(kb_own_fix(0xffffffffu, kb) == 0x3ffffffu);
+    CHECK(kb_own_fix(0xffffffffu, kb) == 0xfffffffu);  // (s247: 28 rows)
     int l[KB_N];
     CHECK(kb_own_list(kb_own_fix(1u << 10, kb), l) == 5 && l[0] == 0 && l[1] == 1 && l[2] == 3 && l[3] == 10 && l[4] == 21);
     // (s91 mfkb) Master / Final slots: 4 slots, one copy across all, sidecar "keyblade2", defaults, per-form slot

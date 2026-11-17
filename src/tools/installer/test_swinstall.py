@@ -1,4 +1,4 @@
-"""(s223) host test for the installer's Savage Wind 0.5.3 wiring: check_sw's folder kinds, the "sw" phase first (a failed
+"""(s223, s254: 0.6.0) host test for the installer's Savage Wind wiring: check_sw's folder kinds, the "sw" phase first (a failed
 upgrade changes nothing: the old install's launcher keeps its BUILD_ID), the upgrade's disk need, and the work/done tag
 (the s221 Melty fix: markers of another release's cut-off build never carry over).  python tools/installer/test_swinstall.py"""
 import collections
@@ -31,10 +31,13 @@ def sw_folder(d, kind):
 
 
 def t_check_sw(d):
-    for kind, ok, upg, frag in (("0.5.3-alpha.5", True, False, "Savage Wind 0.5.3-alpha.5 with your game files."),
-                                ("0.4.1", True, True, "brings it up to Savage Wind 0.5.3-alpha.5 first"),
-                                ("upgrading", True, True, "upgrade to 0.5.3-alpha.5 started"),
-                                ("0.5.4-alpha.1", False, None, "This folder has Savage Wind 0.5.4-alpha.1"),
+    for kind, ok, upg, frag in (("0.6.0-alpha.6", True, False, "Savage Wind 0.6.0-alpha.6 with your game files."),
+                                ("0.5.3-alpha.5", True, True, "Savage Wind 0.5.3-alpha.5 with your game files. The installer brings it "
+                                                              "up to Savage Wind 0.6.0-alpha.6 first"),
+                                ("0.4.1", True, True, "Savage Wind 0.4.1-alpha.4 with your game files. The installer brings it up to "
+                                                      "Savage Wind 0.6.0-alpha.6 first"),
+                                ("upgrading", True, True, "upgrade to 0.6.0-alpha.6 started"),
+                                ("0.6.1-alpha.1", False, None, "This folder has Savage Wind 0.6.1-alpha.1"),
                                 ("0.5.1-alpha.2", False, None, "Nothing was changed")):
         sw = os.path.join(d, kind)
         sw_folder(sw, kind)
@@ -42,8 +45,20 @@ def t_check_sw(d):
         assert got_ok == ok and frag in msg, (kind, got_ok, msg)
         if ok:
             assert info["upgrade"] == upg, (kind, info)
-            assert ("co-op" in msg) == upg, msg
-    assert installer.SW_VERSION == "0.5.3-alpha.5"
+            # (s254) what stops working there: 0.1.4's co-op (0.4.1 / a cut-off upgrade), an older install not updated (0.5.3)
+            assert ("co-op" in msg) == (upg and kind != "0.5.3-alpha.5"), msg
+            assert ("Update an existing install" in msg) == (kind == "0.5.3-alpha.5"), msg
+            assert ("(126 MB)" in msg) == upg, msg
+            assert info["kind"] == {"0.6.0-alpha.6": "0.6.0", "0.5.3-alpha.5": "0.5.3"}.get(kind, kind), info
+    assert installer.SW_VERSION == "0.6.0-alpha.6" == swsetup.SW_WANT
+    # (s255, review finding 4) a cut-off upgrade that started from 0.5.3 gets the 0.5.3 sentence, not the 0.1.4 co-op one;
+    # and the zip is "unpacked into this folder" (it is downloaded into the Legend of Kairi folder)
+    sw = os.path.join(d, "upgrading")
+    with open(os.path.join(sw, swsetup.JOURNAL), "w") as f:
+        json.dump({"from": swsetup.SW_PREV, "to": swsetup.SW_WANT, "old_files": []}, f)
+    got_ok, msg, info = installer.check_sw(sw)
+    assert got_ok and info["kind"] == "upgrading" and "Update an existing install" in msg and "co-op" not in msg, msg
+    assert "unpacks it into this folder" in msg, msg
 
 
 class A:
@@ -187,13 +202,63 @@ def t_gameside(d):
         assert want in t, want
 
 
+def t_mkzip_guard(d):
+    """(s254, the s252 review's finding 4) mkzip packs nothing unless installer, launcher, stock folder and exe are for ONE
+    Savage Wind version"""
+    import mkzip
+    stock = os.path.join(d, "stock")
+    os.makedirs(stock)
+    open(os.path.join(stock, "sw-manifest.txt"), "w").write("savagewind-update-manifest 1\nversion %s\n" % swsetup.SW_WANT)
+    exe = os.path.join(d, "savagewind.exe")
+    open(exe, "wb").write(b"MZ " + b"\x00".join(g.encode() for g in swsetup.GAME_IDS) + b"\x00 end")
+    assert mkzip.version_mismatch(exe, stock) == [], mkzip.version_mismatch(exe, stock)
+    # the exe of another Savage Wind version (0.5.3's ids)
+    old = os.path.join(d, "old.exe")
+    open(old, "wb").write(b"MZ 7689ce31c1953be6\x00 end")
+    bad = mkzip.version_mismatch(old, stock)
+    assert len(bad) == 1 and all(g in bad[0] for g in swsetup.GAME_IDS), bad
+    # the runtime files from another stock folder (s250: 0.6.0 files, a 0.5.3 installer), or from a folder with no manifest
+    open(os.path.join(stock, "sw-manifest.txt"), "w").write("savagewind-update-manifest 1\nversion 0.5.3-alpha.5\n")
+    bad = mkzip.version_mismatch(exe, stock)
+    assert len(bad) == 1 and "has Savage Wind 0.5.3-alpha.5" in bad[0] and swsetup.SW_WANT in bad[0], bad
+    os.remove(os.path.join(stock, "sw-manifest.txt"))
+    assert "(no sw-manifest.txt)" in mkzip.version_mismatch(exe, stock)[0]
+    open(os.path.join(stock, "sw-manifest.txt"), "w").write("savagewind-update-manifest 1\nversion %s\n" % swsetup.SW_WANT)
+    # the launcher's version, the pinned zip, the licence note
+    keep = (mkzip.gameside.SW_WANT, dict(swsetup.STOCK), mkzip.BIN_LICENSE_NOTE)
+    try:
+        mkzip.gameside.SW_WANT = "0.5.3-alpha.5"
+        assert "gameside.SW_WANT is 0.5.3-alpha.5" in mkzip.version_mismatch(exe, stock)[0]
+        mkzip.gameside.SW_WANT = keep[0]
+        swsetup.STOCK = dict(keep[1], name="SavageWind-0.5.3-alpha.5-windows.zip")
+        assert "swsetup.STOCK" in mkzip.version_mismatch(exe, stock)[0]
+        swsetup.STOCK = dict(keep[1])
+        mkzip.BIN_LICENSE_NOTE = keep[2].replace(swsetup.SW_WANT, "0.5.3-alpha.5")
+        assert "BIN_LICENSE_NOTE" in mkzip.version_mismatch(exe, stock)[0]
+    finally:
+        mkzip.gameside.SW_WANT, swsetup.STOCK, mkzip.BIN_LICENSE_NOTE = keep[0], dict(keep[1]), keep[2]
+    assert mkzip.version_mismatch(exe, stock) == []
+    # (s255, the s254 review's finding 6) the DLL fits the exe: every name it takes from savagewind.exe is exported by it
+    # (objdump -p's own lines, tabs and all)
+    dll_txt = ("\tDLL Name: KERNEL32.dll\n\tvma:     Ordinal  Hint  Member-Name  Bound-To\n\t00142000  <none>  011b  CloseHandle\n\n"
+               "\tDLL Name: savagewind.exe\n\tvma:     Ordinal  Hint  Member-Name  Bound-To\n\t001424d8  <none>  0000  dispatch_lookup\n"
+               "\t001424e0  <none>  0000  guest_call\n\n\tDLL Name: USER32.dll\n\tvma:     Ordinal  Hint  Member-Name  Bound-To\n"
+               "\t00143000  <none>  0001  MessageBoxA\n\n")
+    exe_txt = ("Export Address Table -- Ordinal Base 1\n\t          Ordinal  Address  Type\n\t[   0] +base[   1] 0066d12c Export RVA\n\n"
+               "[Ordinal/Name Pointer] Table -- Ordinal Base 1\n\t          Ordinal   Hint Name\n\t[   0] +base[   1]  0000 dispatch_lookup\n"
+               "\t[   1] +base[   2]  0001 guest_call\n\t[   2] +base[   3]  0002 other\n\nThe Function Table\n")
+    assert mkzip.dll_misses("e", "d", dump=lambda p: exe_txt if p == "e" else dll_txt) == []
+    assert mkzip.dll_misses("e", "d", dump=lambda p: exe_txt.replace("guest_call", "guest_call2") if p == "e" else dll_txt) == ["guest_call"]
+    assert "no import from savagewind.exe" in mkzip.dll_misses("e", "d", dump=lambda p: exe_txt)[0]
+
+
 def main():
     with tempfile.TemporaryDirectory(dir=TMP) as d:
-        for t in (t_check_sw, t_phase_first, t_disk, t_work_tag, t_gameside):
+        for t in (t_check_sw, t_phase_first, t_disk, t_work_tag, t_gameside, t_mkzip_guard):
             sub = os.path.join(d, t.__name__)
             os.makedirs(sub)
             t(sub)
-    print("ok (5 groups)")
+    print("ok (6 groups)")
 
 
 main()

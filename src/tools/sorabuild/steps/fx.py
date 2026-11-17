@@ -211,6 +211,19 @@ def fxsfx_kbown(ctx):
     shutil.rmtree(d, ignore_errors=True)
 
 
+def fxsfx_kbown2(ctx):
+    """(s247 kbfx2) the user's two new Keyblades, Silent Princess + Calamity's Gaze: their sparks (a blooming flower / a Malice
+    splash + the slit eye), ribbons and the petals / embers shed off the blade (kbownfx.py --part s247, ALL procedural: no KH2
+    byte) + our synthesised hit sounds kbp1_hit / kbc1_hit (ours/kb). Appended LAST to both packs, after the party steps, so a
+    fresh build makes the same rows as the live packs + install_s247_fx.sh; before fx_final's dfblend (never lim_donald2_*)."""
+    d = tmpdir(ctx, "kbown2")
+    ctx.py(T(ctx, "kbownfx.py"), "--part", "s247", "--fx-in", cur_fx(ctx), "--sfx-in", cur_sfx(ctx), "--out", d,
+           "--ours", os.path.join(ctx.tools, "ours", "kb"), env=envs(ctx))
+    swap(ctx, os.path.join(d, "fx.bin"), cur_fx(ctx))
+    swap(ctx, os.path.join(d, "sfx.bin"), cur_sfx(ctx))
+    shutil.rmtree(d, ignore_errors=True)
+
+
 def fx_party(ctx):
     """(s223 rikufx) the party stand-ins' own KH2 weapon effects (fx/partyfx.py): their hit sparks by EffectOnHit, their weapon's swing
     ribbon (element 10) and its weapon_trail windows (range trigger 12 of the weapon msets), from step fxrec_party's recording of the
@@ -312,15 +325,21 @@ STEPS = [
     Step("fxsfx_kbown", fxsfx_kbown, deps=["fxsfx_duck"]),  # (s216 kbfx: our Keyblades' own effects + sounds, both packs)
     Step("sfx_party2", _sfx_tool("sfxparty2.py"), deps=["fxsfx_kbown"]),  # (s220 riku2: the party stand-ins' sounds, appended last)
     Step("fx_party", fx_party, deps=["fxsfx_kbown", "fxrec_party", "fx_trigjson"]),  # (s223 rikufx: the stand-ins' own sparks + ribbons)
-    Step("fx_final", fx_final, deps=["fx_party"], outputs=["fx/fx.bin"]),
-    Step("sfx_final", sfx_final, deps=["sfx_party2"], outputs=["sfx/sfx.bin"]),
+    Step("fxsfx_kbown2", fxsfx_kbown2, deps=["fx_party", "sfx_party2"]),  # (s247 kbfx2: Silent Princess + Calamity's Gaze, both packs)
+    # (s247 kbse: each KH2 Keyblade's own KH2 hit sounds: its bank's se500 cues from the player's own SCDs, appended last; fx/kbhitse.py)
+    Step("sfx_kbhitse", _sfx_tool("kbhitse.py"), deps=["fxsfx_kbown2"]),
+    # (s249 kbswing: each KH2 Keyblade's own swing whooshes per hand + wall clank: its bank's cues 32, 35..60 + 10, appended last;
+    # fx/kbswingse.py, reads SB_KH2's a.us + Sora's weapon msets)
+    Step("sfx_kbswingse", _sfx_tool("kbswingse.py"), deps=["sfx_kbhitse"]),
+    Step("fx_final", fx_final, deps=["fxsfx_kbown2"], outputs=["fx/fx.bin"]),
+    Step("sfx_final", sfx_final, deps=["sfx_kbswingse"], outputs=["sfx/sfx.bin"]),
 ]
 
 # (s154 review M1/M2) the running packs make these steps ONE chain: if any of them has to run, sorabuild re-runs all of them
 # from fx_base / sfx_base (2 min). A half-done step or a lone re-run can then never leave a pack with missing or doubled elements.
 CHAIN = {"fx_base", "fx_prize", "fx_magic", "fx_limits", "sfx_base", "sfx_potion", "sfx_abil", "sfx_roxas", "sfx_mickey",
          "sfx_skate", "fxsfx_chick", "fx_fps", "fxsfx_stitch", "fx_ohana", "fxsfx_sumdata", "fxsfx_knock", "fxsfx_duck",
-         "fxsfx_kbown", "sfx_party2", "fx_party", "fx_final", "sfx_final"}
+         "fxsfx_kbown", "sfx_party2", "fx_party", "fxsfx_kbown2", "sfx_kbhitse", "sfx_kbswingse", "fx_final", "sfx_final"}
 for _s in STEPS:
     if _s.name in CHAIN:
         _s.chain = "fxpacks"

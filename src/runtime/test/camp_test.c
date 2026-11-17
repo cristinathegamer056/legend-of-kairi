@@ -1008,7 +1008,7 @@ static bool test_equip_forms(void) {
 // all 26 owned (s214): 9 rows shown, the list scrolls with the cursor (as Abilities) and back
 static bool test_equip_scroll(void) {
     ge_(KB_KINGDOM_KEY, KB_STAR_SEEKER);
-    GE.kb_own = 0x3ffffffu;  // (s214: 26)
+    GE.kb_own = 0xfffffffu;  // (s214: 26; s247: 28)
     CHECK(equip_open_());
     pt_(2, CP_BTN_A); CHECK(P.sub == 2 && P.eq_pick == 0);
     CHECK(P.tree.n[P.tree.n[P.root[2]].kid0].nkids == 2 * CP_EQ_VIS);

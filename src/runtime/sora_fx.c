@@ -50,6 +50,7 @@ static inline void mod_update_set(const VkWriteDescriptorSet *w) {
     rec_UpdateDescriptorSets(n, s);
 }
 #include "sora_fx.h"
+#include "sora_hdr_core.h"  // (s250 hdr: shc_scene_scale)
 #include "sora_path.h"  // (Deck port: D:/SoraBotW -> SORA_ROOT)
 unsigned sora_push_limit(void);  // (s183 amd, sora_draw.c: the GPU's maxPushConstantsSize, or SAVAGEWIND_SORA_PUSH_LIMIT's)
 
@@ -59,8 +60,8 @@ bool linkpos_camera_view(float m[12]);
 #define FX_RING 64          // owner poses kept per element (PHF2 age: frames since the pose a vertex follows)
 #define FX_MAX_DRAWS 512
 #define FX_MAX_VERTS 65536  // per frame, all elements (fire_1.2's biggest frame is 840 verts; cure_1.3's 1038)
-#define TRAIL_SAMPLES 24
-#define TRAIL_LIFE 9.0f     // KH frames a ribbon sample lives (GUESS: KH2's trail is short, ~1/6 s)
+#define TRAIL_SAMPLES 64    // (s247: was 24 = 0.15 s only up to 160 fps; 64 keeps a longer life at 144 fps)
+#define TRAIL_LIFE 9.0f     // KH frames a ribbon sample lives (GUESS: KH2's trail is short, ~1/6 s); default of g_trail_life
 #define FX_ALPHA_REF 0.002f // KH2's alpha test (PHF2 sampler.alphaRef of every chosen batch)
 
 // ------------------------------------------------------------------ the pack
@@ -310,6 +311,19 @@ void sora_fx_trail_smooth(int n) { g_trail_smooth = n < 0 ? 0 : n > 8 ? 8 : n; }
 
 void sora_fx_trail(const float grip[3], const float tip[3], bool on) { sora_fx_trail_ex(0, grip, tip, on, -1, 0); }
 
+// (s247 trails, recon/s247/S247_HELPER_COMBO_TRAIL.md) OUR approximation until KH2's own trail life is known (it sits in the
+// weapon's effect element 10 data): life = KH frames a ribbon sample lives (default 9); fade 0 = vertex alpha (1 - age / life)
+// times the KH2 ribbon texture's own gradient (old: fades twice, ~3 frames visible), 1 = the texture's gradient alone,
+// 2 = the texture's gradient + a vertex fade over the last quarter only. The DLL sets both (live "set traillife" / "trailfade").
+static float g_trail_life = TRAIL_LIFE;
+static int g_trail_fade;
+void sora_fx_trail_life(float kh_frames) { g_trail_life = kh_frames < 2 ? 2 : kh_frames > 40 ? 40 : kh_frames; }
+void sora_fx_trail_fade(int mode) { g_trail_fade = mode < 0 ? 0 : mode > 2 ? 2 : mode; }
+static uint8_t trail_alpha(float u) {
+    float a = g_trail_fade == 1 ? 1 : g_trail_fade == 2 ? (1 - u) * 4 : 1 - u;
+    return (uint8_t)(255 * (a < 0 ? 0 : a > 1 ? 1 : a));
+}
+
 bool sora_fx_trail_window(int slot, float clock) {
     if (!ready()) return false;
     for (uint32_t i = 0; i < g_ntrail; i++)
@@ -455,7 +469,7 @@ static void emit_trail(DList *l, float kh, int r) {
     if (!d) return;
     for (int i = 0; i + 1 < g_ts_n[r]; i++) {
         const TSample *a = &g_ts[r][(g_ts_head[r] - i + TRAIL_SAMPLES) % TRAIL_SAMPLES], *b = &g_ts[r][(g_ts_head[r] - i - 1 + TRAIL_SAMPLES) % TRAIL_SAMPLES];
-        if (!a->used || !b->used || b->age >= TRAIL_LIFE || l->nv + 6 > FX_MAX_VERTS) break;
+        if (!a->used || !b->used || b->age >= g_trail_life || l->nv + 6 > FX_MAX_VERTS) break;
         // (s97 b11-trail) spline neighbours: i-1 (newer) and i+2 (older); a phantom 2*end - neighbour at the ends
         const TSample *n0 = i > 0 ? &g_ts[r][(g_ts_head[r] - i + 1 + TRAIL_SAMPLES) % TRAIL_SAMPLES] : NULL;
         const TSample *n3 = i + 2 < g_ts_n[r] ? &g_ts[r][(g_ts_head[r] - i - 2 + TRAIL_SAMPLES) % TRAIL_SAMPLES] : NULL;
@@ -469,9 +483,9 @@ static void emit_trail(DList *l, float kh, int r) {
             gc[3][k] = n3 ? n3->grip[k] : 2 * b->grip[k] - a->grip[k], tc[3][k] = n3 ? n3->tip[k] : 2 * b->tip[k] - a->tip[k];
         }
         int ns = trail_substeps(tc);
-        float ua = a->age / TRAIL_LIFE, ub = b->age / TRAIL_LIFE;
+        float ua = a->age / g_trail_life, ub = b->age / g_trail_life;
         float g0[3] = {a->grip[0], a->grip[1], a->grip[2]}, t0[3] = {a->tip[0], a->tip[1], a->tip[2]}, u0 = ua;
-        uint8_t al0 = (uint8_t)(255 * (1 - ua));
+        uint8_t al0 = trail_alpha(ua);
         for (int j = 1; j <= ns; j++) {
             if (l->nv + 6 > FX_MAX_VERTS) break;
             float g1[3], t1[3], u1;
@@ -481,7 +495,7 @@ static void emit_trail(DList *l, float kh, int r) {
                 catmull_cr(gc, s, g1), catmull_cr(tc, s, t1);
                 u1 = ua + (ub - ua) * s;  // age (u and alpha) linear across the sub-steps
             }
-            uint8_t al1 = (uint8_t)(255 * (1 - u1));
+            uint8_t al1 = trail_alpha(u1);
             DVert q[4] = {{g0[0], g0[1], g0[2], u0, vg, {cr, cg, cb, al0}}, {t0[0], t0[1], t0[2], u0, vt, {cr, cg, cb, al0}},
                           {g1[0], g1[1], g1[2], u1, vg, {cr, cg, cb, al1}}, {t1[0], t1[1], t1[2], u1, vt, {cr, cg, cb, al1}}};
             l->v[l->nv++] = q[0], l->v[l->nv++] = q[1], l->v[l->nv++] = q[2];
@@ -584,6 +598,7 @@ static struct {
     // per colour format (s57: the window image's, the game image's): 0 additive (src alpha / one), 1 alpha (src alpha /
     // inv src alpha)
     struct { VkFormat fmt; VkPipeline p[2]; } pipes[2];
+    struct { VkFormat fmt; int kind; VkPipeline p[2]; } xpipes[3];  // (s250 hdr) kinds 1 / 2 (sora_fx_set_kind), as sora_draw.c
     VkSampler wrap, clamp;
     VkImage *tex;
     VmaAllocation *tex_mem;
@@ -593,14 +608,36 @@ static struct {
     uint64_t drawn;
 } G;
 
-static VkPipeline make_pipeline(VkFormat fmt, int blend) {
-    static VkShaderModule vs, fs;
+// (s250 hdr) kind 2, the game's float final image: FRAG_SRC with its colour times pc.z.w (the scene's white, game / ui
+// nits; 0 = 1). A KH2 effect texel is 0..1 (texture x vertex colour, both UNORM) as in SDR; where additive effects
+// overlap, their sum is no longer clamped at 1 by the image (GUESS on how often that shows: the peak cap bounds it).
+static int g_kind;
+void sora_fx_set_kind(int kind) { g_kind = kind; }
+static const char *const FX_PUT = "    o = c;\n";
+static char *frag_float_src(void) {
+    const char *at = strstr(FRAG_SRC, FX_PUT), *put = "    o = vec4(c.rgb * (pc.z.w > 0.0 ? pc.z.w : 1.0), c.a);\n";
+    char *src = at ? malloc(strlen(FRAG_SRC) + strlen(put) + 1) : NULL;
+    if (!src) return NULL;
+    size_t n = (size_t)(at - FRAG_SRC);
+    memcpy(src, FRAG_SRC, n), strcpy(src + n, put), strcat(src, at + strlen(FX_PUT));
+    return src;
+}
+
+static VkPipeline make_pipeline(VkFormat fmt, int blend, int kind) {
+    static VkShaderModule vs, fs, fs_float;
     if (!vs) vs = vk_compile_glsl(VERT_SRC, STAGE_VERTEX, "sora_fx.vert");
     if (!fs) fs = vk_compile_glsl(FRAG_SRC, STAGE_FRAGMENT, "sora_fx.frag");
+    if (kind == 2 && !fs_float) {
+        char *src = frag_float_src();
+        if (src) fs_float = vk_compile_glsl(src, STAGE_FRAGMENT, "sora_fx_hdr.frag");
+        free(src);
+        if (!fs_float) return VK_NULL_HANDLE;
+    }
     if (!vs || !fs) return VK_NULL_HANDLE;
     VkPipelineShaderStageCreateInfo stages[2] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
-        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs, .pName = "main"}};
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+         .module = kind == 2 ? fs_float : fs, .pName = "main"}};
     VkVertexInputBindingDescription bind = {0, sizeof(DVert), VK_VERTEX_INPUT_RATE_VERTEX};
     VkVertexInputAttributeDescription attr[3] = {{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0}, {1, 0, VK_FORMAT_R32G32_SFLOAT, 12},
                                                  {2, 0, VK_FORMAT_R8G8B8A8_UNORM, 20}};
@@ -621,6 +658,8 @@ static VkPipeline make_pipeline(VkFormat fmt, int blend) {
                                                .dstColorBlendFactor = blend ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA : VK_BLEND_FACTOR_ONE,
                                                .colorBlendOp = VK_BLEND_OP_ADD, .srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
                                                .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE, .alphaBlendOp = VK_BLEND_OP_ADD, .colorWriteMask = 0xF};
+    // (s250 hdr) kind 1, the mod's HDR layer: the alpha pipeline adds its coverage; additive keeps it (covers nothing)
+    if (kind == 1 && blend) cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE, cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &cba};
     VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dy = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dyn};
@@ -702,19 +741,42 @@ void sora_fx_draw(VkCommandBuffer cb, const float pc_in[32], VkImageView sdepth,
     }
     if (!nd || !nv) return;
     const VkPipeline *P = NULL;  // (s57) two formats kept, as sora_draw.c pipes_for (a third replaces the second)
-    for (int i = 0; i < 2 && !P; i++)
+    const int kind = g_kind;     // (s250 hdr: 0 = this, as before)
+    for (int i = 0; i < 2 && !P && !kind; i++)
         if (G.pipes[i].p[0] && G.pipes[i].fmt == fmt) P = G.pipes[i].p;
-    if (!P) {
+    if (!P && !kind) {
         int i = G.pipes[0].p[0] ? 1 : 0;
         G.pipes[i].fmt = fmt;
-        G.pipes[i].p[0] = make_pipeline(fmt, 0), G.pipes[i].p[1] = make_pipeline(fmt, 1);
+        G.pipes[i].p[0] = make_pipeline(fmt, 0, 0), G.pipes[i].p[1] = make_pipeline(fmt, 1, 0);
         if (!G.pipes[i].p[0] || !G.pipes[i].p[1]) { G.failed = true; LOG("[sora-fx] pipelines failed (format %d)\n", fmt); return; }
         P = G.pipes[i].p;
+    }
+    if (kind) {  // (s250 hdr) per (format, kind), three kept (a fourth replaces the last)
+        int n = (int)(sizeof G.xpipes / sizeof G.xpipes[0]), i = 0;
+        for (; i < n && !P; i++)
+            if (G.xpipes[i].p[0] && G.xpipes[i].fmt == fmt && G.xpipes[i].kind == kind) P = G.xpipes[i].p;
+        if (!P) {
+            for (i = 0; i < n - 1 && G.xpipes[i].p[0]; i++) {}
+            G.xpipes[i].fmt = fmt, G.xpipes[i].kind = kind;
+            G.xpipes[i].p[0] = make_pipeline(fmt, 0, kind), G.xpipes[i].p[1] = make_pipeline(fmt, 1, kind);
+            if (!G.xpipes[i].p[0] || !G.xpipes[i].p[1]) {
+                G.failed = true;
+                LOG("[sora-fx] pipelines failed (format %d, HDR kind %d)\n", fmt, kind);
+                return;
+            }
+            LOG("[sora-fx] pipelines for colour format %d (HDR: %s)\n", fmt, kind == 1 ? "the HUD layer" : "the float final image");
+            P = G.xpipes[i].p;
+        }
     }
     float pc[32];
     memcpy(pc, pc_in, sizeof pc);
     pc[16] = FX_ALPHA_REF, pc[17] = 1, pc[19] = 0;  // k: alpha ref, blended, (mode kept), no debug
     pc[30] = g_bias, pc[31] = 0;                    // z: (near, far kept), the effects' bias, no shadow mode
+    if (kind == 2) {  // (s250 hdr) z.w = the scene's white for the float final image (FRAG_SRC reads no z.w otherwise)
+        float pk, gm, ui;
+        vk_hdr_nits(&pk, &gm, &ui);
+        pc[31] = shc_scene_scale(gm, ui);
+    }
     VkSpan vb = vk_transient_copy(G.list.v, (uint64_t)nv * sizeof(DVert), 16);
     VkDeviceSize vo = vb.off;
     rec_CmdBindVertexBuffers(cb, 0, 1, &vb.buf, &vo);

@@ -113,6 +113,12 @@ static inline void mod_update_set(const VkWriteDescriptorSet *w) {
 
 VkImageView vk_frame_view(void);
 VkExtent2D vk_frame_extent(void);
+// (s250 hdr, device.c) the float HDR picture with SAVAGEWIND_SORA_HDR_GAME=1: the HUD draws into the mod's layer
+// (RGBA16F, premultiplied sRGB-encoded, alpha = coverage), composed over the picture at the HUD white
+// (runtime/sora_hdr_core.h). The same shaders and colours as the window image; only the alpha blend differs (coverage
+// is kept instead of the window's alpha). False = the window image, as before.
+bool vk_frame_sora_layer(void);
+VkFormat vk_frame_sora_format(void);
 
 // ------------------------------------------------------------------ values (game thread -> render thread)
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -1883,6 +1889,7 @@ static struct {
     VkPipeline pipe;
     VkFormat pipe_fmt;
     VkPipeline cpipe[3];  // (s78 camp) normal / add / subtract
+    VkPipeline pipe_l, cpipe_l[3];  // (s250 hdr) the same for the mod's HDR layer (vk_frame_sora_layer; RGBA16F)
     VkSampler sampler;
     VkImage tex[15];  // 0-1 gauge, 2-3 menu, 4 lock-on reticle, 5 the dream picker's labels (s54), 6 the level-up text (s55),
                       // 7-8 Donald's / Goofy's faces (s57 party), 9-10 the camp sheet / sys font (s78 camp), 11 Roxas' face (s111),
@@ -1894,9 +1901,11 @@ static struct {
 } G;
 
 // blend 0 = the HUD's premultiplied (src ONE, dst 1 - SRC_A), 1 = add (ONE / ONE), 2 = subtract (REVERSE_SUBTRACT
-// ONE / ONE: dst - src); the window's alpha is kept in all three
+// ONE / ONE: dst - src); the window's alpha is kept in all three. layer (s250 hdr): the mod's HDR layer, where alpha is
+// the coverage the picture pass composes with: blend 0 adds its coverage (ONE / 1 - SRC_A, premultiplied "over"), add
+// and subtract keep it (they cover nothing), as in the window image's colour.
 static VkPipeline make_pipe(VkFormat fmt, VkShaderModule vs, VkShaderModule fs, uint32_t stride,
-                            const VkVertexInputAttributeDescription *attr, uint32_t nattr, int blend) {
+                            const VkVertexInputAttributeDescription *attr, uint32_t nattr, int blend, bool layer) {
     if (!vs || !fs) return VK_NULL_HANDLE;
     VkPipelineShaderStageCreateInfo stages[2] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
@@ -1918,6 +1927,7 @@ static VkPipeline make_pipe(VkFormat fmt, VkShaderModule vs, VkShaderModule fs, 
                                                .srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
                                                .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE, .alphaBlendOp = VK_BLEND_OP_ADD,
                                                .colorWriteMask = 0xF};
+    if (layer && blend == 0) cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE, cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1,
                                               .pAttachments = &cba};
     VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
@@ -1934,7 +1944,7 @@ static VkPipeline make_pipe(VkFormat fmt, VkShaderModule vs, VkShaderModule fs, 
     return p;
 }
 
-static VkPipeline make_pipeline(VkFormat fmt) {
+static VkPipeline make_pipeline(VkFormat fmt, bool layer) {
     static VkShaderModule vs, fs;
     if (!vs) vs = vk_compile_glsl(VERT_SRC, STAGE_VERTEX, "sora_hud.vert");
     if (!fs) fs = vk_compile_glsl(FRAG_SRC, STAGE_FRAGMENT, "sora_hud.frag");
@@ -1942,10 +1952,10 @@ static VkPipeline make_pipeline(VkFormat fmt) {
                                                               {1, 0, VK_FORMAT_R32G32_SFLOAT, 8},
                                                               {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 16},
                                                               {3, 0, VK_FORMAT_R32G32_SFLOAT, 32}};
-    return make_pipe(fmt, vs, fs, sizeof(Vtx), attr, 4, 0);
+    return make_pipe(fmt, vs, fs, sizeof(Vtx), attr, 4, 0, layer);
 }
 
-static VkPipeline make_camp_pipeline(VkFormat fmt, int blend) {  // (s78 camp)
+static VkPipeline make_camp_pipeline(VkFormat fmt, int blend, bool layer) {  // (s78 camp)
     static VkShaderModule vs, fs;
     if (!vs) vs = vk_compile_glsl(CAMP_VERT_SRC, STAGE_VERTEX, "sora_camp.vert");
     if (!fs) fs = vk_compile_glsl(CAMP_FRAG_SRC, STAGE_FRAGMENT, "sora_camp.frag");
@@ -1953,7 +1963,7 @@ static VkPipeline make_camp_pipeline(VkFormat fmt, int blend) {  // (s78 camp)
                                                               {1, 0, VK_FORMAT_R32G32_SFLOAT, 8},
                                                               {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 16},
                                                               {3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, 32}};
-    return make_pipe(fmt, vs, fs, sizeof(CVtx), attr, 4, blend);
+    return make_pipe(fmt, vs, fs, sizeof(CVtx), attr, 4, blend, layer);
 }
 
 static bool gpu_init(void) {
@@ -2040,11 +2050,19 @@ static CVtx g_cvtx[6 * CQ_MAX];
 // menu = the pause menu's quads (sora_hud_quads_shown + the log); false = sora_hud_label's
 static void camp_draw(const SoraHudQuad *q, int n, VkExtent2D ext, float vx, float vy, float vw, float vh, bool menu) {
     static VkFormat cfmt;
-    if (!G.cpipe[0] || cfmt != g_vk.sc_format) {
+    const bool lay = vk_frame_sora_layer();  // (s250 hdr: the mod's HDR layer; false = the window image, as before)
+    if (lay) {
+        if (!G.cpipe_l[0]) {
+            for (int b = 0; b < 3; b++) G.cpipe_l[b] = make_camp_pipeline(vk_frame_sora_format(), b, true);
+            if (!G.cpipe_l[0] || !G.cpipe_l[1] || !G.cpipe_l[2]) { G.failed = true; LOG("[sora-hud] camp pipeline (HDR layer) failed\n"); return; }
+            LOG("[sora-hud] camp pipelines for the HDR layer (format %d)\n", vk_frame_sora_format());
+        }
+    } else if (!G.cpipe[0] || cfmt != g_vk.sc_format) {
         cfmt = g_vk.sc_format;
-        for (int b = 0; b < 3; b++) G.cpipe[b] = make_camp_pipeline(cfmt, b);
+        for (int b = 0; b < 3; b++) G.cpipe[b] = make_camp_pipeline(cfmt, b, false);
         if (!G.cpipe[0] || !G.cpipe[1] || !G.cpipe[2]) { G.failed = true; LOG("[sora-hud] camp pipeline failed\n"); return; }
     }
+    VkPipeline *cpipe = lay ? G.cpipe_l : G.cpipe;
     if (vw <= 0 || vh <= 0) vx = vy = 0, vw = T.W, vh = T.H;
     float sy = vh / 416.0f, sx = sy * 416.0f / 384.0f, cx = vx + vw * 0.5f;
     static struct { int first, n, tex, solid, blend; } bt[CQ_MAX];
@@ -2079,7 +2097,7 @@ static void camp_draw(const SoraHudQuad *q, int n, VkExtent2D ext, float vx, flo
     rec_CmdBindVertexBuffers(cb, 0, 1, &vb.buf, &vo);
     int last_tex = -1, last_blend = -1;
     for (int i = 0; i < nb; i++) {
-        if (bt[i].blend != last_blend) rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, G.cpipe[last_blend = bt[i].blend]);
+        if (bt[i].blend != last_blend) rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, cpipe[last_blend = bt[i].blend]);
         if (bt[i].tex != last_tex) {
             VkDescriptorSet set = vk_alloc_set(G.set_layout);
             VkDescriptorImageInfo ii = {G.sampler, G.tex_view[bt[i].tex], VK_IMAGE_LAYOUT_GENERAL};
@@ -2215,9 +2233,16 @@ void sora_hud_present(float vx, float vy, float vw, float vh) {
     }
     VkExtent2D ext = vk_frame_extent();
     if (!vk_frame_view() || !ext.width || !ext.height) return;
-    if (!G.pipe || G.pipe_fmt != g_vk.sc_format) {
+    const bool lay = vk_frame_sora_layer();  // (s250 hdr: the mod's HDR layer; false = the window image, as before)
+    if (lay) {
+        if (!G.pipe_l) {
+            G.pipe_l = make_pipeline(vk_frame_sora_format(), true);
+            if (!G.pipe_l) { G.failed = true; LOG("[sora-hud] pipeline (HDR layer) failed\n"); return; }
+            LOG("[sora-hud] pipeline for the HDR layer (format %d)\n", vk_frame_sora_format());
+        }
+    } else if (!G.pipe || G.pipe_fmt != g_vk.sc_format) {
         G.pipe_fmt = g_vk.sc_format;
-        G.pipe = make_pipeline(G.pipe_fmt);
+        G.pipe = make_pipeline(G.pipe_fmt, false);
         if (!G.pipe) { G.failed = true; LOG("[sora-hud] pipeline failed\n"); return; }
     }
     params_init();
@@ -2370,7 +2395,7 @@ void sora_hud_present(float vx, float vy, float vw, float vh) {
     VkRect2D sc = {{0, 0}, ext};
     rec_CmdSetViewport(cb, 0, 1, &vp);
     rec_CmdSetScissor(cb, 0, 1, &sc);
-    rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, G.pipe);
+    rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, lay ? G.pipe_l : G.pipe);
     VkSpan vb = vk_transient_copy(g_vtx, (uint64_t)g_nvtx * sizeof(Vtx), 16);
     VkDeviceSize vo = vb.off;
     rec_CmdBindVertexBuffers(cb, 0, 1, &vb.buf, &vo);
@@ -2408,7 +2433,8 @@ void sora_hud_present(float vx, float vy, float vw, float vh) {
 // layout, menu rows), so the party's screen-mode actors land over them and the rest (the name plates) over the actors.
 // Draws only once the HUD's GPU setup + camp art are up (sora_hud_present does those); nothing while split is 0.
 void sora_hud_present_under(float vx, float vy, float vw, float vh) {
-    if (g_state != 1 || G.failed || !G.init || !G.pipe || g_cp_state != 1 || G.pipe_fmt != g_vk.sc_format) return;
+    if (g_state != 1 || G.failed || !G.init || g_cp_state != 1) return;
+    if (vk_frame_sora_layer() ? !G.pipe_l : (!G.pipe || G.pipe_fmt != g_vk.sc_format)) return;  // (s250 hdr: the layer's pipeline)
     VkExtent2D ext = vk_frame_extent();
     if (!vk_frame_view() || !ext.width || !ext.height) return;
     pthread_mutex_lock(&g_lock);

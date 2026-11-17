@@ -3,18 +3,19 @@
 # stand-ins; nothing of runtime/melty/ is compiled in), into its own build folder, then checked with meltycheck.py.
 # Dev PC only (mkzip SKIP_TOOLS). Never touches the tree's build/ or the exe.
 #
-#   sh tools/installer/build_github_dll.sh <out dir> [<savagewind.dll.a of the release exe>] [melty]
+#   sh tools/installer/build_github_dll.sh <out dir> <savagewind.dll.a of the release exe> [melty]
 #
 #   <out dir>/build-nomelty/sora_mod.dll   the DLL for mkzip --track github --dll ...
 #   melty (3rd arg): also <out dir>/build-melty/sora_mod.dll (WITH the connector) and <out dir>/melty_only_strings.txt =
 #   the strings only the connector puts in (used once, s223, to fill meltycheck.BIN_MARKERS).
-# The import library must be the one made with the release's savagewind.exe (the DLL links its exports by name);
-# default: D:/SoraBotW/src/wt211-sw053/build/savagewind.dll.a (the 0.5.3 line's exe build, read only: it is copied).
+# The import library must be the one made with the release's savagewind.exe (the DLL links its exports by name; it is
+# copied, never changed). (s255) No default any more: the old one was the 0.5.3 line's worktree, which is gone. mkzip
+# checks the pair again (dll_misses: every name the DLL takes from savagewind.exe is one the exe exports).
 set -e
 export PATH=/c/msys64/ucrt64/bin:/c/msys64/usr/bin:$PATH
 TREE=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-OUT=${1:?usage: build_github_dll.sh <out dir> [implib] [melty]}
-IMPLIB=${2:-D:/SoraBotW/src/wt211-sw053/build/savagewind.dll.a}
+OUT=${1:?usage: build_github_dll.sh <out dir> <implib> [melty]}
+IMPLIB=${2:?usage: build_github_dll.sh <out dir> <implib = savagewind.dll.a in the build folder of the release exe> [melty]}
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 case "$OUT" in "$TREE"|"$TREE"/*) echo "build_github_dll: the out dir must be outside the tree" >&2; exit 1 ;; esac

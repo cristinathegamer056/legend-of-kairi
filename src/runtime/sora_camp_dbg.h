@@ -91,10 +91,10 @@ static int cp_db_lr_(CampPage *p, uint64_t press, int *step) {
     if (d) { p->db_rep = 0; return d; }
     uint64_t h = p->held_btn & (CP_BTN_LEFT | CP_BTN_RIGHT);
     if (h != CP_BTN_LEFT && h != CP_BTN_RIGHT) { p->db_rep = 0; return 0; }
-    int n = ++p->db_rep;
-    if (n >= 60) *step = 5;
-    if (n >= 18 && (n - 18) % 3 == 0) return h == CP_BTN_LEFT ? -1 : 1;
-    return 0;
+    bool fire = false;  // (s249) 60 Hz steps, not presents
+    for (int i = 0; i < g_cp_steps; i++) { int n = ++p->db_rep; if (n >= 18 && (n - 18) % 3 == 0) fire = true; }
+    if (p->db_rep >= 60) *step = 5;
+    return fire ? (h == CP_BTN_LEFT ? -1 : 1) : 0;
 }
 
 static void cp_dbg_input_(CampPage *p, const CampSeq *s, uint64_t press, float stick_y, const CpVals *v, CpOut *out) {

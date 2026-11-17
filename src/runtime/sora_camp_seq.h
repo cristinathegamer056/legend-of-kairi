@@ -310,7 +310,11 @@ static bool cs_layout_last(const CampSeq *s, int l2, int frame) {  // = LayoutRe
 // ---- Task 4: AnimatedSequence tree (OpenKh.Game AnimatedSequenceFactory.cs) + KH2 sys-font text (campbake SysText) ----
 
 #define CS_DEFAULT_STACK (-2147483648.0f)  // AnimatedSequenceDesc.DefaultStacking (int.MinValue)
-enum { CS_BOTTOM_LEFT, CS_BOTTOM_CENTER, CS_BOTTOM_RIGHT, CS_CENTER, CS_TOP_CENTER, CS_TOP_LEFT };  // TextAnchor
+enum { CS_BOTTOM_LEFT, CS_BOTTOM_CENTER, CS_BOTTOM_RIGHT, CS_CENTER, CS_TOP_CENTER, CS_TOP_LEFT,  // TextAnchor
+       // (s249) KH2's own text mode 1 (KH2 FM exe FUN_1403623b0 sets node +0x214 = 1 on the Abilities cost number ag 251 and on the
+       // "used/max" text of the AP box ag 272; VERIFIED). What 1 does = GUESS from the layout: the text ENDS at the node's
+       // position + its own group's LightPositionX (251: 0 = inside the gold box; 272: 100 = the end of the AP bar), no TextPositionX.
+       CS_KH_RIGHT };
 // AnimationFlags (OpenKH.Game's own, not the sequence's)
 #define CS_A_TEXT_TX           0x01  // TextTranslateX: the text skips the child context's TextPositionX
 #define CS_A_NO_CHILD_TX       0x02  // NoChildTranslationX: children keep the parent context's x
@@ -490,8 +494,9 @@ static void cs_draw_node_(CsTree *t, const CampSeq *s, CsOut *o, int id, const C
         case CS_CENTER: xp = -w / 2; yp = -h / 2; break;
         case CS_TOP_CENTER: xp = -w / 2; yp = -h; break;
         case CS_TOP_LEFT: yp = -h; break;
+        case CS_KH_RIGHT: xp = cc->ui_size - w; break;
         }
-        if (!(n->d.flags & CS_A_TEXT_TX)) xp += cc->text_x;
+        if (!(n->d.flags & CS_A_TEXT_TX) && n->d.anchor != CS_KH_RIGHT) xp += cc->text_x;
         float tc[4] = { cc->col[0], cc->col[1], cc->col[2], cc->col[3] };
         if (n->d.flags & CS_A_TEXT_IGNORE_COLOR) tc[0] = tc[1] = tc[2] = 1.0f;
         const float sh[4] = { 0, 0, 0, tc[3] * 0.75f };

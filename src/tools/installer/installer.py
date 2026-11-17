@@ -6,7 +6,8 @@
 - Serves tools/installer/ui on 127.0.0.1 (random port, a random token guards the API) and opens it with
   msedge --app (own profile in <root>/.installer-ui, so the window is its own process: closing it ends the installer
   and stops a running build; the build resumes from its done markers next time).
-- The player picks two folders: Savage Wind 0.4.1-alpha.4 (with its game files set up: extracted/romfs) and the Steam
+- The player picks two folders: Savage Wind (swsetup.SW_WANT, or an older one it upgrades; with its game files set up:
+  extracted/romfs) and the Steam
   KINGDOM HEARTS HD 1.5+2.5 ReMIX folder (found through Steam by itself when it can). Nothing else is asked.
 - Install = tools/sorabuild/sorabuild.py all (kit mode, kh2img) into <root>/data with scratch <root>/work, then
   verify.py --expect manifest.json (every file = the reference build). Game files are only read, never written.
@@ -49,8 +50,8 @@ WINDOW_TITLE = "Legend of Kairi"
 sys.path.insert(0, SBDIR)
 sys.path.insert(0, HERE)
 import gameside   # noqa: E402  (the last step: bin/ + the launcher)
-import swsetup    # noqa: E402  (s223: Savage Wind 0.5.3, the in-place upgrade from 0.4.1)
-SW_VERSION = swsetup.SW_WANT     # (s223) Savage Wind 0.5.3-alpha.5; a 0.4.1-alpha.4 folder is upgraded in place first
+import swsetup    # noqa: E402  (s223: the Savage Wind version check + the in-place upgrade; s254: 0.6.0, from 0.5.3 / 0.4.1)
+SW_VERSION = swsetup.SW_WANT     # (s254) Savage Wind 0.6.0-alpha.6; a 0.5.3-alpha.5 / 0.4.1-alpha.4 folder is upgraded in place first
 import update     # noqa: E402  (s183: update an older install in place)
 import uisfx      # noqa: E402  (s184: menu sounds from the player's own KH2)
 try:
@@ -66,7 +67,7 @@ PHASES = [("kh2", "Unpack the KH2 files the mod needs"), ("bakes", "Bake Sora, t
 GROUP_PHASE = {"bakes": "bakes", "fxrec": "fxrec", "fx": "fx", "hud": "other", "levels": "other", "logo": "other", "ragmap": "other", "ours": "other", "sounds": "other"}
 PHASE_W = {"kh2": 5, "verify": 25, "game": 2, "copy": 3, "sw": 2}
 COPY_PHASE = ("copy", "Bring the program files up to date")     # (s183) update only, before the others
-SW_PHASE = ("sw", "Get Savage Wind %s ready" % SW_VERSION)    # (s223) always first: a 0.4.1 folder is upgraded in place here
+SW_PHASE = ("sw", "Get Savage Wind %s ready" % SW_VERSION)    # (s223) always first: an older folder is upgraded in place here
 SW_UPGRADE_W = 30          # (s223) the phase's weight when it upgrades (download + unpack + stock's game code build, GUESS)
 NEED_SW_GB = 6             # (s223) upgrade: the stock zip + its unpacked files + the new game code and shader caches. (s226 review
 #                            G4: was 2) stock's setup itself refuses to build the game code under 5 GB free: ask before the folder is touched
@@ -85,8 +86,9 @@ def sha1(path):
 
 def check_sw(path):
     """-> (ok, message, info). Savage Wind folder: savagewind.exe + extracted/romfs (its own 'set up game files' done).
-    (s223) 0.5.3-alpha.5 = ready; 0.4.1-alpha.4 (0.1.4's version) or an upgrade that was cut off = ok with info["upgrade"]:
-    the install's first phase brings it up to 0.5.3 in place (swsetup.py); any other version = refused, nothing changed."""
+    (s223, s254) swsetup.SW_WANT = ready; 0.5.3-alpha.5 (Legend of Kairi 0.1.5 - 0.1.10's version), 0.4.1-alpha.4 (0.1.4's)
+    or an upgrade that was cut off = ok with info["upgrade"]: the install's first phase brings it up to SW_WANT in place
+    (swsetup.py); any other version = refused, nothing changed."""
     if not path:
         return False, "Choose your Savage Wind folder.", {}
     if not path.isascii():
@@ -98,8 +100,8 @@ def check_sw(path):
     refuse = swsetup.kind_message(kind)
     if refuse:
         return False, refuse, {"kind": kind}
-    upgrade = kind != "0.5.3"
-    have = SW_VERSION if not upgrade else (swsetup.SW_OLD if kind == "0.4.1" else "%s (upgrade to %s started)" % (swsetup.SW_OLD, SW_VERSION))
+    upgrade = kind != swsetup.READY
+    have = SW_VERSION if not upgrade else (swsetup.UPGRADE_FROM.get(kind) or "(upgrade to %s started)" % SW_VERSION)
     data = os.environ.get("SAVAGEWIND_DATA_ROOT") or path
     romfs = os.path.join(data, "extracted", "romfs")
     if not os.path.isfile(os.path.join(romfs, "Pack", "Bootup.pack")):
@@ -110,9 +112,15 @@ def check_sw(path):
         return False, "Legend of Kairi needs Breath of the Wild %s; your Savage Wind has %s." % (GAME_VERSION, ver), {"kind": kind}
     msg = "Savage Wind %s with your game files." % have
     if upgrade:
-        msg += (" The installer brings it up to Savage Wind %s first: it downloads Savage Wind %s (94 MB) into this folder and "
-                "keeps your game files, saves and settings (about 15 minutes more). Legend of Kairi 0.1.4's co-op will no longer "
-                "run from this folder." % (SW_VERSION, SW_VERSION))
+        msg += (" The installer brings it up to Savage Wind %s first: it downloads Savage Wind %s (%.0f MB), unpacks it into this "
+                "folder and keeps your game files, saves and settings (about 15 minutes more)."
+                % (SW_VERSION, SW_VERSION, swsetup.STOCK["size"] / 1e6))
+        # (s254) what stops working in that folder: 0.5.3 = an older Legend of Kairi install that is not updated with it;
+        # 0.4.1 = 0.1.4's co-op. (s255) A cut-off upgrade: its journal says where it started.
+        frm = swsetup.journal_from(path, kind, swsetup.read_journal(path))
+        msg += (" An older Legend of Kairi that plays from this folder will not start any more until it is updated too "
+                "(Update an existing install)." if frm == swsetup.SW_PREV else
+                " Legend of Kairi 0.1.4's co-op will no longer run from this folder.")
     if not ver:
         msg += " (Could not read the game version: Legend of Kairi needs Breath of the Wild %s.)" % GAME_VERSION
     return True, msg, {"romfs": romfs.replace("\\", "/"), "game_version": ver, "kind": kind, "upgrade": upgrade}
@@ -415,7 +423,7 @@ class State:
             pass
         self.kit = os.path.abspath(a.kit or os.path.join(self.root, "kit")).replace("\\", "/")
         self.kh2img_dev = a.kh2img
-        self.stock_zip = getattr(a, "stock_zip", None)   # (s223, dev / tests) a local Savage Wind 0.5.3 zip (its sha256 is still checked)
+        self.stock_zip = getattr(a, "stock_zip", None)   # (s223, dev / tests) a local copy of the stock Savage Wind zip (its sha256 is still checked)
         self.status = "setup"          # setup | running | verifying | done | failed | cancelled
         self.sw = {"path": "", "ok": False, "msg": "", "info": {}}
         self.kh2 = {"path": "", "ok": False, "msg": "", "info": {}, "auto": False}
@@ -525,7 +533,7 @@ class State:
         g = free_gb(self.dest())
         need = NEED_UPDATE_GB if self.updating() else NEED_DISK_GB
         ok = g is None or g >= need
-        if self.sw.get("info", {}).get("upgrade") and self.sw["path"]:   # (s223) the 0.5.3 upgrade writes into the Savage Wind folder
+        if self.sw.get("info", {}).get("upgrade") and self.sw["path"]:   # (s223) the Savage Wind upgrade writes into the Savage Wind folder
             if same_drive(self.dest(), self.sw["path"]):
                 need += NEED_SW_GB
                 ok = g is None or g >= need
@@ -696,7 +704,7 @@ class State:
                 release_lock(os.path.join(self.dest(), ".installer-ui", "lock"))
 
     def _sw_phase(self, gen):
-        """(s223) first: Savage Wind 0.5.3 with its game code for this release (a 0.4.1 folder upgraded in place; before
+        """(s223) first: Savage Wind (swsetup.SW_WANT) with its game code for this release (an older folder upgraded in place; before
         anything else is written, so a failed download leaves the old install as it was). -> False when the run was stopped"""
         with self.lock:
             self.phase_state["sw"] = "run"
@@ -717,7 +725,7 @@ class State:
             return False
         with self.lock:
             self.phase_state["sw"] = "done"
-            self.set_sw(self.sw["path"])     # it is 0.5.3 now
+            self.set_sw(self.sw["path"])     # it is SW_VERSION now
         return True
 
     def _run2(self, gen):
@@ -1086,9 +1094,48 @@ def _not_python(pid):
         k.CloseHandle(wintypes.HANDLE(h))
 
 
+def _lock_live(pid, lp):
+    """(s257) True when the installer that wrote lock file lp (its pid) still runs. It does NOT when: there is no such process; this
+    account may not even ask about the process (our installer runs as this account, so that is a Windows service that got the dead
+    installer's number after a restart: the s256 update a shutdown cut off answered 'another installer is already running' for
+    good); the program is not a python (s183); the process started AFTER the lock was written (the number was given out again)."""
+    if pid <= 0:
+        return False
+    if sys.platform != "win32":
+        return pid_alive(pid)
+    import ctypes
+    from ctypes import wintypes
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.OpenProcess.restype = wintypes.HANDLE
+    h = k.OpenProcess(0x1000, False, pid)                 # PROCESS_QUERY_LIMITED_INFORMATION
+    if not h:
+        return False
+    h = wintypes.HANDLE(h)
+    try:
+        code = wintypes.DWORD()
+        if not k.GetExitCodeProcess(h, ctypes.byref(code)) or code.value != 259:      # STILL_ACTIVE
+            return False
+        buf, n = ctypes.create_unicode_buffer(1024), wintypes.DWORD(1024)
+        if k.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)) and not os.path.basename(buf.value).lower().startswith("python"):
+            return False
+        ft = [wintypes.FILETIME() for _ in range(4)]
+        if k.GetProcessTimes(h, *[ctypes.byref(f) for f in ft]):
+            born = (ft[0].dwHighDateTime << 32) | ft[0].dwLowDateTime
+            try:
+                written = os.stat(lp).st_mtime_ns // 100 + 116444736000000000        # file time: 100 ns units since 1601
+            except OSError:
+                return True
+            if born > written + 50000000:                 # 5 s of slack: a FAT drive keeps file times to 2 s only
+                return False
+        return True
+    finally:
+        k.CloseHandle(h)
+
+
 def acquire_lock(root):
-    """(s178 S2) one installer per folder: <root>/.installer-ui/lock holds our pid (created exclusively). A lock whose process is gone
-    (crash, power loss) is replaced. -> True if we hold it now, False if another live installer does."""
+    """(s178 S2) one installer per folder: <root>/.installer-ui/lock holds our pid (created exclusively; the file stays the pid alone,
+    selfupdate.py of every release reads it). A lock whose process is gone (crash, power loss) is replaced. -> True if we hold it
+    now, False if another live installer does."""
     d = os.path.join(root, ".installer-ui")
     os.makedirs(d, exist_ok=True)
     lp = os.path.join(d, "lock")
@@ -1100,7 +1147,7 @@ def acquire_lock(root):
                 pid = int(open(lp).read().strip() or 0)
             except (OSError, ValueError):
                 pid = 0
-            if pid and pid != os.getpid() and pid_alive(pid) and not _not_python(pid):
+            if pid and pid != os.getpid() and _lock_live(pid, lp):
                 return False
             try:
                 os.remove(lp)
@@ -1148,7 +1195,7 @@ def main():
     ap.add_argument("--browser", action="store_true", help="dev: open in the default browser, serve until Ctrl+C")
     ap.add_argument("--serve", action="store_true", help="dev: only serve (print the URL), until Ctrl+C")
     ap.add_argument("--update", help="(s184, Update.bat) the older install to update: picked already, the player presses Update")
-    ap.add_argument("--stock-zip", help="(s223) dev / tests: a local copy of the Savage Wind 0.5.3 zip instead of the download (its sha256 is still checked)")
+    ap.add_argument("--stock-zip", help="(s223) dev / tests: a local copy of the stock Savage Wind zip (swsetup.STOCK) instead of the download (its sha256 is still checked)")
     a = ap.parse_args()
     root = os.path.abspath(a.root)
     if not root.isascii():   # (s178 S6) the mod and the build tools open files by their ANSI name

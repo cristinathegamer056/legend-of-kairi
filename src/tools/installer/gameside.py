@@ -41,7 +41,7 @@ NEEDED = ("savagewind.exe", "sora_mod.dll")
 KEY_FILES = ("sora_model.bin", "sora_pose.bin", "sora_motion.bin", "forms/roxas_model.bin", "ragmap/sora.bin", "hud/camp_seq.bin")
 BUILD_ID_FILE = "BUILD_ID"
 GAME_ID_FILE = "GAME_ID"    # (s223) data/GAME_ID: the Savage Wind game code id this release's savagewind.exe carries (the launcher compares)
-SW_WANT = "0.5.3-alpha.5"   # (s223) the Savage Wind version of this release (swsetup.SW_WANT; test_swinstall checks they agree)
+SW_WANT = "0.6.0-alpha.6"   # (s223, s254: 0.6.0) the Savage Wind version of this release (swsetup.SW_WANT; test_swinstall + mkzip check they agree)
 REMOVED_DIR = ("work", "removed")   # (s223) a 0.1.4 Multiplayer launcher is kept here as .txt (its friend's address), never run
 CHCP = r'"%SystemRoot%\System32\chcp.com" 65001 >nul'    # (s185 sec) full path: never a chcp from the current directory
 
@@ -141,8 +141,8 @@ def launcher_text(multi, sw_dir, peers=PLACEHOLDER):
               "set SAVAGEWIND_LINK_EDMG=0",
               "set SAVAGEWIND_LINK_ESYNC=0",
               "set SAVAGEWIND_LINK_ESYNC_ATK=0"]
-    L += ["rem (s223) Savage Wind's own update check off (it would offer the stock program over the mod's), and 0.5.3's",
-          "rem vertex-copy feature off (s219: about 14 fps less after a death / load with the mod)",
+    L += ["rem (s223) Savage Wind's own update check off (it would offer the stock program over the mod's), and the",
+          "rem vertex-copy feature (new in Savage Wind 0.5.3) off (s219: about 14 fps less after a death / load with the mod)",
           "set SAVAGEWIND_NO_UPDATE_CHECK=1",
           "set SAVAGEWIND_VK_VDYN=0"]
     L += ["rem title logos, when this release has them (remove = BotW's own logos)",

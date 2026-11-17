@@ -91,11 +91,13 @@ for iid in ab_ids:
     add(f'ab{iid}', 0, codes, f'sys.bar 0xae8 + 03system item {iid} @{o:#x} (name {name:#x}, icon {icon2})')
 # (s214 kb) our own two Keyblades (runtime/sora_kb.h rows 25 / 26, not KH2 items): the same "<icon><name>!" line with the
 # Kingdom Key's item icon and OUR name, spelled in the sys font codes (kh2_dream_text.table: A-Z 0x2e.., a-z 0x9a.., space 0x01)
-OURS = ((0x7e01, 'Sealing Blade'), (0x7e02, 'Guardian Core'))
+OURS = ((0x7e01, 'Sealing Blade'), (0x7e02, 'Guardian Core'),
+        (0x7e03, 'Silent Princess'), (0x7e04, "Calamity's Gaze"))   # (s247) rows 27 / 28
 if os.environ.get('LVUP_KB', '1') != '0':
     inv = {chr(65 + i): 0x2e + i for i in range(26)}
     inv.update({chr(97 + i): 0x9a + i for i in range(26)})
     inv[' '] = 0x01
+    inv["'"] = 0xee   # (s247) the apostrophe KH2 itself uses in "Winner's Proof" (sys.bar item 0x220 name: ...ab ee ac...)
     assert all(dt.T[inv[ch]] == ch for ch in inv if ch != ' ')
     kk_icon = items[0x29][2]
     for iid, nm in OURS:

@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import installer  # noqa: E402
@@ -35,6 +36,24 @@ def main():
             open(lp, "w").write(str(q.pid))
             assert installer.pid_alive(q.pid) and installer._not_python(q.pid)
             assert child(r) == "True", "a non-python pid must not block"
+        finally:
+            q.kill()
+            q.wait()
+        # (s257) a live process this account may not ask about (pid 4 = Windows' "System"; after a restart a service can get the
+        # dead installer's number, found on the s256 update a shutdown cut off): stale too
+        open(lp, "w").write("4")
+        assert child(r) == "True", "a system process's pid must not block"
+        # (s257) a live python that started AFTER the lock was written (the number was given out again): stale
+        q = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        try:
+            open(lp, "w").write(str(q.pid))
+            old = time.time() - 60
+            os.utime(lp, (old, old))
+            assert child(r) == "True", "a python born after the lock was written must not block"
+            # the same python with a lock written after it started holds it
+            open(lp, "w").write(str(q.pid))
+            assert child(r) == "False", "a live python born before the lock was written holds it"
+            os.remove(lp)
         finally:
             q.kill()
             q.wait()

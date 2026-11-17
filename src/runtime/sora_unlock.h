@@ -39,6 +39,12 @@ static const char *const UL_KILL_FLAGS[UL_NKILL][6] = {
     {"Defeated_Enemy_Guardian_A_Num", "Defeated_Enemy_Guardian_B_Num", "Defeated_Enemy_Guardian_C_Num", "Defeated_Enemy_Guardian_A_Fixed_Moss_Num"},
 };
 
+// (s247 kb) The "Silent Princess" Captured Memory (Zelda shows Link the flower; Adventure Log title PauseMenu_00 0049, desc 0108)
+// = BotW's bool IsPlayed_Demo131_0 (bool_data, IsSave). PROVEN from the 1.9.0 game data (recon/s247/S247_HELPER_KBMODEL.md):
+// Event/RememberTag entry Talk_Demo131_0 -> Demo309_2 subflow {DemoName Demo131_0, FlagName IsPlayed_Demo131_0, PhotoIdx 5}
+// -> Demo_FlagON IsPlayed_Demo131_0; DemoMsg/Demo131_0 Text017 = Zelda's "This one here is called the silent princess."
+#define UL_SP_MEMORY_FLAG "IsPlayed_Demo131_0"
+
 // The milestone -> Keyblade table (proposal, FYI for the user in recon/S89_HELPER_KB.md): KH2's rough acquisition
 // order mapped onto BotW's progress; the four elemental Keyblades go to the matching Divine Beast.
 typedef struct { uint16_t kb; uint8_t kind; int16_t n; const char *flag; const char *what; } UlRule;
@@ -70,11 +76,14 @@ static const UlRule UL_RULES[] = {
     // (s214 kb) our own two (user s212): the Master Sword pulled (the same flag as Two Become One) / the Great Plateau Tower
     {0x7e01, UL_BOOL, 1, "IsGet_Weapon_Sword_070", "the Master Sword pulled"},  // Sealing Blade
     {0x7e02, UL_TOWER, 7, NULL, "the Great Plateau Tower activated"},          // Guardian Core (MapTower_07, as sl_story's count)
+    // (s247 kb) the user's two (s246): the "Silent Princess" Captured Memory recovered / all four Divine Beasts freed
+    {0x7e03, UL_BOOL, 1, UL_SP_MEMORY_FLAG, "the Silent Princess memory recovered"},  // Silent Princess
+    {0x7e04, UL_BEASTS, 4, NULL, "all 4 Divine Beasts freed"},                          // Calamity's Gaze
 };
 #define UL_NRULES ((int)(sizeof UL_RULES / sizeof UL_RULES[0]))
 _Static_assert(sizeof UL_RULES / sizeof UL_RULES[0] == sizeof KB_TAB / sizeof KB_TAB[0], "one rule per Keyblade");
 
-typedef struct { int glider, beast[4], beasts, towers, shrines, kills[UL_NKILL], korok, msword, ganon, tower_mask; } UlState;  // (s214: bit n = MapTower_<n>)
+typedef struct { int glider, beast[4], beasts, towers, shrines, kills[UL_NKILL], korok, msword, ganon, tower_mask, sp_memory; } UlState;  // (s214: bit n = MapTower_<n>; s247: sp_memory = UL_SP_MEMORY_FLAG)
 static struct {
     int kball, filter, beasts_fake, slot_seen, synced, logq;
     float next, sync_by;
@@ -107,6 +116,7 @@ static bool ul_read(UlState *st) {
     for (int k = 0; k < UL_NKILL; k++)
         for (int j = 0; j < 6 && UL_KILL_FLAGS[k][j]; j++) st->kills[k] += ul_i(UL_KILL_FLAGS[k][j]);
     st->korok = ul_i("HiddenKorok_Number"), st->msword = ul_b("IsGet_Weapon_Sword_070"), st->ganon = ul_b("GameClear");
+    st->sp_memory = ul_b(UL_SP_MEMORY_FLAG);  // (s247)
     return true;
 }
 static bool ul_met(const UlRule *r, const UlState *s) {
@@ -118,7 +128,7 @@ static bool ul_met(const UlRule *r, const UlState *s) {
     case UL_TOWERS: return s->towers >= r->n;
     case UL_SHRINES: return s->shrines >= r->n;
     case UL_KILLS: return r->n >= 0 && r->n < UL_NKILL && s->kills[r->n] >= 1;
-    case UL_BOOL: return !strcmp(r->flag, "GameClear") ? s->ganon : s->msword;
+    case UL_BOOL: return !strcmp(r->flag, "GameClear") ? s->ganon : !strcmp(r->flag, UL_SP_MEMORY_FLAG) ? s->sp_memory : s->msword;
     case UL_S32: return s->korok >= r->n;
     case UL_TOWER: return r->n >= 1 && r->n <= 15 && (s->tower_mask >> r->n & 1);
     }
@@ -127,10 +137,11 @@ static bool ul_met(const UlRule *r, const UlState *s) {
 static void ul_log_state(const char *why) {
     const UlState *s = &UL.st;
     LOG("[sora] unlock: milestones (%s%s): paraglider %d, beasts %d (Ruta %d Medoh %d Rudania %d Naboris %d), towers %d, "
-        "shrines %d, koroks %d, kills Hinox %d Talus %d Lynel %d Molduga %d Guardian %d, Master Sword %d, Ganon %d, tower mask 0x%x; "
+        "shrines %d, koroks %d, kills Hinox %d Talus %d Lynel %d Molduga %d Guardian %d, Master Sword %d, Ganon %d, tower mask 0x%x, "
+        "Silent Princess memory %d; "
         "owned 0x%06x, beasts for forms %d%s%s\n", why, UL.src_file ? ", from the save file" : "", s->glider, s->beasts,
         s->beast[0], s->beast[1], s->beast[2], s->beast[3], s->towers, s->shrines, s->korok, s->kills[0], s->kills[1],
-        s->kills[2], s->kills[3], s->kills[4], s->msword, s->ganon, s->tower_mask, KB.own, UL.beasts_fake >= 0 ? UL.beasts_fake : s->beasts,
+        s->kills[2], s->kills[3], s->kills[4], s->msword, s->ganon, s->tower_mask, s->sp_memory, KB.own, UL.beasts_fake >= 0 ? UL.beasts_fake : s->beasts,
         UL.beasts_fake >= 0 ? " (fake: set beasts)" : "", UL.kball ? ", kball ON" : !UL.filter ? ", owned filter OFF" : "");
 }
 

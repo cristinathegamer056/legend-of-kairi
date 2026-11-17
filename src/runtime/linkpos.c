@@ -2021,9 +2021,147 @@ static void wpn_wear_ride(Cpu *c, uint64_t actor) {
         LOG("[linkpos] weapon: wear #%u: %d hit(s) on %s (actor life %d)\n", g_wpn_wears, n, actor_name(actor), *(const int32_t *)(uintptr_t)(actor + 0x848));  // (0x848 = ACTOR_LIFE, defined further down)
 }
 
+// ------------------------------------------------------------------ (s251 bowshow) Link's bow + arrows drawn while Sora mimics him
+// User s251: with bowmimic Sora takes Link's bow pose, but "i also dont see the bow show up". Link's bow is his gear (Weapon_Bow_*,
+// is_link_equip: opacity 0); the arrow in his hand is not in equip_prefix [GUESS: it takes its holder's opacity like a held bomb,
+// s100d]. The DLL calls linkpos_gear_show(flags, equip, around, delta) each present while it wants them drawn (honoured for
+// SHOW_FRESH game frames after the call: a stopped / unloaded DLL = hidden again as before):
+//   flags  bit 0 = Link's own gear whose actor name starts with one of `equip` is shown (opacity 1, not parked) where BotW
+//                  attaches it to Link's hand
+//          bit 1 = actors that are NOT his gear, within SHOW_NEAR_DIST of Link, whose name starts with one of `around`, get
+//                  opacity 1 too (the arrow)
+//          bit 2 = log every actor name seen within 2.5 u of Link once (first SHOW_LOG_N): how the names below get checked
+//   equip / around = name prefixes separated by ';' (copied; NULL = keep the last list). They come from the DLL, so a wrong
+//                  GUESS at a name is a hot reload, not a relink.
+//   delta  = world units added to every shown model's position (Sora's hand - Link's hand; NULL / zeros = BotW's own place)
+// Shown models also get their units' view bit 0 back in the calcWorld hook (BotW copies hidden Link's mask onto his gear: s128b).
+// Nothing here runs unless the DLL calls it: an exe with this code and an older DLL = the s250 behaviour.
+#define SHOW_FRESH 6
+#define SHOW_N 16
+#define SHOW_LOG_N 48
+#define SHOW_NEAR_DIST 3.0f
+static volatile int g_show_flags;
+static volatile uint64_t g_show_frame;
+static volatile uint32_t g_show_seq;
+static float g_show_delta[3];
+static SRWLOCK g_show_lock = SRWLOCK_INIT;
+static char g_show_equip[128], g_show_around[192];  // (under g_show_lock)
+static char g_show_seen[SHOW_LOG_N][40];            // (under g_show_lock) names already logged
+static int g_show_nseen;
+static struct { volatile uint64_t mdl, fr; float wrote[3]; } g_show_m[SHOW_N];
+static unsigned g_show_moves;
+void linkpos_gear_show(int flags, const char *equip, const char *around, const float delta[3]) {
+    AcquireSRWLockExclusive(&g_show_lock);
+    if (equip) snprintf(g_show_equip, sizeof g_show_equip, "%s", equip);
+    if (around) snprintf(g_show_around, sizeof g_show_around, "%s", around);
+    if ((flags & 4) && !(g_show_flags & 4)) g_show_nseen = 0;  // (the name log starts again each time it is switched on)
+    ReleaseSRWLockExclusive(&g_show_lock);
+    g_show_seq++;
+    MemoryBarrier();
+    for (int i = 0; i < 3; i++) g_show_delta[i] = delta ? delta[i] : 0;
+    MemoryBarrier();
+    g_show_seq++;
+    bool was = (g_show_flags & 3) && g_vel_frame_id - g_show_frame <= SHOW_FRESH;
+    if (((flags & 3) != 0) != was || (flags & 7) != (g_show_flags & 7))
+        LOG("[linkpos] gearshow: flags %d (%s%s%s), gear \"%s\", around \"%s\"\n", flags, flags & 1 ? "Link's gear shown " : "", flags & 2 ? "near actors shown " : "",
+            flags & 4 ? "names logged" : "", g_show_equip, g_show_around);
+    g_show_flags = flags, g_show_frame = g_vel_frame_id;
+}
+static bool show_wanted(int bit) { return (g_show_flags & bit) && g_vel_frame_id - g_show_frame <= SHOW_FRESH; }
+static bool show_match(const char *n, bool equip) {  // (any thread) does <n> start with one of the list's prefixes?
+    bool m = false;
+    AcquireSRWLockShared(&g_show_lock);
+    for (const char *p = equip ? g_show_equip : g_show_around; *p && !m;) {
+        const char *e = strchr(p, ';');
+        size_t len = e ? (size_t)(e - p) : strlen(p);
+        if (len && !strncmp(n, p, len)) m = true;
+        p += len + (e ? 1 : 0);
+    }
+    ReleaseSRWLockShared(&g_show_lock);
+    return m;
+}
+static void show_note(uint64_t a, const char *n, const char *what) {  // (opacity hook, any thread) the shown actor's model, for show_model
+    uint64_t mdl = *(const uint64_t *)(uintptr_t)(a + 0x4e0);
+    if (!in_guest(mdl)) return;
+    int k = 0;
+    for (int i = 0; i < SHOW_N; i++) {
+        if (g_show_m[i].mdl == mdl) { k = i; break; }
+        if (g_show_m[i].fr < g_show_m[k].fr) k = i;
+    }
+    // (s253 review 5) table full of models shown this very moment: leave them alone. Taking a live slot each frame gave a
+    // log line per actor per frame and a flickering bow (its delta start was thrown away). The extra model stays at BotW's place.
+    if (g_show_m[k].mdl != mdl && g_show_m[k].mdl && g_vel_frame_id - g_show_m[k].fr <= 2) return;
+    if (g_show_m[k].mdl != mdl || g_vel_frame_id - g_show_m[k].fr > 2)
+        LOG("[linkpos] gearshow: %s %s actor %llx model %llx shown, %.2f m from Link (opacity factors %.2f %.2f %.2f before)\n", what, n, (unsigned long long)a,
+            (unsigned long long)mdl, link_dist(a), opac(a, ACTOR_OPACITY), opac(a, ACTOR_START_OPACITY), opac(a, ACTOR_FINAL_OPACITY));
+    if (g_show_m[k].mdl != mdl) g_show_m[k].wrote[0] = g_show_m[k].wrote[1] = g_show_m[k].wrote[2] = 0;
+    g_show_m[k].mdl = mdl, g_show_m[k].fr = g_vel_frame_id;
+}
+static bool show_equip_actor(uint64_t a) {  // (opacity hook) <a> is Link's gear (is_link_equip already true): wanted on screen?
+    if (!show_wanted(1)) return false;
+    const char *n = actor_name(a);
+    if (!n || !show_match(n, true)) return false;
+    show_note(a, n, "gear");
+    return true;
+}
+static bool show_around_actor(uint64_t a) {  // (opacity hook) not his gear: a named actor close to Link (the arrow)
+    if (!show_wanted(2)) return false;
+    const char *n = actor_name(a);
+    if (!n || !show_match(n, false) || link_dist(a) > SHOW_NEAR_DIST) return false;
+    show_note(a, n, "near");
+    return true;
+}
+static void show_name_log(uint64_t a) {  // (opacity hook, flags bit 2) each actor name within 2.5 u of Link, once
+    if (!show_wanted(4) || !g_servo_actor || a == g_servo_actor) return;
+    const char *n = actor_name(a);
+    float d = n ? link_dist(a) : 99;
+    if (d > 2.5f) return;
+    bool isnew = false;
+    AcquireSRWLockExclusive(&g_show_lock);
+    int i;
+    for (i = 0; i < g_show_nseen && strncmp(g_show_seen[i], n, sizeof g_show_seen[i] - 1); i++) {}
+    if (i == g_show_nseen && g_show_nseen < SHOW_LOG_N) snprintf(g_show_seen[g_show_nseen++], sizeof g_show_seen[0], "%s", n), isnew = true;
+    ReleaseSRWLockExclusive(&g_show_lock);
+    if (isnew)
+        LOG("[linkpos] gearshow name: %s %llx %.2f m from Link, opacity factors %.2f %.2f %.2f, model %llx\n", n, (unsigned long long)a, d, opac(a, ACTOR_OPACITY),
+            opac(a, ACTOR_START_OPACITY), opac(a, ACTOR_FINAL_OPACITY), (unsigned long long)*(const uint64_t *)(uintptr_t)(a + 0x4e0));
+}
+static void show_model(uint64_t model) {  // (calcWorld hook) a shown model: moved by the DLL's delta, its units back in the 3D passes
+    if (!(g_show_flags & 3) || g_vel_frame_id - g_show_frame > SHOW_FRESH) return;
+    for (int i = 0; i < SHOW_N; i++) {
+        if (g_show_m[i].mdl != model || g_vel_frame_id - g_show_m[i].fr > 2) continue;
+        float d[3];
+        uint32_t q0;
+        int n = 0;
+        do { q0 = g_show_seq; MemoryBarrier(); memcpy(d, g_show_delta, sizeof d); MemoryBarrier(); } while ((q0 & 1 || q0 != g_show_seq) && ++n < 8);
+        if ((q0 & 1) || q0 != g_show_seq) d[0] = d[1] = d[2] = 0;
+        float *m = (float *)(uintptr_t)(model + 0x58);
+        float bef[3] = {m[3], m[7], m[11]};
+        // (only when BotW's attach wrote the place again since our last move: a model that is not rewritten each frame must not
+        // walk away by the delta every calcWorld)
+        bool ours = m[3] == g_show_m[i].wrote[0] && m[7] == g_show_m[i].wrote[1] && m[11] == g_show_m[i].wrote[2];
+        if (!ours && (d[0] != 0 || d[1] != 0 || d[2] != 0)) {
+            m[3] += d[0], m[7] += d[1], m[11] += d[2];
+            g_show_m[i].wrote[0] = m[3], g_show_m[i].wrote[1] = m[7], g_show_m[i].wrote[2] = m[11];
+            *(uint8_t *)(uintptr_t)(model + 0xa0) |= 1;
+        }
+        int nu = *(const int32_t *)(uintptr_t)(model + 0x38);  // (as wpn_model: units = model +0x40 array of +0x38, mask u16 +0xc)
+        uint64_t arr = *(const uint64_t *)(uintptr_t)(model + 0x40);
+        if (nu > 0 && nu <= 64 && in_guest(arr))
+            for (int u = 0; u < nu; u++) {
+                uint64_t pu = *(const uint64_t *)(uintptr_t)(arr + 8 * (uint64_t)u), un = in_guest(pu) ? *(const uint64_t *)(uintptr_t)pu : 0;
+                if (in_guest(un)) *(volatile uint16_t *)(uintptr_t)(un + 0xc) |= 1;
+            }
+        if (g_show_moves++ < 6 || g_show_moves % 3600 == 0)
+            LOG("[linkpos] gearshow: move #%u model %llx at %.2f %.2f %.2f, delta %.3f %.3f %.3f%s, %d units\n", g_show_moves, (unsigned long long)model, bef[0], bef[1],
+                bef[2], d[0], d[1], d[2], ours ? " (not rewritten by BotW since the last move: left)" : "", nu);
+        return;
+    }
+}
+
 static void slate_model_hook(Cpu *c) {  // gsys::Model::calcWorld(model), x0 = the model
     uint64_t model = c->x[0];
-    if (model) bh_model(model), gear_park(model), wpn_model(model);
+    if (model) bh_model(model), gear_park(model), wpn_model(model), show_model(model);
     if (g_slm_actor && model && in_guest(g_slm_actor) && model == *(const uint64_t *)(uintptr_t)(g_slm_actor + 0x4e0)) {  // (s111 slatecut) the game's own matrix, first
         g_slg_seq++;
         MemoryBarrier();
@@ -3108,7 +3246,7 @@ static void opacity_apply(Cpu *c) {
     g_opacity_calls++;
     cam_override_late();
     uint64_t a = c->x[0];
-    if (in_guest(a)) enemy_note(a), break_note(a), tree_note(a), stasis_note(a), fire_note(a), tbox_note(a);
+    if (in_guest(a)) enemy_note(a), break_note(a), tree_note(a), stasis_note(a), fire_note(a), tbox_note(a), show_name_log(a);
     if (g_hide && g_servo_actor && a == g_servo_actor) {
         zero_opacity(a);
         if (g_opacity_hits++ == 0) LOG("[linkpos] opacity hook: hiding Link (actor %llx)\n", (unsigned long long)g_servo_actor);
@@ -3126,8 +3264,19 @@ static void opacity_apply(Cpu *c) {
             slate_xlu_force(c, a);
             return;
         }
+        if (show_equip_actor(a)) {  // (s251 bowshow) Link's bow while Sora mimics the shot: shown where BotW holds it, not parked
+            wpn_show(a);
+            g_opacity_apply(c);
+            slate_xlu_force(c, a);
+            return;
+        }
         gear_note(a);  // (s114 gearpark)
         zero_opacity(a);
+    } else if (g_hide && g_servo_actor && in_guest(a) && show_around_actor(a)) {
+        // (s251 bowshow) the arrow in Link's hand: opacity back to 1, as the held bomb below
+        *(float *)(uintptr_t)(a + ACTOR_FINAL_OPACITY) = 1;
+        *(float *)(uintptr_t)(a + ACTOR_START_OPACITY) = 1;
+        *(uint8_t *)(uintptr_t)(a + ACTOR_OPACITY_DIRTY) = 1;
     } else if (g_hide && g_servo_actor && in_guest(a) && rune_obj_shown(a)) {
         // (s100d) Remote Bombs: user saw only the blue glow over Sora's hands, no bomb (GUESS: the held bomb takes Link's
         // requested opacity 0 like his weapons do). Opacity back to 1, as for the Slate. SAVAGEWIND_LINK_BOMB_HIDE=1 = old.

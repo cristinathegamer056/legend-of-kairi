@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw
 PICS = [43, 46, 44, 45] + list(range(47, 65)) + [300, 301]   # KB_TAB order (runtime/sora_kb.h)
 # (s214 kb) our own two Keyblades (rows 25 / 26): our own renders, tools/sorabuild/ours/kb/<name>_pic.png (512x512 RGBA, straight alpha)
 PICS += ['sealing_blade_pic.png', 'guardian_core_pic.png']
+PICS += ['silent_princess_pic.png', 'calamitys_gaze_pic.png']   # (s247 kb) rows 27 / 28: our renders of the user's designs
 OURS = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'ours', 'kb')
 COLS, CELL, LOGICAL = 6, 256, 128    # PS2 IMGD is 128x128 (HD = 512x512); KH2 draws it ~128 virtual px
 R = KH2 + '/kh2_fifth/remastered/itempic/'

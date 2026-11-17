@@ -81,6 +81,7 @@ static inline void mod_update_set(const VkWriteDescriptorSet *w) {
 #include "game_sites.h"
 #include "nvn/output_scale.h"  // (s183 amd FIX 2) output_world_proj: the world camera's projection as built
 #include "sora_proj_core.h"
+#include "sora_hdr_core.h"  // (s250 hdr: shc_scene_scale)
 
 bool linkpos_link_mtx(float m[12]);
 bool linkpos_weapon_shown(void);  // (s128 wpn) Link's BotW weapon is in Sora's hand now: hide the Keyblade groups
@@ -101,6 +102,15 @@ bool renderer_origin_lower_left(void);
 uint32_t nvn_depth_mode(void);
 void vk_frame_suspend(void);
 void vk_frame_resume(void);
+// (s250 hdr, device.c) Savage Wind 0.6.0's float HDR picture with SAVAGEWIND_SORA_HDR_GAME=1 (runtime/sora_hdr_core.h):
+// the window-image passes (KH2 Game Over screen, the "no composite" fallbacks) go into the mod's layer (RGBA16F,
+// premultiplied sRGB-encoded, alpha = coverage), and the scene pass draws into the game's RGBA16F final image. Pipeline
+// kinds: 0 = as before, PK_LAYER = the layer (the blended pipeline adds coverage), PK_FLOAT = the float final image (his
+// colours clamped to 0..1 as the 10-bit UNORM image clamped them, then put at the scene's white, game / ui nits).
+bool vk_frame_sora_layer(void);
+VkFormat vk_frame_sora_format(void);
+#define PK_LAYER 1
+#define PK_FLOAT 2
 
 #define DEPTH_FORMAT VK_FORMAT_D32_SFLOAT
 #define MAX_TEX 80     // (s85: room for every KH2 Keyblade baked in as alt blades, 1 texture each, both Valor chains)
@@ -1662,6 +1672,7 @@ static struct {  // (s54: shared by every actor; the textures + vb copy are per 
     // per colour format (s57: the window image's and the game's final image's): opaque (alpha test, depth write),
     // blended (depth test only), depth only (ghost prepass)
     struct { VkFormat fmt; VkPipeline p[3]; } pipes[2];
+    struct { VkFormat fmt; int kind; VkPipeline p[3]; } xpipes[3];  // (s250 hdr) kinds PK_LAYER / PK_FLOAT (pipes_for_kind)
     VkSampler sampler, nearest;
     VkImage depth;
     VmaAllocation depth_mem;
@@ -1670,10 +1681,29 @@ static struct {  // (s54: shared by every actor; the textures + vb copy are per 
     uint64_t drawn;
 } G;
 
-static VkPipeline make_pipeline(VkFormat fmt, bool blend, bool depth_only) {
-    static VkShaderModule vs, fs;
+// (s250 hdr) FRAG_SRC for the float final image (PK_FLOAT): the bodies' colour, right before it is written, clamped to
+// 0..1 (the 10-bit UNORM final image of SDR clamped it there: KH2's look; SAVAGEWIND_SORA_HDR_BODY_CLAMP=0 keeps values
+// above 1, brighter than SDR) and times pd.org.w = the scene's white, game / ui nits (0 = 1; sora_hdr_core.h). The
+// shadow disc / decal and the debug views return before that line: unchanged. NULL when the line is not found.
+static const char *const FRAG_PUT = "    o = vec4(rgb, pd.s1.y > 0.0";
+static char *frag_float_src(const char *base) {
+    const char *at = strstr(base, FRAG_PUT);
+    const char *e = getenv("SAVAGEWIND_SORA_HDR_BODY_CLAMP");
+    const bool clamp1 = !(e && *e && atoi(e) == 0);
+    const char *ins = clamp1 ? "    rgb = clamp(rgb, 0.0, 1.0) * (pd.org.w > 0.0 ? pd.org.w : 1.0);\n"
+                             : "    rgb = max(rgb, vec3(0.0)) * (pd.org.w > 0.0 ? pd.org.w : 1.0);\n";
+    char *src = at ? malloc(strlen(base) + strlen(ins) + 1) : NULL;
+    if (!src) return NULL;
+    size_t n = (size_t)(at - base);
+    memcpy(src, base, n), strcpy(src + n, ins), strcat(src, at);
+    LOG("[sora-draw] HDR: body shader for the float final image (%s)\n", clamp1 ? "clamped to 0..1 as in SDR" : "not clamped");
+    return src;
+}
+
+static VkPipeline make_pipeline(VkFormat fmt, bool blend, bool depth_only, int kind) {
+    static VkShaderModule vs, fs, fs_float;
     if (!vs) vs = vk_compile_glsl(VERT_SRC, STAGE_VERTEX, "sora_draw.vert");
-    if (!fs) {
+    if (!fs || (kind == PK_FLOAT && !fs_float)) {
         // (s236 amdtest4a) SAVAGEWIND_SORA_DEPTH_FETCH=1: the same shader with SD_FETCH defined (see FRAG_SRC)
         const char *fe = getenv("SAVAGEWIND_SORA_DEPTH_FETCH");
         static const char ver[] = "#version 450\n", def[] = "#define SD_FETCH 1\n";
@@ -1683,19 +1713,29 @@ static VkPipeline make_pipeline(VkFormat fmt, bool blend, bool depth_only) {
             memcpy(src, ver, sizeof ver - 1), memcpy(src + sizeof ver - 1, def, sizeof def - 1);
             strcpy(src + sizeof ver - 1 + sizeof def - 1, FRAG_SRC + sizeof ver - 1);
         }
-        fs = vk_compile_glsl(src ? src : FRAG_SRC, STAGE_FRAGMENT, src ? "sora_draw_fetch.frag" : "sora_draw.frag");
-        if (fe && *fe)
-            LOG("[sora-draw] amdtest4a: scene depth read by %s (SAVAGEWIND_SORA_DEPTH_FETCH=%s), shader %s\n",
-                src ? "texelFetch" : "texture()", fe, fs ? "compiled" : "FAILED");
+        if (!fs) {
+            fs = vk_compile_glsl(src ? src : FRAG_SRC, STAGE_FRAGMENT, src ? "sora_draw_fetch.frag" : "sora_draw.frag");
+            if (fe && *fe)
+                LOG("[sora-draw] amdtest4a: scene depth read by %s (SAVAGEWIND_SORA_DEPTH_FETCH=%s), shader %s\n",
+                    src ? "texelFetch" : "texture()", fe, fs ? "compiled" : "FAILED");
+        }
+        if (kind == PK_FLOAT && !fs_float) {  // (s250 hdr)
+            char *fsrc = frag_float_src(src ? src : FRAG_SRC);
+            if (fsrc) fs_float = vk_compile_glsl(fsrc, STAGE_FRAGMENT, "sora_draw_hdr.frag");
+            if (!fs_float) LOG("[sora-draw] HDR: the float body shader %s\n", fsrc ? "did not compile" : "could not be made");
+            free(fsrc);
+        }
         free(src);
     }
+    if (kind == PK_FLOAT && !fs_float) return VK_NULL_HANDLE;
+    VkShaderModule fsm = kind == PK_FLOAT ? fs_float : fs;
     if (!vs || !fs) {
         dg_latch("D3 Sora's shader did not compile (%s shader, GPU driver refused it)", !vs ? "vertex" : "fragment");
         return VK_NULL_HANDLE;
     }
     VkPipelineShaderStageCreateInfo stages[2] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vs, .pName = "main"},
-        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fs, .pName = "main"}};
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fsm, .pName = "main"}};
     // (s121 light) binding 0 = the vertices (pos, uv, normal), binding 1 = the light block per instance (4 x vec4)
     VkVertexInputBindingDescription bind[2] = {{0, VB_F * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX},
                                                {1, LREC_F * sizeof(float), VK_VERTEX_INPUT_RATE_INSTANCE}};
@@ -1728,6 +1768,9 @@ static VkPipeline make_pipeline(VkFormat fmt, bool blend, bool depth_only) {
                                                     .colorBlendOp = VK_BLEND_OP_ADD, .srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
                                                     .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE, .alphaBlendOp = VK_BLEND_OP_ADD,
                                                     .colorWriteMask = 0xF};
+    // (s250 hdr) the layer: the blended pipeline's alpha is coverage (premultiplied "over"); the opaque one writes the
+    // body's alpha 1 as it is (the Game Over screen's black rect clears to alpha 1 too)
+    if (blend && kind == PK_LAYER) cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE, cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     VkPipelineColorBlendStateCreateInfo cb = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1,
                                               .pAttachments = &cba};
     VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
@@ -1757,8 +1800,8 @@ static const VkPipeline *pipes_for(VkFormat fmt) {
     int i = G.pipes[0].p[0] ? 1 : 0;
     if (G.pipes[i].p[0]) LOG("[sora-draw] a third colour format %d: pipelines of format %d dropped\n", fmt, G.pipes[i].fmt);
     G.pipes[i].fmt = fmt;
-    G.pipes[i].p[0] = make_pipeline(fmt, false, false), G.pipes[i].p[1] = make_pipeline(fmt, true, false);
-    G.pipes[i].p[2] = make_pipeline(fmt, false, true);
+    G.pipes[i].p[0] = make_pipeline(fmt, false, false, 0), G.pipes[i].p[1] = make_pipeline(fmt, true, false, 0);
+    G.pipes[i].p[2] = make_pipeline(fmt, false, true, 0);
     if (!G.pipes[i].p[0] || !G.pipes[i].p[1] || !G.pipes[i].p[2]) {
         G.failed = true, G.pipes[i].p[0] = VK_NULL_HANDLE;
         LOG("[sora-draw] pipelines failed (format %d)\n", fmt);
@@ -1768,6 +1811,32 @@ static const VkPipeline *pipes_for(VkFormat fmt) {
     LOG("[sora-draw] pipelines for colour format %d\n", fmt);
     return G.pipes[i].p;
 }
+
+// (s250 hdr) kind 0 = pipes_for (unchanged); PK_LAYER / PK_FLOAT: their own three pipelines per (format, kind), three
+// kept (a fourth replaces the last, leaked as pipes_for does).
+static const VkPipeline *pipes_for_kind(VkFormat fmt, int kind) {
+    if (!kind) return pipes_for(fmt);
+    int n = (int)(sizeof G.xpipes / sizeof G.xpipes[0]), i = 0;
+    for (; i < n; i++)
+        if (G.xpipes[i].p[0] && G.xpipes[i].fmt == fmt && G.xpipes[i].kind == kind) return G.xpipes[i].p;
+    for (i = 0; i < n - 1 && G.xpipes[i].p[0]; i++) {}
+    if (G.xpipes[i].p[0]) LOG("[sora-draw] HDR: a fourth (format, kind): pipelines of format %d kind %d dropped\n", G.xpipes[i].fmt, G.xpipes[i].kind);
+    G.xpipes[i].fmt = fmt, G.xpipes[i].kind = kind;
+    G.xpipes[i].p[0] = make_pipeline(fmt, false, false, kind), G.xpipes[i].p[1] = make_pipeline(fmt, true, false, kind);
+    G.xpipes[i].p[2] = make_pipeline(fmt, false, true, kind);
+    if (!G.xpipes[i].p[0] || !G.xpipes[i].p[1] || !G.xpipes[i].p[2]) {
+        G.failed = true, G.xpipes[i].p[0] = VK_NULL_HANDLE;
+        LOG("[sora-draw] pipelines failed (format %d, HDR %s)\n", fmt, kind == PK_LAYER ? "layer" : "float final image");
+        dg_latch("D5 Vulkan pipelines could not be made for colour format %d (HDR kind %d)", (int)fmt, kind);
+        return NULL;
+    }
+    LOG("[sora-draw] pipelines for colour format %d (HDR: %s)\n", fmt, kind == PK_LAYER ? "the HUD layer" : "the float final image");
+    return G.xpipes[i].p;
+}
+
+// (s250 hdr) the game's final image as textures.c makes it for the float picture (vk_hdr_targets_wanted: never while
+// the mod is on without SAVAGEWIND_SORA_HDR_GAME=1, so the scene pass stays kind 0 then, as before)
+static bool fmt_is_float(VkFormat f) { return f == VK_FORMAT_R16G16B16A16_SFLOAT; }
 
 // (s183 amd) maxPushConstantsSize as Sora's passes see it: the GPU's, or less with SAVAGEWIND_SORA_PUSH_LIMIT=<n> (=128 on
 // NVIDIA = an AMD-Windows / Intel-like GPU, to prove the body still draws there). Every Sora pipeline layout with push
@@ -2209,7 +2278,19 @@ static bool draw_pass(VkImageView cv, VkFormat fmt, VkImageLayout lay, VkExtent2
     if (!nvalid) { g_dg_skip = "D9 the game has not handed the body a pose to draw"; return false; }
     if (!cv) { g_dg_skip = "DA no image to draw into"; return false; }
     if (!depth_for(ext)) return false;
-    const VkPipeline *P = pipes_for(fmt);
+    // (s250 hdr) the mod's HDR layer (window passes) or the game's float final image (scene pass); else kind 0 as before
+    const int kind = window ? (vk_frame_sora_layer() ? PK_LAYER : 0) : fmt_is_float(fmt) ? PK_FLOAT : 0;
+    float hscale = 0;  // (PK_FLOAT: the scene's white relative to the HUD's, upstream's own game / ui nits)
+    if (kind == PK_FLOAT) {
+        float pk, gm, ui;
+        vk_hdr_nits(&pk, &gm, &ui);
+        hscale = shc_scene_scale(gm, ui);
+        static float said = -1;
+        if (hscale != said) said = hscale, LOG("[sora-draw] HDR: scene pass into the float final image (format %d), his white x %.3f (game %.0f / HUD %.0f nits)\n",
+                                               fmt, hscale, gm, ui);
+    }
+    sora_fx_set_kind(kind);
+    const VkPipeline *P = pipes_for_kind(fmt, kind);
     if (!P) return false;
     float proj[4] = {0.1f, 25000, 50 * 3.14159265f / 180, vh > 0 ? vw / vh : 16.0f / 9};
     const bool scr = cam.screen;  // (s59 KH2 Game Over: own camera, no scene depth / shadow / fx, the black rect first)
@@ -2503,6 +2584,7 @@ static bool draw_pass(VkImageView cv, VkFormat fmt, VkImageLayout lay, VkExtent2
             pd.s1[1] = pass >= 2 ? s[ai].ghost : 0;
             memcpy(pd.t, s[ai].tint, sizeof pd.t);
             pd_set_org(&pd, pc.mvp, s[ai].feet);  // (s217 depth; pc.mvp = mvp_keep here, after the cam.shift edit)
+            if (hscale > 0) pd.org[3] = hscale;   // (s250 hdr, PK_FLOAT only: org.w is unused by the other shaders)
             if (dbg == 3)  // (s232 view 3: k.y = the pd checksum the shader recomputes from the block it reads; k.y unused there)
                 pc.k[1] = pd.s1[0] + 2 * pd.s1[1] + 3 * pd.s2[0] + 0.25f * pd.s2[2] + 5 * pd.s2[3] + 7 * pd.oa[3] + 11 * pd.s0[3];
             if (dbg == 4) {  // (s236 view 4: k.y = the scene depth's size, w * 4096 + h: exact in a float below 4096)
@@ -2852,7 +2934,7 @@ void sora_draw_present(float vx, float vy, float vw, float vh) {
     if (scr) {
         static uint64_t n;
         VkExtent2D ext = vk_frame_extent();
-        bool drew = draw_pass(vk_frame_view(), g_vk.sc_format, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, ext, vx, vy, vw, vh, true);
+        bool drew = draw_pass(vk_frame_view(), vk_frame_sora_format(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, ext, vx, vy, vw, vh, true);
         if (n++ % 300 == 0) LOG("[sora-draw] screen mode: present %llu %s (game image %.0f %.0f %.0fx%.0f)\n",
                                 (unsigned long long)vk_frame_counter(), drew ? "drawn" : "nothing drawn", vx, vy, vw, vh);
         return;
@@ -2883,7 +2965,7 @@ void sora_draw_present(float vx, float vy, float vw, float vh) {
         }
     }
     VkExtent2D ext = vk_frame_extent();
-    bool drew = draw_pass(vk_frame_view(), g_vk.sc_format, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, ext, vx, vy, vw, vh, true);
+    bool drew = draw_pass(vk_frame_view(), vk_frame_sora_format(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, ext, vx, vy, vw, vh, true);
     if (drew && g_ui_order && g_ub.fallbacks++ % 300 == 0)
         LOG("[sora-draw] ui order: no scene composite seen in frame %llu: drawn over the window image (old order), %llu such frames\n",
             (unsigned long long)vk_frame_counter(), (unsigned long long)g_ub.fallbacks);

@@ -165,6 +165,10 @@
 451 lit "A Keyblade shaped after the blade that seals the darkness."   # Sealing Blade desc (ours)
 452 lit "Guardian Core"   # (s214 kb) our own Keyblade, KB_TAB row 26
 453 lit "A Keyblade built around an ancient Sheikah core."   # Guardian Core desc (ours)
+454 lit "Silent Princess"   # (s247 kb) the user's own Keyblade, KB_TAB row 27 (kb_text_key: 450 + 2 * (26 - 24)); not KH2 text
+455 lit "A Keyblade that blooms with a rare flower of Hyrule."   # Silent Princess desc (ours)
+456 lit "Calamity's Gaze"   # (s247 kb) the user's own Keyblade, KB_TAB row 28
+457 lit "A Keyblade that stares back with the Calamity's eye."   # Calamity's Gaze desc (ours)
 
 # (s91 b5-abil) appended Abilities rows: key 500 + 2*(AB_TAB index - 25) name, +1 description (03system item names)
 500 id 0x066c    # ability 82 name

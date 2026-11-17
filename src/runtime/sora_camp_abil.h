@@ -9,6 +9,9 @@
 #pragma once
 #include "sora_abil.h"
 
+// (s249) 1 = the cost number and the AP box's "used/max" are right-anchored (KH2 text mode 1, see CS_KH_RIGHT); 0 = the old
+// left-anchored texts (the number right of its box, "used/max" over the printed "AP"). Live key `abnum`.
+static int g_cp_abnum = 1;
 #define CP_AB_VIS 9                 // visible list rows (FUN_1402f9140(list, 9))
 #define CP_AB_KEY_CAT 80            // + cat: Action / Growth / Support / Weapons
 #define CP_AB_KEY_EMPTY 84
@@ -104,7 +107,7 @@ static int cp_build_abil_list(CsTree *t, int who, const CpVals *v, abm_t on, int
         bool is_on = ab_on(on, id[i]);
         rk[k][m++] = (CsDesc){ CP_SEQ_(-1, is_on ? 123 : 119, -1), .msg_key = cp_ab_name_key(id[i]), .anchor = CS_BOTTOM_LEFT };
         if (cost) {
-            rk[k][m] = (CsDesc){ CP_SEQ_(-1, 251, -1), .flags = CS_A_TEXT_IGNORE_SCALE, .anchor = CS_BOTTOM_LEFT };
+            rk[k][m] = (CsDesc){ CP_SEQ_(-1, 251, -1), .flags = CS_A_TEXT_IGNORE_SCALE, .anchor = g_cp_abnum ? CS_KH_RIGHT : CS_BOTTOM_LEFT };  // (s249)
             snprintf(rk[k][m].text, sizeof rk[k][m].text, "%d", cost);
             m++;
         }
@@ -115,7 +118,7 @@ static int cp_build_abil_list(CsTree *t, int who, const CpVals *v, abm_t on, int
                                    .flags = CS_A_TEXT_IGNORE_SCALE, .anchor = CS_BOTTOM_LEFT };
     }
     win[0] = (CsDesc){ CP_SEQ_(230, 231, 232), .nkids = (uint8_t)nk, .kids = kids };
-    ap[0] = (CsDesc){ CP_SEQ_(272, 273, 274), .flags = CS_A_TEXT_IGNORE_SCALE, .anchor = CS_BOTTOM_LEFT };
+    ap[0] = (CsDesc){ CP_SEQ_(272, 273, 274), .flags = CS_A_TEXT_IGNORE_SCALE, .anchor = g_cp_abnum ? CS_KH_RIGHT : CS_BOTTOM_LEFT };  // (s249)
     snprintf(ap[0].text, sizeof ap[0].text, "%d/%d", ab_used(on), v->ab_ap_max);
     prompt[0] = (CsDesc){ CP_SEQ_(237, 238, 239), .msg_key = CP_AB_KEY_SWITCH, .anchor = CS_BOTTOM_LEFT };
     help[0] = (CsDesc){ .x = 150, .y = 352, CP_SEQ_(-1, 124, -1), .flags = CS_A_TEXT_IGNORE_COLOR, .anchor = CS_BOTTOM_LEFT,
