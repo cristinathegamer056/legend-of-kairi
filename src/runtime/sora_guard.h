@@ -169,14 +169,18 @@ static void guard_release(const char *why) {
     parry_link_clear(why);
 }
 
+// (s258) the Reaction Command Dodge's invulnerable KH frames (sora_react.h rc_run). Own counter: G.inv only counts with an
+// enemy within 4 m (nearest_enemy), and a Lynel's charge / swing hit Sora with the Lynel 5.5 - 7.2 m away (last60.log s258).
+static float g_rc_inv;
 // every frame, before the hit check (step 0). Returns true when this frame's life drop was a blocked hit (the DLL-only
 // refund): the caller then skips the flinch.
 static bool guard_frame(const float p[3], float to_u, float kh, int *hits_seen, int link_hits) {
     guard_bind();
     if (G.inv > 0 && (G.inv -= kh) < 0) G.inv = 0;
     if (!g_guard) G.inv = 0;
+    if (g_rc_inv > 0 && (g_rc_inv -= kh) < 0) g_rc_inv = 0;
     float e[2];  // (s88 review: the invulnerable frames swallow enemy hits only by default, see g_guard_inv)
-    bool inv = G.inv > 0 && (g_guard_inv >= 2 || (g_guard_inv == 1 && nearest_enemy(p, e)));
+    bool inv = (G.inv > 0 && (g_guard_inv >= 2 || (g_guard_inv == 1 && nearest_enemy(p, e)))) || g_rc_inv > 0;  // (s258: the Reaction Dodge's frames need no enemy within 4 m)
     bool rf = mg_reflect_up();  // (s133 magic) Reflect's barrier is up: every hit is blocked like the guard window's, the Guardian beam is reflected
     bool win = g_guard && guard_window() && guard_front(p), want = win || inv || rf || pl_invuln();  // (s133 limits: a party Limit runs = invulnerable)
     bool refunded = false;

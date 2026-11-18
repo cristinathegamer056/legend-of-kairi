@@ -4,7 +4,7 @@
 
 > [!WARNING]
 > **Early alpha:** bugs and crashes are likely. Back up your Savage Wind saves (`Savage Wind/save`) before you play.
-> **0.2.0-alpha plays on your own.** Co-op is in 0.1.4-alpha only for now (see [Which version do I need?](#which-version-do-i-need)).
+> **0.2.1-alpha plays on your own.** Co-op is in 0.1.4-alpha only for now (see [Which version do I need?](#which-version-do-i-need)).
 
 Play **The Legend of Zelda: Breath of the Wild** (on the [Savage Wind](https://github.com/Revivedx/SavageWindRecomp) PC
 recompilation) as **Sora from Kingdom Hearts II Final Mix**, with Roxas, Mickey, Donald and Goofy, KH2's combos,
@@ -35,6 +35,11 @@ magic, Drive Forms and summons, and KH2's own menus and HUD.
 - Explosive barrels blow up when Sora hits them with the Keyblade, Fire or Thunder; Sora lifts, carries and throws
   barrels, rocks and pots like Link
 - Sora shoots Link's bow: he takes Link's pose and holds the bow and arrow
+- Throw the Keyblade (hold Triangle + R1, let go of R1): it flies where the camera looks and comes back to Sora's
+  hand, with gyro aim on a controller that has a gyro (turn on Savage Wind's *Controls > Mouse camera* for it)
+- Sora throws BotW's weapons like Link (Triangle + R1), and holds and swings boomerangs and the Lizalfos Arm
+- KH2's battle stance while enemies are close
+- Debug Menu: Roxas, Kairi and a Green Tunic as looks for Sora (Outfit row, right after Timeless River)
 - Debug Menu: Riku, Auron, Mulan, Aladdin, Jack Sparrow and Cloud can take Donald's or Goofy's place
 - KH2's damage formula, levels, EXP, abilities, prize orbs and munny
 - KH2's command menu, shortcuts, HP / MP / Drive gauges and Equipment menu drawn in BotW
@@ -46,10 +51,10 @@ magic, Drive Forms and summons, and KH2's own menus and HUD.
 
 | You want to | Legend of Kairi | Savage Wind |
 |---|---|---|
-| Play on your own (newest) | **0.2.0-alpha** | **0.6.0-alpha.6** (a 0.5.3-alpha.5 folder is upgraded for you) |
+| Play on your own (newest) | **0.2.1-alpha** | **0.6.0-alpha.6** (a 0.5.3-alpha.5 folder is upgraded for you) |
 | Play co-op with friends (up to 4) | **[0.1.4-alpha](https://github.com/tvllerr/legend-of-kairi/releases/tag/v0.1.4-alpha)** | **0.4.1-alpha.4** |
 
-Co-op is not in 0.2.0-alpha yet. Everybody in a co-op game needs the very same release, so co-op players stay on 0.1.4.
+Co-op is not in 0.2.1-alpha yet. Everybody in a co-op game needs the very same release, so co-op players stay on 0.1.4.
 
 ## Requirements
 
@@ -63,7 +68,7 @@ Co-op is not in 0.2.0-alpha yet. Everybody in a co-op game needs the very same r
 
 ## Install
 
-1. Download `Legend-of-Kairi-0.2.0-alpha.zip` from [Releases](https://github.com/tvllerr/legend-of-kairi/releases/latest).
+1. Download `Legend-of-Kairi-0.2.1-alpha.zip` from [Releases](https://github.com/tvllerr/legend-of-kairi/releases/latest).
 2. Right-click it > **Extract All...** into an empty folder (not inside the Savage Wind folder).
 3. Double-click **Install Legend of Kairi.cmd**.
 4. Click **Choose...** next to *Savage Wind folder* and pick the `Savage Wind` folder (the one with `extracted` inside).
@@ -73,9 +78,13 @@ Co-op is not in 0.2.0-alpha yet. Everybody in a co-op game needs the very same r
 **Updating:** double-click **Update Legend of Kairi.bat** in your install folder: it fetches the newest release, checks
 its signature and opens the installer on Update. Your saves are kept.
 
-The update from 0.1.10 to 0.2.0 is a big one: it brings your Savage Wind 0.5.3 folder up to 0.6.0-alpha.6 where it is
+The update from 0.2.0 to 0.2.1 leaves your Savage Wind folder as it is and builds Sora's data again from the start
+(about 15 minutes, like a new install: the installer's build tools changed). Let it finish: the game can not start
+until the update is done.
+
+The update from 0.1.10 is a big one: it brings your Savage Wind 0.5.3 folder up to 0.6.0-alpha.6 where it is
 (it downloads the official Savage Wind 0.6.0-alpha.6 zip and keeps your game files, saves and settings; Savage Wind's
-own setup then runs for about 7 minutes), and it builds Sora's data again (about 6 minutes more). Let it finish: the
+own setup then runs for about 7 minutes), and it builds Sora's data again (about 15 minutes more). Let it finish: the
 game can not start between the Savage Wind upgrade and the end of the update. If you play co-op, don't update: stay on
 0.1.4.
 
@@ -94,7 +103,7 @@ that version, or unzip Savage Wind 0.6.0-alpha.6 over it again and run the insta
 <img src="docs/sora_coop.gif" width="100%" alt="Co-op: one player's Sora in a blue outfit walks and swings, then the other player's Sora (from a Steam Deck, in another outfit) moves around next to him, each with Donald and Goofy">
 
 > [!NOTE]
-> Multiplayer is in **0.1.4-alpha** only (with Savage Wind 0.4.1-alpha.4); 0.2.0-alpha has no Multiplayer launcher.
+> Multiplayer is in **0.1.4-alpha** only (with Savage Wind 0.4.1-alpha.4); 0.2.1-alpha has no Multiplayer launcher.
 > Multiplayer works, but it is still glitchy and needs more development: enemy positions and copied enemy attacks can be
 > late or out of sync, and a hit may not land now and then. Please report what you see.
 
@@ -124,7 +133,7 @@ that version, or unzip Savage Wind 0.6.0-alpha.6 over it again and run the insta
 
 ## Download check
 
-`Legend-of-Kairi-0.2.0-alpha.zip` sha256: `a6858ae0c5e5a47dd42e4113a6a0b48092ca2da2aafd56e7a9cf9dff2fb1fcf9`
+`Legend-of-Kairi-0.2.1-alpha.zip` sha256: `50c3677ef258869d7451f7498385b34034a973bbcd5f711274ac6897972adea6`
 
 `Legend-of-Kairi-0.1.4-alpha.zip` sha256: `e4ee7470e9e8cd7b444475c505ee268ddc6a4683450d5a702633d8732e0c7ba0`
 

@@ -121,6 +121,9 @@ party/cloud_hits.bin bakes
 party/cloud_model.bin bakes
 party/cloud_motion.bin bakes
 party/cloud_pose.bin bakes
+outfits/rx_sora_model.bin bakes
+outfits/ka_sora_model.bin bakes
+outfits/gt_sora_model.bin bakes
 outfits/nm_anti_model.bin bakes
 outfits/nm_final_model.bin bakes
 outfits/nm_limit_model.bin bakes

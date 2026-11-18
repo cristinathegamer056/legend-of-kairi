@@ -150,7 +150,19 @@ static void mk_bind(void) {
 // (An exe older than s110 ignores bit 4: then only Second Chance / Once More saves exist and the rescue never triggers.)
 // (s110 review) also while Mickey is out: the exe drop skips falls (and anything in the first frames), so without the clamp a fall
 // could kill Link mid-rescue; a clamp then is no new KO (mk_tick: ko only while !MK.active).
-static int mk_survive_mask(void) { return g_mickey && !MK.doomed && !RX.on && (MK.active || MK.nearb || MK.force || MK.choosing) ? 4 : 0; }
+// (s258 user: "each time i die from the lynel the mickey prompt shows up ... only make it show up the first time") live
+// `set mkonce 0` = the old way (default 1: he verified it in s258, "mickey worked"): after the first rescue offer of a fight (MK.rescues >= 1: Mickey came, the
+// roll failed or "It's all over...") no clamp, so a later fatal hit is a plain death (no prompt). Armed again at "fight over"
+// (no boss near for MK_FORGET_MS). A forced KO (mkforce, the Debug Menu) still works. INVENTED rule: KH2 keeps rolling 80 / 64 / 50 %.
+static int g_mk_once = 1;
+static int mk_survive_mask(void) {
+    if (g_mk_once && MK.rescues >= 1 && !MK.active && !MK.choosing && !MK.force) {
+        static int said = -1;
+        if (said != MK.rescues) said = MK.rescues, LOG("[mickey] mkonce: this fight's rescue was used (%d): the next fatal hit is a plain death, no prompt\n", MK.rescues);
+        return 0;
+    }
+    return g_mickey && !MK.doomed && !RX.on && (MK.active || MK.nearb || MK.force || MK.choosing) ? 4 : 0;
+}
 static bool mk_drops_hits(void) { return MK.active || MK.choosing; }  // (s117 review: + the choice screen; sora_guard.h ran after mk_tick and cleared its drop)
 
 static int mk_chance_pct(void) {
@@ -670,6 +682,7 @@ static bool mk_live_set(const char *key, int v) {
     else if (!strcmp(key, "mkroll")) g_mkroll = v != 0, LOG("[mickey] mkroll %d (%s)\n", g_mkroll, g_mkroll ? "the KH2 chance rolls after \"I won't give up!\"" : "\"I won't give up!\" always works");
     else if (!strcmp(key, "mkany")) g_mk_any = v != 0, LOG("[mickey] mkany %d (any enemy counts as a boss)\n", g_mk_any);
     else if (!strcmp(key, "mkchance")) g_mk_chance = v, LOG("[mickey] mkchance %d (-1 = KH2 table)\n", v);
+    else if (!strcmp(key, "mkonce")) g_mk_once = v != 0, LOG("[mickey] mkonce %d (1 = the rescue prompt only the first time in a fight)\n", g_mk_once);
     else if (!strcmp(key, "mkcharge")) g_mk_charge = v < 0 ? 0 : v, LOG("[mickey] mkcharge %d ms (0 = the KH2 rule only, no timeout)\n", g_mk_charge);
     else if (!strcmp(key, "mkdchg")) g_mk_dchg = v < 1 ? 1 : v, LOG("[mickey] D-Charge %d points/s (100 = a bar)\n", g_mk_dchg);
     else if (!strcmp(key, "mkfill")) g_mk_hitmul = v < 1 ? 1 : v, LOG("[mickey] hit fill x%d\n", g_mk_hitmul);

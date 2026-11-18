@@ -1,5 +1,5 @@
 {
- "build_id": "486d1a60e78a0ac1",
+ "build_id": "10c021def6284598",
  "files": {
   "forms/anti_hits_l.bin": {
    "sha256": "520fe47129b2b56c9c6d8e4816fe0bd0f0c9eee9338a08f1f998324aa7e5365e",
@@ -385,6 +385,14 @@
    "sha256": "02e0bc6374830fd42e6d067592a399af5536dc89efba5f7ca142a7cdbef628d8",
    "size": 638976
   },
+  "outfits/gt_sora_model.bin": {
+   "sha256": "b0032965c5e686b0b3a31ac5968753dae0a567f5af0afabd902c63f0df45742e",
+   "size": 6877380
+  },
+  "outfits/ka_sora_model.bin": {
+   "sha256": "835d67cccdae8e3ca610d60f21ba79be8ebd9097bd90ab35821825cd33227e00",
+   "size": 7131560
+  },
   "outfits/nm_anti_model.bin": {
    "sha256": "996fdc5cbbf9db5c9abf6b29b6e103a636dfbc72abcb01ca6d34180aff706731",
    "size": 775712
@@ -412,6 +420,10 @@
   "outfits/nm_wisdom_model.bin": {
    "sha256": "2054919e169340608a37ce7ada72fa5194bf13d0e4c61cbf8ca46fd41b824b61",
    "size": 6902584
+  },
+  "outfits/rx_sora_model.bin": {
+   "sha256": "aada6bb3bd5d51d896dd4a9e079f1caec26ffa213206d4b8c2a61ca292f3e815",
+   "size": 6853728
   },
   "outfits/tr_anti_model.bin": {
    "sha256": "050ec984712771f70d29a765ce831618e0d7122dc9ba76cb487eb9cf7c3266ed",

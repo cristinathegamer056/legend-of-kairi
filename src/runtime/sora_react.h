@@ -59,7 +59,7 @@ static void rc_open(int kind, float tx, float tz, const char *why) {
     if (!CAMP.ok || !CAMP.quads) { LOG("[react] camp font / sora_hud_quads missing: no prompt\n"); return; }
     REACT.kind = kind, REACT.t0 = now, REACT.until = now + (kind == REACT_REFLECT ? RC_WIN_REFLECT_MS : kind == REACT_SAVE ? 400 : RC_WIN_DODGE_MS), REACT.tx = tx, REACT.tz = tz;
     sora_sfx_event("submenu", 1.0f);  // GUESS: KH2's REACT appear SE was not found; the menu's submenu SE
-    LOG("[react] Triangle prompt %d (%s) for %lu ms\n", kind, why, (unsigned long)(REACT.until - now));
+    LOG("[react] Triangle prompt %d (%s) for %lu ms, t %llu ms\n", kind, why, (unsigned long)(REACT.until - now), (unsigned long long)now);
 }
 
 static void rc_draw(void) {
@@ -129,7 +129,13 @@ static void rc_run(const float p[3]) {
         S.face = away;
         play(MOT_ROLL), S.special = SP_ROLL;  // INVENTED: no roll_learned() / stamina cost, unlike the normal roll
         G.inv = RC_DODGE_INV_KH;  // swallows enemy hits for those frames (guardinv 1 default: only with an enemy near)
-        LOG("[react] DODGE: Dodge Roll motion %d, %.0f invulnerable frames\n", MOT_ROLL, G.inv);
+        // (s258, user: "he still hits me each time") all 4 Dodges of his Lynel fight were hit 0 - 9 log lines after the press:
+        // guard_frame (the exe's hit drop) already ran this frame, so the drop began a frame late, and only with an enemy
+        // within 4 m. Now: its own counter (no distance test) and the exe's drop is set at once.
+        g_rc_inv = RC_DODGE_INV_KH;
+        if (g_guard && G.exe_ok && p_guard_set) p_guard_set(1);
+        LOG("[react] DODGE: Dodge Roll motion %d, %.0f invulnerable frames, t %llu ms, threat %.1f m away, drop set %s\n", MOT_ROLL, G.inv,
+            (unsigned long long)GetTickCount64(), have ? sqrtf(dx * dx + dz * dz) : -1.0f, g_guard && G.exe_ok && p_guard_set ? "now" : "next frame");
     }
     REACT.cool = GetTickCount64() + RC_COOL_MS;
     rc_close("used");

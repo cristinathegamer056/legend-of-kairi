@@ -23,18 +23,23 @@
 // the weather byte is snow (4 / 5, the light's GUESS mapping) OR the climate field equals dbmcold's climate (default none; the
 // field has read 0 everywhere so far, GUESS offset) OR dbmcold 1 forces it (test). Cold wins over night. A change must hold
 // OF_HOLD_MS before it applies (a load briefly reads garbage). The Outfit row, when not Normal, overrides Auto.
-// Live keys (sora_dbgmenu.h dbm_set_key): dbmoutfit 0..4, dbmautoout 0|1, dbmcold -1 (auto) | 0 | 1 | climate id + 2, dbmofres N (reserve).
+// (s263 chars) LOOKS: values 5 Roxas / 6 Kairi / 7 Green Tunic are other KH2 characters' bodies (or a recolour) baked onto SORA's
+// skeleton (sorabake SORABAKE_REBIND, tools/sorabuild/bakes/rebind_<id>.txt; recon/s263/S263_HELPER_CHARS.md), so they play Sora's own
+// pose bake like any outfit: Sora's motions, combat, Keyblade, hit volumes all stay his. Base body ONLY: there are no <id>_<form>_model.bin
+// files, so a Drive Form body stays Normal (the missing-file path below: one log line, given up for the session). Never picked by Auto.
+// Live keys (sora_dbgmenu.h dbm_set_key): dbmoutfit 0..7, dbmautoout 0|1, dbmcold -1 (auto) | 0 | 1 | climate id + 2, dbmofres N (reserve).
 // Log tag "[outfit]".
 #pragma once
 
-#define OF_N 5                 // 0 Normal, 1 Halloween Town (NM), 2 Christmas Town (XM), 3 Space Paranoids (TR), 4 Timeless River (WI)
+#define OF_N 8                 // 0 Normal, 1 Halloween Town (NM), 2 Christmas Town (XM), 3 Space Paranoids (TR), 4 Timeless River (WI),
+                               // (s263 looks, base body only) 5 Roxas (RX), 6 Kairi (KA), 7 Green Tunic (GT)
 #define OF_DIR "D:/SoraBotW/data/outfits/"
 #define OF_HOLD_MS 2000
-static const char *const OF_FILE[OF_N] = {"", "nm", "xm", "tr", "wi"};
-static const char *const OF_NAME[OF_N] = {"Normal", "Halloween Town", "Christmas Town", "Space Paranoids", "Timeless River"};
+static const char *const OF_FILE[OF_N] = {"", "nm", "xm", "tr", "wi", "rx", "ka", "gt"};
+static const char *const OF_NAME[OF_N] = {"Normal", "Halloween Town", "Christmas Town", "Space Paranoids", "Timeless River", "Roxas", "Kairi", "Green Tunic"};
 static const char *const OF_BODYNAME[FORM_ANTI + 2] = {"valor", "wisdom", "limit", "master", "final", "anti", "sora"};  // by form id; [FORM_ANTI + 1] = base Sora
 
-static int g_outfit;            // Debug Menu "Outfit" 0..4
+static int g_outfit;            // Debug Menu "Outfit" 0..OF_N - 1
 static int g_outfit_auto;       // Debug Menu "Auto Outfits"
 static int g_of_cold = -1;      // dbmcold: -1 snow weather only, 0 never cold, 1 always cold, >= 2: climate id (value - 2) means cold
 static int g_of_reserve = 12;   // free draw actors an outfit must leave (s146b: Roxas, Mickey, skate 3, summons ~9)

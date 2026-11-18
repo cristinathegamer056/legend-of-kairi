@@ -15,7 +15,7 @@
 //   (s146 outfit) row 7 Become Sora = g_dbm_sora (sora_roxas.h: Sora is the body whatever the story says; the sidecar's roxas field is
 //                       skipped while on; Off = the char setting again, 0 = auto: Roxas until the paraglider; s233: + Dodge Roll learned
 //                       while on, never saved: dbm_roll_sync_ / sora_abil.h g_ab_roll_dbg),
-//                 row 8 Outfit = g_outfit 0 Normal / 1 Halloween Town / 2 Christmas Town / 3 Space Paranoids / 4 Timeless River,
+//                 row 8 Outfit = g_outfit 0 Normal / 1 Halloween Town / 2 Christmas Town / 3 Space Paranoids / 4 Timeless River / (s263 looks) 5 Roxas / 6 Kairi / 7 Green Tunic,
 //                 row 9 Auto Outfits = g_outfit_auto (night -> Halloween Town, cold -> Christmas Town; sora_outfit.h). None is saved.
 //   The page shows them on top in the order Become Sora, Outfit, Auto Outfits (CP_DB_ORD in sora_camp_page.h).
 //   (s217 riku / s220 members) row 10 Party 1 = who stands in Donald's place, row 11 Party 2 = in Goofy's place: the value = the
@@ -38,6 +38,7 @@
 // Live keys (s233): dbmdrive 0/1, dbmform 0..6, dbmmickey 0..2, dbmmp 0/1.
 // Included from sora.c after sora_summon_menu.h. All LOG lines carry "[dbgmenu]".
 #pragma once
+_Static_assert(CP_DB_OUTFITS == OF_N, "s263: the camp Debug page's Outfit tags (sora_camp_dbg.h) must match sora_outfit.h OF_N");
 #define DBM_ENV "SORA_DBGMENU"
 // backend rows (dbm_set / dbm_state; the page's CP_DB_ORD shows them in its own order). (s233) a new row = a number here + its name /
 // help / value list in sora_camp_dbg.h + a place in CP_DB_ORD + its case in dbm_set / dbm_state / dbm_persist + a DBM_KEYS entry
@@ -564,7 +565,7 @@ static void dbm_world_tick(void) {
     dbm_mk_tick_();
 }
 
-// row: 0 level (val 0..99), 1 Keyblades, 2 Drive Forms, 3 Summons, 4 All Abilities, 5 God, 6 No Clip, 7 Become Sora (val 0/1), 8 Outfit (0..4), 9 Auto Outfits (0/1). Returns the value now in force.
+// row: 0 level (val 0..99), 1 Keyblades, 2 Drive Forms, 3 Summons, 4 All Abilities, 5 God, 6 No Clip, 7 Become Sora (val 0/1), 8 Outfit (0..OF_N - 1), 9 Auto Outfits (0/1). Returns the value now in force.
 static int dbm_set(int row, int val, const char *why) {
     sl_init();
     dbm_init();

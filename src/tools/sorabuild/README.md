@@ -100,6 +100,13 @@ msets (matched by slot, frame, cue). +676 sounds, +60.5 MB sfx.bin (read whole a
 them only with live `set kbswingse 1` / `set kbwallse 1` (runtime/sora_kbfx.h kbsw_motion / kbwall_play;
 recon/s249/S249_HELPER_KBSWING.md). sfx/sfx.bin changes: regenerate manifest.thispc.json before a release.
 
+## Green Tunic outfit (s263, step tunic)
+`outfits/gt_sora_model.bin` (Debug Menu > Outfit 7) = the freshly built `sora_model.bin` with ONLY the texels of body textures 0 + 1
+recoloured by `bakes/tunic.py` (the user's approved v3 colours; shoes / gloves found through `ragmap/sora.bin`), so deps =
+sora_model + ragmap_build, no KH2 file of its own, no kit tool. Kit python numpy + Pillow (same versions as the dev PC), IEEE
+basic float ops only: byte-identical to the dev file b0032965.. (also with numpy's AVX2 paths off). New target: regenerate
+manifest.thispc.json before a release.
+
 ## Friend kit (s168): no SDK / clang / MSYS2 / Git bash / system Python
 `kit/mkkit.py` (dev PC only) builds one folder: the 6 C# tools (same `dotnet build -c Release` as the steps) + fxrec_boot.exe
 (same clang command, `sb.fxrec_cmd`) + kh2pick, the .NET 8 runtime only (from the SDK), OpenKH DLLs, busybox-w32 `sh.exe`,

@@ -165,6 +165,17 @@ case "rxgrip": {   // (s110) rxgrip <jointA,jointB,..> <palmBones csv> <slot>...
         Console.WriteLine($"slot {sl} {s.Name} frames {n}: " + string.Join(" | ", cands.Select((c, i) => $"joint {c} mean {sum[i] / n:F1} max {mx[i]:F1}")));
     }
     break; }
+case "skel": {   // (s263 chars) skel <model> <out.txt>: every bone: parent, depth, kids, influences carried, bind world position
+    var md = OpenKh.Kh2.Models.ModelSkeletal.Read(Bar.Read(new MemoryStream(File.ReadAllBytes(ObjFile(args[1], "mdlx")))).First(e => e.Type == Bar.EntryType.Model).Stream);
+    var Wd = BindWorld(md.Bones); int n = md.Bones.Count;
+    var kids = new int[n]; var dep = new int[n]; var inf = new int[n];
+    for (int b = 0; b < n; b++) { int p = md.Bones[b].ParentIndex; if (p >= 0) { kids[p]++; dep[b] = dep[p] + 1; } }
+    foreach (var g in md.Groups) foreach (var v in g.Mesh.Vertices) foreach (var bp in v.BPositions) inf[bp.BoneIndex]++;
+    var sb = new StringBuilder($"# {args[1]}: {n} bones. idx parent depth kids infl | bind world x y z (cm, +x left)\n");
+    for (int b = 0; b < n; b++) sb.AppendLine(FormattableString.Invariant($"{b,3} {md.Bones[b].ParentIndex,4} {dep[b],2} {kids[b],2} {inf[b],5} | {Wd[b].Translation.X,8:F2} {Wd[b].Translation.Y,8:F2} {Wd[b].Translation.Z,8:F2}"));
+    File.WriteAllText(args[2], sb.ToString());
+    Console.WriteLine($"{args[2]}: {n} bones");
+    break; }
 case "slots": {   // (s110) slots <msetName>: every non-empty mset entry (slot, name, size, frames of an interpolated motion)
     var ml = Bar.Read(new MemoryStream(File.ReadAllBytes(ObjFile(args[1], "mset")))).ToList();
     for (int i = 0; i < ml.Count; i++) { if (ml[i].Stream.Length == 0) continue; string fr = "";
@@ -419,10 +430,227 @@ void Bake(string binPath, string hPath) {
 //   vert[]  u32 first_infl, n_infl, f32 u, v (texture units, 0..1 over the image)
 //   infl[]  u32 bone, f32 x, y, z, w (position in the bone's frame premultiplied by the weight: v = sum infl * M[bone])
 //   idx[]   u32 vertex index (triangle list)
+// (s263 chars) SORABAKE_REBIND=<map file> (unset = the bake as before, byte-identical): the body mesh of ANOTHER character
+// (SORABAKE_MODEL, e.g. P_EX110 Roxas) is re-expressed on Sora's skeleton (SORABAKE_REBIND_TO, default P_EX100): every
+// influence p on the character's bone b becomes p' = p * XBind[b] * Warp[b] * inverse(TBind[d(b)]) on Sora's bone d(b),
+// so the output has Sora's 228 + 12 bones and plays sora_pose.bin. Map file lines ('#' = comment):
+//   key <x> <t>                 the character's joint x is Sora's joint t (d(x) = t)
+//   drive <x> <t>               x AND its whole subtree ride on Sora's bone t (no search; later lines win)
+//   seg <x> <xend> [stretch|rigid|uniform] [<xside>]   (warp) key x's mesh piece is moved so the segment x -> xend lands
+//                               on d(x) -> d(xend): rotation onto Sora's direction (+ a twist from x -> xside when given),
+//                               stretch = scaled along the segment to Sora's length, uniform = scaled the same in every
+//                               direction, rigid = not scaled. A key without a seg line is only moved (x -> d(x)).
+//                               A non-key bone uses its nearest key ancestor's move.
+//   follow <x>                  (warp) key x has no move of its own: it takes its nearest key ancestor's (not a follow) move
+//   warp 0|1                    0 (default) = no move at all (Roxas: his joints sit where Sora's do)
+//   near <cm>                   a searched bone whose nearest Sora bone is farther than this rides on d(K) itself (default: no limit)
+//   skirt <x> <tp> <tl> <tr> <hem> <mid cm> <waist> <ease>   (s263b) every vertex with an influence in x's subtree gets NEW
+//                               smooth weights on Sora's bones tp (pelvis), tl / tr (left / right thigh), from its moved bind
+//                               position: f = 0 at the highest such vertex .. 1 at the lowest, u = (f - waist) / (1 - waist) in
+//                               0..1, thigh share = hem * (1 - (1 - u)^ease) (ease 1 = linear, > 1 = rises faster near the top;
+//                               waist < 0 = the share starts above 0 at the top edge: only for a skirt that is its own piece);
+//                               left part of it = smoothstep(-mid, mid, x) (+x left, 0 = centre line), the rest = tp. So the
+//                               cloth follows the legs more toward the hem, blended across the centre (no seam), never rigid.
+//   hipshift <x> <xl> <xr> <ytop> <amount>   (s263b) the warp puts her hip joints (keys xl / xr) on Sora's, but her pelvis
+//                               piece only rides key x's move: her legs then sit forward of her own dress (Kairi: 3.35 cm). Every
+//                               vertex whose bones all belong to x (x's subtree, through follow keys only: not the legs) is
+//                               shifted ACROSS (x, z; never y) by amount * (Sora's hip - where x's move puts her hip) times a
+//                               ramp: 0 at y >= ytop (cm, where the piece meets the torso) .. 1 at Sora's hip height and below.
+// Every other bone: d(b) = the Sora bone nearest to b (after the move) among Sora's bones in the subtree of d(K) (K = b's
+// nearest key ancestor), not inside the subtree of another key's Sora joint below d(K). SORABAKE_REBIND_LOG = a text dump.
+Func<int, System.Numerics.Vector4, (int bone, System.Numerics.Vector4 p)> Rebind(OpenKh.Kh2.Models.ModelSkeletal model, out int nTarget,
+    out Func<List<(int bone, System.Numerics.Vector4 p)>, List<(int bone, System.Numerics.Vector4 p)>> vtx) {
+    var tBar = Bar.Read(new MemoryStream(File.ReadAllBytes(ObjFile(Env("SORABAKE_REBIND_TO", "P_EX100"), "mdlx"))));
+    var tb = OpenKh.Kh2.Models.ModelSkeletal.Read(tBar.First(e => e.Type == Bar.EntryType.Model).Stream).Bones;
+    var xb = model.Bones;
+    var TW = BindWorld(tb); var XW = BindWorld(xb);
+    nTarget = tb.Count;
+    int nx = xb.Count, nt = tb.Count;
+    var key = new Dictionary<int, int>(); var drive = new List<(int x, int t)>(); bool warp = false; float near = float.MaxValue;
+    var seg = new Dictionary<int, (int end, int mode, int side)>(); var follow = new HashSet<int>();   // (mode 0 stretch, 1 rigid, 2 uniform)
+    var skirt = new List<(int x, int tp, int tl, int tr, float hem, float mid, float waist, float ease)>();
+    (int x, int xl, int xr, float ytop, float amount) hips = (-1, -1, -1, 0, 0);   // (s263b)
+    float F(string v) => float.Parse(v, System.Globalization.CultureInfo.InvariantCulture);
+    foreach (var raw in File.ReadAllLines(Env("SORABAKE_REBIND", ""))) {
+        var ln = raw.Split('#')[0].Trim(); if (ln.Length == 0) continue;
+        var t = ln.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+        int I(int k) { int v = int.Parse(t[k]); return v; }
+        switch (t[0]) {
+            case "key": if (I(1) >= nx || I(2) >= nt) throw new Exception("rebind: " + ln + ": bone out of range"); key[I(1)] = I(2); break;
+            case "drive": if (I(1) >= nx || I(2) >= nt) throw new Exception("rebind: " + ln + ": bone out of range"); drive.Add((I(1), I(2))); break;
+            case "seg": seg[I(1)] = (I(2), t.Length < 4 || t[3] == "stretch" ? 0 : t[3] == "rigid" ? 1 : t[3] == "uniform" ? 2 : throw new Exception("rebind: " + ln + ": stretch|rigid|uniform"), t.Length > 4 ? I(4) : -1); break;
+            case "follow": follow.Add(I(1)); break;
+            case "warp": warp = t[1] == "1"; break;
+            case "near": near = float.Parse(t[1], System.Globalization.CultureInfo.InvariantCulture); break;
+            case "skirt":
+                if (t.Length != 9 || I(1) >= nx || I(2) >= nt || I(3) >= nt || I(4) >= nt) throw new Exception("rebind: " + ln + ": skirt <x> <tp> <tl> <tr> <hem> <mid cm> <waist> <ease>");
+                skirt.Add((I(1), I(2), I(3), I(4), F(t[5]), F(t[6]), F(t[7]), F(t[8]))); break;
+            case "hipshift":
+                if (t.Length != 6 || I(1) >= nx || I(2) >= nx || I(3) >= nx) throw new Exception("rebind: " + ln + ": hipshift <x> <xl> <xr> <ytop> <amount>");
+                hips = (I(1), I(2), I(3), F(t[4]), F(t[5])); break;
+            default: throw new Exception("rebind: unknown line " + ln);
+        }
+    }
+    foreach (var s in seg) if (!key.ContainsKey(s.Key) || !key.ContainsKey(s.Value.end) || (s.Value.side >= 0 && !key.ContainsKey(s.Value.side)))
+        throw new Exception($"rebind: seg {s.Key} {s.Value.end}: every bone of a seg line must be a key");
+    System.Numerics.Vector3 XP(int b) => XW[b].Translation; System.Numerics.Vector3 TP(int b) => TW[b].Translation;
+    // nearest key ancestor (or self) of every character bone
+    var kanc = new int[nx];
+    for (int b = 0; b < nx; b++) { int a = b; while (a >= 0 && !key.ContainsKey(a)) a = xb[a].ParentIndex; kanc[b] = a; }
+    if (kanc.Any(a => a < 0)) throw new Exception("rebind: the map needs a key on the character's root bone");
+    // the move of each key: an affine map (row vectors) taking the character's bind space to Sora-proportioned space
+    var A = new Dictionary<int, System.Numerics.Matrix4x4>();
+    foreach (var (k, t) in key) {
+        var m = System.Numerics.Matrix4x4.Identity;
+        if (warp && !follow.Contains(k)) {
+            var x0 = XP(k); var t0 = TP(t);
+            var R = System.Numerics.Matrix4x4.Identity; var S = System.Numerics.Matrix4x4.Identity;
+            if (seg.TryGetValue(k, out var sg)) {
+                var u = XP(sg.end) - x0; var v = TP(key[sg.end]) - t0;
+                float lu = u.Length(), lv = v.Length();
+                if (lu > 1e-3f && lv > 1e-3f) {
+                    u /= lu; v /= lv;
+                    // frame of each side: primary axis = the segment, secondary = toward the side joint (else any perpendicular)
+                    System.Numerics.Matrix4x4 Frame(System.Numerics.Vector3 a, System.Numerics.Vector3 side) {
+                        var s2 = side - a * System.Numerics.Vector3.Dot(side, a);
+                        if (s2.Length() < 1e-3f) { s2 = System.Numerics.Vector3.Cross(a, Math.Abs(a.Y) < 0.9f ? System.Numerics.Vector3.UnitY : System.Numerics.Vector3.UnitX); }
+                        s2 = System.Numerics.Vector3.Normalize(s2); var c = System.Numerics.Vector3.Cross(a, s2);
+                        return new System.Numerics.Matrix4x4(a.X, a.Y, a.Z, 0, s2.X, s2.Y, s2.Z, 0, c.X, c.Y, c.Z, 0, 0, 0, 0, 1);
+                    }
+                    if (sg.side >= 0) {
+                        var Fx = Frame(u, XP(sg.side) - x0); var Ft = Frame(v, TP(key[sg.side]) - t0);
+                        System.Numerics.Matrix4x4.Invert(Fx, out var Fxi); R = Fxi * Ft;      // (rows: world -> frame coords -> world)
+                    } else {
+                        // minimal rotation u -> v
+                        var ax = System.Numerics.Vector3.Cross(u, v); float sn = ax.Length(), cs = System.Numerics.Vector3.Dot(u, v);
+                        if (sn > 1e-6f) R = System.Numerics.Matrix4x4.CreateFromAxisAngle(ax / sn, MathF.Atan2(sn, cs));
+                        else if (cs < 0) R = System.Numerics.Matrix4x4.CreateFromAxisAngle(Math.Abs(u.Y) < 0.9f ? System.Numerics.Vector3.UnitY : System.Numerics.Vector3.UnitX, MathF.PI);
+                    }
+                    if ((System.Numerics.Vector3.TransformNormal(u, R) - v).Length() > 1e-3f) throw new Exception($"rebind: seg {k}: rotation check failed");
+                    if (sg.mode == 2) S = System.Numerics.Matrix4x4.CreateScale(lv / lu);
+                    if (sg.mode == 0) {  // scale by lv/lu along u only: I + (k - 1) u u^T
+                        float kf = lv / lu - 1;
+                        S = new System.Numerics.Matrix4x4(1 + kf * u.X * u.X, kf * u.X * u.Y, kf * u.X * u.Z, 0, kf * u.Y * u.X, 1 + kf * u.Y * u.Y, kf * u.Y * u.Z, 0,
+                                                          kf * u.Z * u.X, kf * u.Z * u.Y, 1 + kf * u.Z * u.Z, 0, 0, 0, 0, 1);
+                    }
+                }
+            }
+            m = System.Numerics.Matrix4x4.CreateTranslation(-x0) * S * R * System.Numerics.Matrix4x4.CreateTranslation(t0);
+        }
+        A[k] = m;
+    }
+    foreach (var k in follow) {
+        if (!key.ContainsKey(k)) throw new Exception($"rebind: follow {k}: not a key");
+        int a = xb[k].ParentIndex; while (a >= 0 && (!key.ContainsKey(a) || follow.Contains(a))) a = xb[a].ParentIndex;
+        if (a < 0) throw new Exception($"rebind: follow {k}: no key ancestor with a move");
+        A[k] = A[a];
+    }
+    // Sora bones that are some key's joint: the subtree search stops at them
+    var tKeys = new HashSet<int>(key.Values);
+    var tkids = new List<int>[nt]; for (int b = 0; b < nt; b++) tkids[b] = new List<int>();
+    for (int b = 0; b < nt; b++) if (tb[b].ParentIndex >= 0) tkids[tb[b].ParentIndex].Add(b);
+    int TDepth(int b) { int n = 0; while (tb[b].ParentIndex >= 0) { b = tb[b].ParentIndex; n++; } return n; }
+    int XDepth(int b) { int n = 0; while (xb[b].ParentIndex >= 0) { b = xb[b].ParentIndex; n++; } return n; }
+    var d = new int[nx]; var dist = new float[nx]; var log = new StringBuilder();
+    for (int b = 0; b < nx; b++) {
+        int k = kanc[b];
+        if (b == k) { d[b] = key[b]; }
+        else {
+            var p = System.Numerics.Vector3.Transform(XP(b), A[k]);
+            var cand = new List<int>(); var st = new Stack<int>(); st.Push(key[k]);
+            while (st.Count > 0) { int c = st.Pop(); cand.Add(c); foreach (var ch in tkids[c]) if (!tKeys.Contains(ch)) st.Push(ch); }
+            int rel = XDepth(b) - XDepth(k);
+            d[b] = cand.OrderBy(c => (TP(c) - p).Length() + 0.01f * Math.Abs((TDepth(c) - TDepth(key[k])) - rel)).ThenBy(c => c).First();
+            if ((TP(d[b]) - p).Length() > near) d[b] = key[k];
+        }
+        dist[b] = (System.Numerics.Vector3.Transform(XP(b), A[k]) - TP(d[b])).Length();
+    }
+    foreach (var (x, t) in drive) for (int b = 0; b < nx; b++) { int a = b; while (a >= 0 && a != x) a = xb[a].ParentIndex; if (a == x) d[b] = t; }
+    var TWi = new System.Numerics.Matrix4x4[nt];
+    for (int b = 0; b < nt; b++) System.Numerics.Matrix4x4.Invert(TW[b], out TWi[b]);
+    var full = new System.Numerics.Matrix4x4[nx];
+    for (int b = 0; b < nx; b++) full[b] = XW[b] * A[kanc[b]] * TWi[d[b]];
+    var lp = Env("SORABAKE_REBIND_LOG", "");
+    if (lp != "") {
+        log.AppendLine($"# rebind {mdlxPath} ({nx} bones) -> {nt} bones, warp {(warp ? 1 : 0)}: x parent key-anc -> d(x)  dist  x bind (x y z)  moved  d bind");
+        for (int b = 0; b < nx; b++) {
+            var mv = System.Numerics.Vector3.Transform(XP(b), A[kanc[b]]);
+            log.AppendLine(FormattableString.Invariant($"{b,3} {xb[b].ParentIndex,4} {kanc[b],4} -> {d[b],3} {dist[b],6:F2}  ({XP(b).X,7:F2} {XP(b).Y,7:F2} {XP(b).Z,7:F2})  ({mv.X,7:F2} {mv.Y,7:F2} {mv.Z,7:F2})  ({TP(d[b]).X,7:F2} {TP(d[b]).Y,7:F2} {TP(d[b]).Z,7:F2}){(key.ContainsKey(b) ? " KEY" : "")}"));
+        }
+        File.WriteAllText(lp, log.ToString());
+    }
+    Console.WriteLine($"rebind: {nx} bones -> {nt}, {key.Count} keys, {seg.Count} segs, warp {(warp ? 1 : 0)}, max search distance {dist.Max():F2} cm");
+    vtx = null;
+    if (skirt.Count > 0 || hips.x >= 0) {   // (s263b) skirt / hipshift: whole vertices (see the map lines above)
+        var sk = new int[nx]; for (int b = 0; b < nx; b++) sk[b] = -1;
+        for (int i = 0; i < skirt.Count; i++)
+            for (int b = 0; b < nx; b++) { int a = b; while (a >= 0 && a != skirt[i].x) a = xb[a].ParentIndex; if (a >= 0) sk[b] = i; }
+        var mv = new System.Numerics.Matrix4x4[nx]; for (int b = 0; b < nx; b++) mv[b] = XW[b] * A[kanc[b]];
+        int Which(List<(int bone, System.Numerics.Vector4 p)> l) { foreach (var e in l) if (sk[e.bone] >= 0) return sk[e.bone]; return -1; }
+        System.Numerics.Vector3 Pos(List<(int bone, System.Numerics.Vector4 p)> l) {
+            var s = System.Numerics.Vector4.Zero; foreach (var e in l) s += System.Numerics.Vector4.Transform(e.p, mv[e.bone]);
+            return new System.Numerics.Vector3(s.X, s.Y, s.Z) / s.W;
+        }
+        var top = new float[skirt.Count]; var bot = new float[skirt.Count]; var cnt = new int[skirt.Count];
+        for (int i = 0; i < skirt.Count; i++) { top[i] = float.MinValue; bot[i] = float.MaxValue; }
+        foreach (var g in model.Groups) foreach (var v in g.Mesh.Vertices) {
+            var l = v.BPositions.Select(b => (b.BoneIndex, b.Position.W == 0 ? new System.Numerics.Vector4(b.Position.X, b.Position.Y, b.Position.Z, 1) : b.Position)).ToList();
+            int i = Which(l); if (i < 0) continue;
+            float y = Pos(l).Y; top[i] = Math.Max(top[i], y); bot[i] = Math.Min(bot[i], y); cnt[i]++;
+        }
+        // hipshift: the bones that belong to x (x's subtree, reached through follow keys only), the shift at full ramp
+        var hb = new bool[nx]; var dL = System.Numerics.Vector3.Zero; var dR = System.Numerics.Vector3.Zero; float yHip = 0;
+        if (hips.x >= 0) {
+            if (!key.ContainsKey(hips.x) || !key.ContainsKey(hips.xl) || !key.ContainsKey(hips.xr)) throw new Exception("rebind: hipshift: x, xl, xr must be keys");
+            for (int b = 0; b < nx; b++) {
+                int a = b; bool ok = true;
+                while (a >= 0 && a != hips.x) { if (key.ContainsKey(a) && !follow.Contains(a)) ok = false; a = xb[a].ParentIndex; }
+                hb[b] = ok && a == hips.x;
+            }
+            var ka = A[hips.x];
+            dL = (TP(key[hips.xl]) - System.Numerics.Vector3.Transform(XP(hips.xl), ka)) * hips.amount; dL.Y = 0;
+            dR = (TP(key[hips.xr]) - System.Numerics.Vector3.Transform(XP(hips.xr), ka)) * hips.amount; dR.Y = 0;
+            yHip = (TP(key[hips.xl]).Y + TP(key[hips.xr]).Y) / 2;
+            Console.WriteLine(FormattableString.Invariant($"rebind: hipshift {hips.x}: {hb.Count(z => z)} bones, left ({dL.X:F2} {dL.Z:F2}) right ({dR.X:F2} {dR.Z:F2}) cm (x z), ramp y {hips.ytop:F2} .. {yHip:F2}"));
+        }
+        float Smooth(float a, float b, float x) { float u = Math.Clamp((x - a) / (b - a), 0, 1); return u * u * (3 - 2 * u); }
+        for (int i = 0; i < skirt.Count; i++)
+            Console.WriteLine(FormattableString.Invariant($"rebind: skirt {skirt[i].x}: {cnt[i]} verts, y {top[i]:F2} .. {bot[i]:F2} cm, hem share {skirt[i].hem}, mid {skirt[i].mid} cm, waist {skirt[i].waist}, ease {skirt[i].ease}"));
+        System.Numerics.Vector3 Shift(System.Numerics.Vector3 P) =>   // (hipshift) the across shift of a moved bind position
+            (1 - Smooth(yHip, hips.ytop, P.Y)) * (Smooth(-5, 5, P.X) * dL + (1 - Smooth(-5, 5, P.X)) * dR);
+        vtx = l => {
+            int i = Which(l);
+            bool sh = hips.x >= 0 && l.All(e => hb[e.bone]);
+            if (i < 0) {
+                if (!sh) return null;
+                // not a skirt vertex: the same bones + weights, every influence's bind position shifted (w = the weight)
+                var D = Shift(Pos(l)); var o2 = new List<(int bone, System.Numerics.Vector4 p)>();
+                foreach (var e in l) { var r = remapOne(e.bone, e.p); o2.Add((r.bone, r.p + System.Numerics.Vector4.Transform(new System.Numerics.Vector4(D * e.p.W, 0), TWi[r.bone]))); }
+                return o2;
+            }
+            var P = Pos(l); var s = skirt[i];
+            if (sh) P += Shift(P);
+            float f = top[i] > bot[i] ? (top[i] - P.Y) / (top[i] - bot[i]) : 0;
+            float u = s.waist < 1 ? Math.Clamp((f - s.waist) / (1 - s.waist), 0, 1) : 0;
+            float th = s.hem * (1 - MathF.Pow(1 - u, s.ease)), lf = s.mid > 0 ? Smooth(-s.mid, s.mid, P.X) : (P.X >= 0 ? 1 : 0);
+            var o = new List<(int bone, System.Numerics.Vector4 p)>();
+            void W(int t, float w) { if (w > 1e-4f) o.Add((t, System.Numerics.Vector4.Transform(new System.Numerics.Vector4(P, 1), TWi[t]) * w)); }
+            W(s.tp, 1 - th); W(s.tl, th * lf); W(s.tr, th * (1 - lf));
+            return o;
+        };
+    }
+    return remapOne;
+    (int bone, System.Numerics.Vector4 p) remapOne(int bone, System.Numerics.Vector4 p) => (d[bone], System.Numerics.Vector4.Transform(p, full[bone]));
+}
+
 void Model(string outPath) {
     var bar = Bar.Read(new MemoryStream(File.ReadAllBytes(mdlxPath)));
     var model = OpenKh.Kh2.Models.ModelSkeletal.Read(bar.First(e => e.Type == Bar.EntryType.Model).Stream);
     var tex = ModelTexture.Read(bar.First(e => e.Type == Bar.EntryType.ModelTexture).Stream);
+    // (s263 chars) SORABAKE_REBIND: the body on Sora's skeleton (above); the weapon chains then start at Sora's bone count
+    int nBody = model.Bones.Count;
+    Func<List<(int bone, System.Numerics.Vector4 p)>, List<(int bone, System.Numerics.Vector4 p)>> remapV = null;
+    var remap = Env("SORABAKE_REBIND", "") != "" ? Rebind(model, out nBody, out remapV) : null;
     var kbBar = Bar.Read(new MemoryStream(File.ReadAllBytes(kbMdlxPath)));
     var kb = OpenKh.Kh2.Models.ModelSkeletal.Read(kbBar.First(e => e.Type == Bar.EntryType.Model).Stream);
     var kbTex = ModelTexture.Read(kbBar.First(e => e.Type == Bar.EntryType.ModelTexture).Stream);
@@ -433,10 +661,16 @@ void Model(string outPath) {
         foreach (var g in md.Groups) {
             int fi = idx.Count, vb = verts.Count;
             foreach (var v in g.Mesh.Vertices) {
+                if (remapV != null && md == model) {   // (s263b) skirt: the whole vertex at once (null = not a skirt vertex)
+                    var l = v.BPositions.Select(b => (b.BoneIndex, b.Position.W == 0 ? new System.Numerics.Vector4(b.Position.X, b.Position.Y, b.Position.Z, 1) : b.Position)).ToList();
+                    var o = remapV(l);
+                    if (o != null) { verts.Add((infl.Count, o.Count, v.U / 4096f, v.V / 4096f)); infl.AddRange(o); continue; }
+                }
                 verts.Add((infl.Count, v.BPositions.Count, v.U / 4096f, v.V / 4096f));
                 foreach (var b in v.BPositions) {
                     var p = b.Position;
                     if (p.W == 0) p = new System.Numerics.Vector4(p.X, p.Y, p.Z, 1);   // (one bone: stored without a weight)
+                    if (remap != null && md == model) { var r = remap(b.BoneIndex, p); infl.Add((r.bone, r.p)); continue; }   // (s263 rebind)
                     infl.Add((boneBase + b.BoneIndex, p));
                 }
             }
@@ -456,9 +690,9 @@ void Model(string outPath) {
     // (s89 anti) SORABAKE_KB_NOMESH=1: the weapon chain's BONES stay (240 = the runtime's ragdoll / puppet / swap-blend
     // paths want Sora's 228 + 12) but its mesh + textures are left out (Anti Form has no Keyblade)
     bool kbNoMesh = Env("SORABAKE_KB_NOMESH", "0") == "1";
-    if (!kbNoMesh) Add(kb, model.Bones.Count, tex.Images.Count, 0x100 | kbId << 24);
+    if (!kbNoMesh) Add(kb, nBody, tex.Images.Count, 0x100 | kbId << 24);
     var images = kbNoMesh ? tex.Images.ToList() : tex.Images.Concat(kbTex.Images).ToList();
-    int nBones = model.Bones.Count + kb.Bones.Count;
+    int nBones = nBody + kb.Bones.Count;
     var ownTex = new Dictionary<int, OwnKb>();  // (s214) images[] slots (null there) whose pixels are one of our own Keyblades' PNGs
     void AddAlts(string env, int boneBase, int nChain) {
         foreach (var item in Env(env, "").Split(',', StringSplitOptions.RemoveEmptyEntries)) {
@@ -511,7 +745,7 @@ void Model(string outPath) {
             Console.WriteLine($"alt {id} = {kv[1]}: {a.Groups.Count} groups on bones {boneBase}.., textures {tb}..");
         }
     }
-    AddAlts("SORABAKE_KB_ALT", model.Bones.Count, kb.Bones.Count);
+    AddAlts("SORABAKE_KB_ALT", nBody, kb.Bones.Count);
     if (kb2MdlxPath != null) {  // (s68) the second weapon chain: its bones after the first's, ATTR_WEAPON too (the
         // runtime's weapon_base / hide_weapon then take both blades); the same mdlx shares the first one's textures
         var kb2Bar = Bar.Read(new MemoryStream(File.ReadAllBytes(kb2MdlxPath)));

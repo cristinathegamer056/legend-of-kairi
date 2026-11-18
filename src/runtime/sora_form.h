@@ -396,7 +396,7 @@ static void fm_revert(const char *why) {
     else sora_sfx_stop(g_fmse_sphere);  // (s87c review: 2.7 s sphere SE; handles are serial-checked, an ended one is a no-op)
     g_fmse_sphere = -1;
     if (S.special == SP_DRIVE || (was_form && S.special && !ACT_AIR(S.act))) S.special = SP_NONE, S.motion = -1;
-    S.mot = S.motion >= 0 ? mot_of(S.motion) : NULL;  // (S.mot may point at a Valor slot)
+    S.mot = S.motion >= 0 ? mot_st(S.motion) : NULL;  // (S.mot may point at a Valor slot)
     fm_hud_menu();
     LOG("[form] revert from %s (%s), %.0f KH frames were left; Drive %d bars + %d\n", FM_FORMS[g_fform].name, why, FM.t,
         DG.bars, DG.fill);
@@ -475,7 +475,7 @@ static void fm_enter(void) {
     g_fmots_on = true;
     FM.set_body(ofx_actor_form(g_fform));  // (s146 outfit: FM.actor[g_fform] while Normal)
     fm_absorb(g_fform, true);
-    S.mot = S.motion >= 0 ? mot_of(S.motion) : NULL;
+    S.mot = S.motion >= 0 ? mot_st(S.motion) : NULL;
     fm_fx_end(FXS_CHANGE, 8);
     // (s92 b6-formfx) Limit / Final / Anti now have KH2's own entry fx too (FX_ENTER_L / _F / _A, fx.bin s92 rows) and Anti the entry SE
     // (anti.0 = se999 #1 like every form, + anti.100's se000 #132); live "set formfx 0" = the s89/s91 way (no entry fx for those three, no Anti SE).

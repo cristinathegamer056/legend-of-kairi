@@ -83,13 +83,16 @@ static void lm_request(int i) { if (i >= 0 && i < LM_N) LM.req = i, LOG("[limit]
 
 // (the flights) Strike Raid's Keyblade (one) and Infinity's shots: KH cm / KH frames, BotW units for positions
 typedef struct { bool on, back; int kind, atkp, power, pct, nhit; float t, life, speed, turn, r, spin, pos[3], dir[3];
-                 uint64_t target, hit[16]; int fx; } LmShot;
+                 uint64_t target, hit[16]; int fx;
+                 bool base; int out; int body; } LmShot;  // (s261 kbthrow: base = base Sora's own blade, out = KH frames out (0 = 24), body = the draw actor it left)
 #define LM_SHOTS 32
 static LmShot g_lms[LM_SHOTS];
 static void (*g_lm_weapon_at)(int, const float *, int, const float *, float, float);
 static bool g_lm_weapon_tried;
+static int g_lm_base_body = -1;  // (s261 kbthrow) the draw actor whose Keyblade a base-form throw drew detached
 static void lm_blade_hand(void) {  // the Keyblade back in Sora's hand (weapon_at pos NULL)
     if (!g_lm_weapon_at) return;
+    if (g_lm_base_body >= 0) g_lm_weapon_at(g_lm_base_body, NULL, 0, NULL, 0, 0), g_lm_base_body = -1;
     if (FM.actor[FORM_LIMIT] > 0) g_lm_weapon_at(FM.actor[FORM_LIMIT], NULL, 0, NULL, 0, 0);
     for (int o = 1; o < 5; o++)  // (s146b: every LOADED Limit outfit body too, never loads one; an outfit change mid-throw leaves no stale blade)
         if (ofx_peek(o, FORM_LIMIT) > 0) g_lm_weapon_at(ofx_peek(o, FORM_LIMIT), NULL, 0, NULL, 0, 0);
@@ -265,6 +268,7 @@ static void lm_frame(float kh, float to_u, const float feet[3]) {
         g_lm_weapon_tried = true;
         g_lm_weapon_at = (void (*)(int, const float *, int, const float *, float, float))(void *)GetProcAddress(GetModuleHandleA(NULL), "sora_draw_actor_weapon_at");
         LOG("[limit] thrown Keyblade draw: sora_draw_actor_weapon_at %s\n", g_lm_weapon_at ? "found" : "not in this exe (it stays in his hand)");
+        if (g_lm_weapon_at && FM.body) g_lm_weapon_at(FM.body(), NULL, 0, NULL, 0, 0);  // (s263 review 6: a hot reload while the base blade flew: the exe kept it loose)
     }
     lf_tick(feet, to_u);  // (s91 b5-limfx)
     if (LM.on && IN_LIMIT) lm_spawn(feet, to_u);
@@ -326,12 +330,17 @@ static void lm_frame(float kh, float to_u, const float feet[3]) {
             else if (actor[i] == o->target && !o->back) o->back = true, o->nhit = 0;  // (the Keyblade turns back at its target)
         }
         if (!o->on) continue;
-        if (blade && !o->back && o->t >= 24) o->back = true, o->nhit = 0;  // (no target reached: back after 24 frames, GUESS)
+        if (blade && !o->back && o->t >= (o->out > 0 ? o->out : 24)) o->back = true, o->nhit = 0;  // (no target reached: back after 24 frames, GUESS)
         if (!blade && o->t >= o->life) { o->on = false; if (o->fx >= 0) sora_fx_kill(o->fx); continue; }
         if (blade) {
             blade_out = true;
             o->spin += 0.6f * kh;  // (the spin: GUESS, about the vertical only - weapon_at takes a yaw)
-            if (g_lm_weapon_at && FM.actor[FORM_LIMIT] > 0) g_lm_weapon_at(ofx_shown_limit(), NULL, 0, o->pos, o->spin, to_u);
+            if (g_lm_weapon_at && o->base) {  // (s261 kbthrow: the body shown now; a body switch mid-flight puts the old one's blade back)
+                int cur = FM.body ? FM.body() : 0;
+                if (g_lm_base_body >= 0 && g_lm_base_body != cur) g_lm_weapon_at(g_lm_base_body, NULL, 0, NULL, 0, 0);
+                g_lm_base_body = cur;
+                g_lm_weapon_at(cur, NULL, 0, o->pos, o->spin, to_u);
+            } else if (g_lm_weapon_at && FM.actor[FORM_LIMIT] > 0) g_lm_weapon_at(ofx_shown_limit(), NULL, 0, o->pos, o->spin, to_u);
         }
     }
     static bool was_out;

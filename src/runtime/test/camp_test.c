@@ -855,12 +855,20 @@ static bool test_dbg_outfit_rows(void) {
     CHECK(dbg_open_());
     pt_(2, CP_BTN_A);  // row 0 = Become Sora = backend row 7 (db_set = row + 1)
     CHECK(PO.db_set == 8 && PO.db_val == 1 && P.db_v[7] == 1);
-    pt_(2, CP_BTN_DOWN);  // row 1 = Outfit = backend row 8: A = next (wraps), Right steps, 4 outfits then an error
+    pt_(2, CP_BTN_DOWN);  // row 1 = Outfit = backend row 8: A = next (wraps), Right steps, 7 outfits (s263: + Roxas, Kairi, Tunic) then an error
     CHECK(P.db_row == 1);
     pt_(2, CP_BTN_A); CHECK(PO.db_set == 9 && PO.db_val == 1 && P.db_v[8] == 1);
     pt_(2, CP_BTN_RIGHT); CHECK(PO.db_set == 9 && PO.db_val == 2);
     pt_(2, CP_BTN_RIGHT); pt_(2, CP_BTN_RIGHT); CHECK(P.db_v[8] == 4 && PO.db_val == 4);
-    pt_(2, CP_BTN_RIGHT); CHECK(PO.se == CP_SE_ERROR && PO.db_set == 0 && P.db_v[8] == 4);
+    {   // (s263 looks) the three new values after Timeless, in this order, then the end
+        char ob[32];
+        static const char *const want[] = {"Roxas", "Kairi", "Tunic"};
+        for (int k = 0; k < 3; k++) {
+            pt_(2, CP_BTN_RIGHT); CHECK(PO.db_set == 9 && PO.db_val == 5 + k && P.db_v[8] == 5 + k);
+            cp_db_value_(ob, sizeof ob, &P, 1); CHECK(!strcmp(ob, want[k]));
+        }
+    }
+    pt_(2, CP_BTN_RIGHT); CHECK(PO.se == CP_SE_ERROR && PO.db_set == 0 && P.db_v[8] == 7);
     pt_(2, CP_BTN_A); CHECK(PO.db_set == 9 && PO.db_val == 0 && P.db_v[8] == 0);  // A wraps to Normal
     pt_(2, CP_BTN_DOWN);  // row 2 = Auto Outfits = backend row 9
     pt_(2, CP_BTN_A); CHECK(PO.db_set == 10 && PO.db_val == 1 && P.db_v[9] == 1);

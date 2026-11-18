@@ -1,6 +1,6 @@
-{"what": "KH2 extract files read by sorabuild (OpenKH IdxImg layout); kh2pick extracts only these (s168: exact last-access trace of a clean kit run); s182: + the files the sound recipe miners read (sounds/mine, step sounds_mine); s223: + the files of the new party members (Riku, Auron, Mulan, Aladdin, Sparrow, Cloud: obj + remastered + voice + their se banks se585/586/588/589/593; superset, the s224 atime trace was spoiled: every file read); s247: + the Keyblades' own hit banks se504..se527 (fx/kbhitse.py, step sfx_kbhitse)",
- "packages": {"kh2_fifth": 206, "kh2_first": 69, "kh2_sixth": 514},
- "bytes": 378071280,
+{"what": "KH2 extract files read by sorabuild (OpenKH IdxImg layout); kh2pick extracts only these (s168: exact last-access trace of a clean kit run); s182: + the files the sound recipe miners read (sounds/mine, step sounds_mine); s223: + the files of the new party members (Riku, Auron, Mulan, Aladdin, Sparrow, Cloud: obj + remastered + voice + their se banks se585/586/588/589/593; superset, the s224 atime trace was spoiled: every file read); s247: + the Keyblades' own hit banks se504..se527 (fx/kbhitse.py, step sfx_kbhitse); s263: + Kairi's model N_EX560.mdlx (step looks, outfits/ka_sora_model.bin)",
+ "packages": {"kh2_fifth": 207, "kh2_first": 69, "kh2_sixth": 514},
+ "bytes": 378479248,
  "files": [
   ["kh2_fifth/original/limit/fm/donald.bar", 367392, "a98d362427ff85bca45e2f3e8c23dceafd5501d327e1fa37ee43c4e8ba704987"],
   ["kh2_fifth/original/limit/fm/donald2.bar", 368848, "093f87ab22ffe1606b8efbb17d1cfc1afa62050627252062de7fb200d45a7f69"],
@@ -63,6 +63,7 @@
   ["kh2_fifth/original/obj/M_EX910.mset", 557152, "df67aa84f91b7d04d2c057ee6d6e79d24d919a64ddc51e12c4f75ddc46f05430"],
   ["kh2_fifth/original/obj/M_EX920.a.us", 550816, "35915902b2c7ab163a3238c8415d3777e18edb61e1393ca7a75a00962d0178b2"],
   ["kh2_fifth/original/obj/M_EX920.mset", 257552, "5609a6dcc53d7d0d1c19494402ca54e942e59dc414c4d3f027e9f07fb666abd4"],
+  ["kh2_fifth/original/obj/N_EX560.mdlx", 407968, "9e6020075866487b2ab1c318f16fe620c02b6ee98e664ba934226e05a80eaa1d"],
   ["kh2_fifth/original/obj/N_HB040_BTL.a.us", 1065312, "ccd4fc741551f0bdb52f24053a0a0b20b6f7031c892199cbc14dc5bbe7d5396d"],
   ["kh2_fifth/original/obj/N_HB040_BTL.mdlx", 401568, "418339f324536a49c67d72d883cafab9529fd163256aad19be4eb153ed6f0243"],
   ["kh2_fifth/original/obj/N_HB040_BTL.mset", 1365072, "18cb99717cbde9126da3f25edf51a12f953181923467569c95fcc1015d43f135"],

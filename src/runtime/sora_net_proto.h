@@ -133,7 +133,8 @@ typedef struct { uint8_t seen[32]; uint8_t last, any; } NetEvSeen;
 
 #define NET_HDR 7
 #define NET_SNAP_BODY 29     // (mp4: +1 = the outfit byte at p[28])
-#define NET_OUTFITS 5        // (mp4) outfit ids 0 Normal .. 4 (sora_outfit.h OF_N); a byte >= this reads as 0
+#define NET_OUTFITS 8        // (mp4) outfit ids 0 Normal .. 7 (sora_outfit.h OF_N; s263: 5 Roxas, 6 Kairi, 7 Green Tunic); a byte >= this reads as 0
+                             // (an older peer, NET_OUTFITS 5, draws a 5..7 sender in his Normal body)
 #define NET_EV_SIZE 19
 #define NET_MV_SIZE 16
 #define NET_PM_SIZE 29       // (slice 3) + NET_PM_SHIELD when NPM_SHIELD

@@ -1,0 +1,37 @@
+# (s263 chars) sorabake SORABAKE_REBIND map: KH2 Roxas (P_EX110, 229 bones) onto Sora's skeleton (P_EX100, 228 bones).
+# key <roxas joint> <sora joint>: the joints of runtime/sora_ragmap_roxas.h (ROXAS_J_*) = sora_ragmap.h (SORA_J_*); every key joint
+# sits at the same bind position (0.0 cm, s262 jdelta), so no warp. Every other bone rides on the nearest Sora bone of its limb.
+warp 0
+near 5     # a hair / flap bone with no Sora bone within 5 cm rides rigidly on its key joint (no swing about a far pivot)
+key   0   0    # ROOT
+key   3   3    # HIP_HUB
+key  41  65    # SPINE_1
+key  42  66    # SPINE_2
+key  45  67    # SPINE_3
+key  46  68    # CHEST_HUB
+key 109 136    # NECK
+key 111 138    # HEAD
+key 113 140    # HEAD_MESH
+key 114 141    # HEAD_TOP
+key  51  74    # CLAV_L
+key  53  76    # SHOULDER_L
+key  56  79    # ELBOW_L
+key  57  80    # WRIST_L
+key  63  86    # PALM_L
+key  74  97    # FINGER_MID_L
+key 160 166    # CLAV_R
+key 162 168    # SHOULDER_R
+key 165 171    # ELBOW_R
+key 166 172    # WRIST_R
+key 172 178    # PALM_R (Sora's Keyblade parent)
+key 183 189    # FINGER_MID_R
+key   6  10    # HIP_L
+key   8  12    # KNEE_L
+key   9  13    # ANKLE_L
+key  12  16    # HEEL_L
+key  13  17    # TOE_L
+key  21  39    # HIP_R
+key  23  41    # KNEE_R
+key  24  42    # ANKLE_R
+key  27  45    # HEEL_R
+key  28  46    # TOE_R

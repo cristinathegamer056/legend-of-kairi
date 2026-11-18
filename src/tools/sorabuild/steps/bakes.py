@@ -412,6 +412,33 @@ def _outfits(ctx):
             run_tool(ctx, "sorabake", "model", [ctx.outp("outfits/%s_%s_model.bin" % (o, b))], env)
 
 
+# ---------------------------------------------------------------- (s263) looks: another KH2 character's mesh rebound on Sora's skeleton
+# (sorabake SORABAKE_REBIND, map files bakes/rebind_<id>.txt): base body only (no Drive Form files: a missing form file = that
+# form stays Normal); the base Sora model env (Keyblade + alts) with the body mdlx swapped. Plays Sora's own sora_pose.bin.
+LOOKS = {"rx": ("P_EX110", "rebind_rx.txt"),                                   # KH2 Roxas (his joints = Sora's: no warp)
+         "ka": ("kh2_fifth/original/obj/N_EX560.mdlx", "rebind_ka.txt")}       # KH2 Kairi, pink dress (stretched to Sora's size)
+
+
+def _looks(ctx):
+    for o, (mdl, mp) in LOOKS.items():
+        env = dict(SORA_ALT, SORABAKE_KB_ALT=alts(ctx)["A1"], SORABAKE_MSET="P_EX100",
+                   SORABAKE_REBIND=os.path.join(BK, mp).replace("\\", "/"))
+        env["SORABAKE_MODEL"] = os.path.join(ctx.kh2, mdl).replace("\\", "/") if "/" in mdl else mdl
+        if "/" in mdl:
+            ctx.need(env["SORABAKE_MODEL"])
+        run_tool(ctx, "sorabake", "model", [ctx.outp("outfits/%s_sora_model.bin" % o)], env)
+
+
+# ---------------------------------------------------------------- (s263) Green Tunic: base Sora's own model, body textures 0 + 1
+# recoloured by bakes/tunic.py (numpy + Pillow of the kit python, IEEE basic float ops only). Base body only, as the looks.
+def _tunic(ctx):
+    src, rag, out = ctx.outp("sora_model.bin"), ctx.outp("ragmap/sora.bin"), ctx.outp("outfits/gt_sora_model.bin")
+    ctx.need(src, rag)
+    ctx.py(os.path.join(BK, "tunic.py"), src, rag, out + ".tmp")
+    ctx.need(out + ".tmp")
+    ctx.commit(out + ".tmp", out)
+
+
 def _final(part):
     """Final Form exists in three generations that are ALL live: the old files (fps x2 bake, SORABAKE_FPSFIX=0), *_s91 (fps fix, the
     default of the merged tool) and the *_s92 hit files (INTERVAL + RADIUS + FBODY knobs); runtime/sora.c ffps_path() picks them.
@@ -471,6 +498,8 @@ STEPS = [
          deps=["cs_build"]),
 ] + [Step("summon_" + n, _summon(n), outputs=summon_outputs(n), deps=["cs_build"]) for n in SUMMONS] + [
     Step("outfits", _outfits, outputs=["outfits/%s_%s_model.bin" % (o, b) for o in OUTFITS for b in BODIES], deps=["cs_build"]),
+    Step("looks", _looks, outputs=["outfits/%s_sora_model.bin" % o for o in LOOKS], deps=["cs_build"]),
+    Step("tunic", _tunic, outputs=["outfits/gt_sora_model.bin"], deps=["sora_model", "ragmap_build"]),
     Step("form_final", _final("old"), outputs=["forms/final_%s.bin" % k for k in ("model", "motion", "pose", "hits_r", "hits_l")],
          deps=["cs_build"]),
     Step("form_final_s91", _final("s91"), outputs=["forms/final_%s.bin" % k for k in ("motion_s91", "pose_s91", "hits_r_s91", "hits_l_s91")],

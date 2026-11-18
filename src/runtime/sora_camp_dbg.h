@@ -19,8 +19,8 @@ static const char *const CP_DB_HELP[CP_DB_ROWS] = { "Left/Right: set level", "A 
     "Night: Halloween, cold: Christmas", "Left/Right: who stands in Donald's place (this session)", "Left/Right: who stands in Goofy's place (this session)",
     "Drive gauges stay full", "Form now; stays till Off", "Any Enemy, or Now", "MP never runs out" };
 #define CP_DB_VIS 7  // (s146) rows shown at once = the 7-row list the window was built for (s140); the list scrolls (p->db_top)
-#define CP_DB_OUTFITS 5  // (s146) Outfit row values: Normal, Halloween Town, Christmas Town, Space Paranoids, Timeless River
-static const char *const CP_DB_OUTFIT_TAG[CP_DB_OUTFITS] = { "Normal", "Halloween", "Christmas", "Paranoids", "Timeless" };  // (<= 9 chars: the tag column is as wide as "L+Triangle"; GUESS that fits)
+#define CP_DB_OUTFITS 8  // (s146) Outfit row values: Normal, Halloween Town, Christmas Town, Space Paranoids, Timeless River; (s263) Roxas, Kairi, Green Tunic (= sora_outfit.h OF_N)
+static const char *const CP_DB_OUTFIT_TAG[CP_DB_OUTFITS] = { "Normal", "Halloween", "Christmas", "Paranoids", "Timeless", "Roxas", "Kairi", "Tunic" };  // (<= 9 chars: the tag column is as wide as "L+Triangle"; GUESS that fits)
 #define CP_DB_FORMS 7  // (s233) Drive Form row values: Off + KH2 form ids 1..6 (= sora_dbgmenu.h DBM_FORM_NAME)
 static const char *const CP_DB_FORM_TAG[CP_DB_FORMS] = { "Off", "Valor", "Wisdom", "Limit", "Master", "Final", "Anti" };
 #define CP_DB_MICKEYS 3  // (s233) Mickey Rescue row values

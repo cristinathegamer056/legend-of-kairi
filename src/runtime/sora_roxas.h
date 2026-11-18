@@ -38,7 +38,7 @@ static bool rox_assets_ok(void) {
 // airborne switch with no motion (nothing drawn) until he landed, since the ACT_JUMP branch only sets Fall at the apex
 static void rox_motion_reset(void) {
     S.special = SP_NONE, S.next = 0;
-    S.mot = S.motion >= 0 ? mot_of(S.motion) : NULL;
+    S.mot = S.motion >= 0 ? mot_st(S.motion) : NULL;
     if (!S.mot) S.motion = -1, set_motion(ACT_AIR(S.act) ? MOT_FALL : MOT_IDLE);
 }
 

@@ -80,6 +80,19 @@ static bool wpn_read_list(char *actor, int cap, int *life, int *atk_up) {
     return false;
 }
 
+// (s260 user: "the lizalfos arm doesnt show up at all ... the same thing happens with other boomerangs") the generated table
+// tags BotW's Boomerang subtype "keep the Keyblade" (s128 plan), and the Lizalfos Arm IS a Boomerang there: its s131 arm
+// settings never ran. The Lizalfos Arm is always usable now; the real boomerangs too (live "set wpnboom 0" = the old way;
+// default 1 since the user verified them in s260: "works").
+static int g_wpn_boom = 1;
+static bool wpn_kb_only(const WpnDef *d) {
+    static const char *const boom[] = {"Weapon_Sword_007", "Weapon_Sword_008", "Weapon_Sword_009", "Weapon_Sword_051", "Weapon_Sword_059", "Weapon_Lsword_051"};
+    if (!d->keyblade) return false;
+    if (!strcmp(d->actor, "Weapon_Sword_020")) return false;  // Lizalfos Arm
+    if (g_wpn_boom) for (int i = 0; i < (int)(sizeof boom / sizeof *boom); i++) if (!strcmp(d->actor, boom[i])) return false;
+    return true;
+}
+
 static bool wpn_equipped(WpnCur *out) {
     WpnCur c = {0};
     if (!g_wpn_on) return false;
@@ -95,7 +108,7 @@ static bool wpn_equipped(WpnCur *out) {
         if (!(c.def = wpn_find(actor))) return false;
         c.life = life / 100, c.life_max = c.def->life, c.atk_up = up;
     }
-    if (c.def->keyblade) return false;
+    if (wpn_kb_only(c.def)) return false;
     if (strcmp(g_wpn_last, c.def->actor)) {  // (user s128: equipping a NEW weapon in BotW switches Sora to it)
         if (g_wpn_last[0]) g_wpn_use = 1;
         snprintf(g_wpn_last, sizeof g_wpn_last, "%s", c.def->actor);
@@ -158,7 +171,10 @@ typedef struct { const char *actor; int s_pct, gx_cm; float gy, gz, xmax; } WpnA
 static WpnArm g_warm[3] = {
     {"Weapon_Sword_019", 70, 25, -0.02f, 0.03f, 1.688f},   // Bokoblin Arm
     {"Weapon_Sword_020", 70, 30, -0.013f, -0.006f, 1.79f},  // Lizalfos Arm (bent: reach 1.04 m)
-    {"Weapon_Lsword_019", 50, 45, 0.004f, 0.048f, 3.877f},  // Moblin Arm (two-handed, reach 1.71 m)
+    // (s260 user: "looks right but is just too small and its swing effect is very large"; his F5 mark_142747_2: at 50 pct the
+    // arm past his hands is ~0.7 m on screen, not the 1.71 m the helper's xmax 3.877 gives -> scale 100, xmax 1.85 = a GUESS
+    // measured from that picture; live keys wsarm2 <pct>, wxarm2 <cm>)
+    {"Weapon_Lsword_019", 100, 45, 0.004f, 0.048f, 1.85f},  // Moblin Arm (two-handed, reach 1.40 m)
 };
 // (s137 roxwpn) extra turns/back for ROXAS only, added to the Sora values (GUESS 0 = the same frame as Sora's; live keys wgzrox wrollrox wpitchrox wyawrox)
 static int g_wgz_rox, g_wroll_rox, g_wpitch_rox, g_wyaw_rox;
