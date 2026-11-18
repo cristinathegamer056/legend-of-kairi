@@ -116,6 +116,24 @@ that version, or unzip Savage Wind 0.6.0-alpha.6 over it again and run the insta
 - Synced: players, Drive Forms and effects, skateboards, ragdolls, shared enemy health and deaths, enemies moving and
   attacking the same.
 
+## Steam Deck / Linux
+
+A native Linux build (no Proton) is on the [0.2.1-alpha release](https://github.com/tvllerr/legend-of-kairi/releases/tag/v0.2.1-alpha):
+`Legend-of-Kairi-0.2.1-alpha-linux-x86_64.tar.gz`. Single player, Savage Wind 0.6.0-alpha.6.
+
+- **You need a Windows PC once:** this first Linux release does not build the mod's data on the Deck yet. Install the
+  same Legend of Kairi version on a Windows PC (Steam KH2, as above), then copy its `data` folder (about 3.1 GB) to the
+  Deck. You also need your own BotW 1.9.0 game files (a folder with `exefs/` and `romfs/`) on the Deck.
+- **Install (Desktop Mode):** unpack the `.tar.gz`, open a terminal in that folder and run `./install.sh`. It asks for
+  the BotW folder and the `data` folder, downloads the stock Savage Wind 0.6.0-alpha.6 AppImage (checked), sets the game
+  files up (10-20 minutes the first time) and checks every data file. It installs into `~/LegendOfKairi`.
+- **Steam:** Steam > Games > *Add a Non-Steam Game to My Library* > Browse > `~/LegendOfKairi/kairi.sh` (no Proton /
+  compatibility tool). Then play it from Game Mode. Always start it through Steam (a game started outside Steam gets no
+  controller input in Game Mode).
+- **Update:** run `~/LegendOfKairi/update.sh` (it checks the author's signature, keeps saves and settings).
+- Saves and settings: `~/LegendOfKairi/sw/save/` and `~/LegendOfKairi/sw/savagewind.ini`. Full steps: `README-DECK.md`
+  in the package.
+
 ## Troubleshooting
 
 - **Something wrong? Make a bug report:** close the game, double-click **Make bug report.bat** (next to the Play
@@ -134,6 +152,9 @@ that version, or unzip Savage Wind 0.6.0-alpha.6 over it again and run the insta
 ## Download check
 
 `Legend-of-Kairi-0.2.1-alpha.zip` sha256: `50c3677ef258869d7451f7498385b34034a973bbcd5f711274ac6897972adea6`
+
+`Legend-of-Kairi-0.2.1-alpha-linux-x86_64.tar.gz` (Steam Deck / Linux) sha256:
+`e4af99553e93c0193c43840f794c876b40e97ea755d918dbfb12b2605ff88e1d`
 
 `Legend-of-Kairi-0.1.4-alpha.zip` sha256: `e4ee7470e9e8cd7b444475c505ee268ddc6a4683450d5a702633d8732e0c7ba0`
 
