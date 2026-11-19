@@ -425,7 +425,7 @@ void Bake(string binPath, string hPath) {
 // ------------------------------------------------------------------------------------------- draw data (step 4)
 // sora_model.bin (little-endian), magic 'SKRG' v1. KH2 model space (cm, +x left, +y up, +z forward):
 //   header  u32 magic, version, n_bones, n_groups, n_tex, n_verts, n_infl, n_idx
-//   tex[]   u32 w, h, off (w x h RGBA8, alpha already 0..255), addr (TextureAddressMode as stored)
+//   tex[]   u32 w, h, off (w x h RGBA8, alpha already 0..255), addr (0, unused by the runtime; before s280 a .NET hash code of TextureAddressMode)
 //   group[] u32 tex, attrib (KH2 group bits: 0 alpha phase), first_idx, n_idx
 //   vert[]  u32 first_infl, n_infl, f32 u, v (texture units, 0..1 over the image)
 //   infl[]  u32 bone, f32 x, y, z, w (position in the bone's frame premultiplied by the weight: v = sum infl * M[bone])
@@ -801,7 +801,7 @@ void Model(string outPath) {
     for (int i = 0; i < texData.Count; i++) {
         var im = images[i];
         if (im == null) { var ok = ownTex[i]; w.Write((uint)ok.W); w.Write((uint)ok.H); w.Write((uint)o); w.Write(0u); o += texData[i].Length; continue; }  // (s214 ours: addr 0, the runtime samples with REPEAT anyway)
-        w.Write((uint)im.Size.Width); w.Write((uint)im.Size.Height); w.Write((uint)o); w.Write((uint)im.TextureAddressMode.GetHashCode());
+        w.Write((uint)im.Size.Width); w.Write((uint)im.Size.Height); w.Write((uint)o); w.Write(0u);  // (s280) addr = 0: was TextureAddressMode.GetHashCode() = a .NET object hash, other bytes on Linux; the runtime never reads it
         o += texData[i].Length;
     }
     foreach (var g in groups) { w.Write(g.tex); w.Write((uint)g.attr); w.Write((uint)g.fi); w.Write((uint)g.ni); }

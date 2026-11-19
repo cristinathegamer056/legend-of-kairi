@@ -4,7 +4,7 @@
 
 > [!WARNING]
 > **Early alpha:** bugs and crashes are likely. Back up your Savage Wind saves (`Savage Wind/save`) before you play.
-> **0.2.1-alpha plays on your own.** Co-op is in 0.1.4-alpha only for now (see [Which version do I need?](#which-version-do-i-need)).
+> **0.2.2-alpha plays on your own.** Co-op is in 0.1.4-alpha only for now (see [Which version do I need?](#which-version-do-i-need)).
 
 Play **The Legend of Zelda: Breath of the Wild** (on the [Savage Wind](https://github.com/Revivedx/SavageWindRecomp) PC
 recompilation) as **Sora from Kingdom Hearts II Final Mix**, with Roxas, Mickey, Donald and Goofy, KH2's combos,
@@ -51,10 +51,10 @@ magic, Drive Forms and summons, and KH2's own menus and HUD.
 
 | You want to | Legend of Kairi | Savage Wind |
 |---|---|---|
-| Play on your own (newest) | **0.2.1-alpha** | **0.6.0-alpha.6** (a 0.5.3-alpha.5 folder is upgraded for you) |
+| Play on your own (newest) | **0.2.2-alpha** | **0.6.0-alpha.6** (a 0.5.3-alpha.5 folder is upgraded for you) |
 | Play co-op with friends (up to 4) | **[0.1.4-alpha](https://github.com/tvllerr/legend-of-kairi/releases/tag/v0.1.4-alpha)** | **0.4.1-alpha.4** |
 
-Co-op is not in 0.2.1-alpha yet. Everybody in a co-op game needs the very same release, so co-op players stay on 0.1.4.
+Co-op is not in 0.2.2-alpha yet. Everybody in a co-op game needs the very same release, so co-op players stay on 0.1.4.
 
 ## Requirements
 
@@ -68,7 +68,7 @@ Co-op is not in 0.2.1-alpha yet. Everybody in a co-op game needs the very same r
 
 ## Install
 
-1. Download `Legend-of-Kairi-0.2.1-alpha.zip` from [Releases](https://github.com/tvllerr/legend-of-kairi/releases/latest).
+1. Download `Legend-of-Kairi-0.2.2-alpha.zip` from [Releases](https://github.com/tvllerr/legend-of-kairi/releases/latest).
 2. Right-click it > **Extract All...** into an empty folder (not inside the Savage Wind folder).
 3. Double-click **Install Legend of Kairi.cmd**.
 4. Click **Choose...** next to *Savage Wind folder* and pick the `Savage Wind` folder (the one with `extracted` inside).
@@ -78,8 +78,8 @@ Co-op is not in 0.2.1-alpha yet. Everybody in a co-op game needs the very same r
 **Updating:** double-click **Update Legend of Kairi.bat** in your install folder: it fetches the newest release, checks
 its signature and opens the installer on Update. Your saves are kept.
 
-The update from 0.2.0 to 0.2.1 leaves your Savage Wind folder as it is and builds Sora's data again from the start
-(about 15 minutes, like a new install: the installer's build tools changed). Let it finish: the game can not start
+The update from 0.2.1 or 0.2.0 to 0.2.2 leaves your Savage Wind folder as it is and builds Sora's data again from the
+start (about 15 minutes, like a new install: the installer's build tools changed). Let it finish: the game can not start
 until the update is done.
 
 The update from 0.1.10 is a big one: it brings your Savage Wind 0.5.3 folder up to 0.6.0-alpha.6 where it is
@@ -103,7 +103,7 @@ that version, or unzip Savage Wind 0.6.0-alpha.6 over it again and run the insta
 <img src="docs/sora_coop.gif" width="100%" alt="Co-op: one player's Sora in a blue outfit walks and swings, then the other player's Sora (from a Steam Deck, in another outfit) moves around next to him, each with Donald and Goofy">
 
 > [!NOTE]
-> Multiplayer is in **0.1.4-alpha** only (with Savage Wind 0.4.1-alpha.4); 0.2.1-alpha has no Multiplayer launcher.
+> Multiplayer is in **0.1.4-alpha** only (with Savage Wind 0.4.1-alpha.4); 0.2.2-alpha has no Multiplayer launcher.
 > Multiplayer works, but it is still glitchy and needs more development: enemy positions and copied enemy attacks can be
 > late or out of sync, and a hit may not land now and then. Please report what you see.
 
@@ -121,8 +121,9 @@ that version, or unzip Savage Wind 0.6.0-alpha.6 over it again and run the insta
 A native Linux build (no Proton) is on the [0.2.1-alpha release](https://github.com/tvllerr/legend-of-kairi/releases/tag/v0.2.1-alpha):
 `Legend-of-Kairi-0.2.1-alpha-linux-x86_64.tar.gz`. Single player, Savage Wind 0.6.0-alpha.6.
 
-- **You need a Windows PC once:** this first Linux release does not build the mod's data on the Deck yet. Install the
-  same Legend of Kairi version on a Windows PC (Steam KH2, as above), then copy its `data` folder (about 3.1 GB) to the
+- **You need a Windows PC once:** this first Linux release does not build the mod's data on the Deck yet. Install
+  Legend of Kairi **0.2.1-alpha** (the Windows zip on the 0.2.1-alpha release; 0.2.2's data does not fit it) on
+  a Windows PC (Steam KH2, as above), then copy its `data` folder (about 3.1 GB) to the
   Deck. You also need your own BotW 1.9.0 game files (a folder with `exefs/` and `romfs/`) on the Deck.
 - **Install (Desktop Mode):** unpack the `.tar.gz`, open a terminal in that folder and run `./install.sh`. It asks for
   the BotW folder and the `data` folder, downloads the stock Savage Wind 0.6.0-alpha.6 AppImage (checked), sets the game
@@ -146,10 +147,15 @@ A native Linux build (no Proton) is on the [0.2.1-alpha release](https://github.
 - **"files are incomplete" / "from another version" when starting:** run Install Legend of Kairi.cmd and choose Update.
 - **"your KH2 files differ from the Steam KH2 FM release"**: a KH2 mod is installed. Restore the original `.pkg` / `.hed`
   files or run Steam's *Verify integrity of game files*, then install again.
+- **0.2.1's install stopped at "Check every file"** with 53 model files listed (`forms/anti_model.bin`,
+  `chicken_model.bin`...): fixed in 0.2.2. Unzip 0.2.2 into a new empty folder and install from there (same Savage Wind
+  folder; saves are kept, they live in the Savage Wind folder).
 - **The install stopped:** the install window shows the step and has **Open logs**. Send the `work/logs` folder to tvllerr.
 - **The game misbehaves:** the game's log is in `logs/last.log` next to the launchers (the run before is `prev.log`).
 
 ## Download check
+
+`Legend-of-Kairi-0.2.2-alpha.zip` sha256: `984908a58e0f7d80851fa29514510cacb703ef4b9615781481b03fd4116cb078`
 
 `Legend-of-Kairi-0.2.1-alpha.zip` sha256: `50c3677ef258869d7451f7498385b34034a973bbcd5f711274ac6897972adea6`
 
