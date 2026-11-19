@@ -118,20 +118,24 @@ that version, or unzip Savage Wind 0.6.0-alpha.6 over it again and run the insta
 
 ## Steam Deck / Linux
 
-A native Linux build (no Proton) is on the [0.2.1-alpha release](https://github.com/tvllerr/legend-of-kairi/releases/tag/v0.2.1-alpha):
-`Legend-of-Kairi-0.2.1-alpha-linux-x86_64.tar.gz`. Single player, Savage Wind 0.6.0-alpha.6.
+A native Linux build is on the [0.2.2-alpha release](https://github.com/tvllerr/legend-of-kairi/releases/tag/v0.2.2-alpha):
+`Legend-of-Kairi-0.2.2-alpha-linux-x86_64.tar.gz`. Single player, Savage Wind 0.6.0-alpha.6. **No Windows PC needed:**
+it builds the mod's data on the Deck itself.
 
-- **You need a Windows PC once:** this first Linux release does not build the mod's data on the Deck yet. Install
-  Legend of Kairi **0.2.1-alpha** (the Windows zip on the 0.2.1-alpha release; 0.2.2's data does not fit it) on
-  a Windows PC (Steam KH2, as above), then copy its `data` folder (about 3.1 GB) to the
-  Deck. You also need your own BotW 1.9.0 game files (a folder with `exefs/` and `romfs/`) on the Deck.
-- **Install (Desktop Mode):** unpack the `.tar.gz`, open a terminal in that folder and run `./install.sh`. It asks for
-  the BotW folder and the `data` folder, downloads the stock Savage Wind 0.6.0-alpha.6 AppImage (checked), sets the game
-  files up (10-20 minutes the first time) and checks every data file. It installs into `~/LegendOfKairi`.
+- **You need:** your own BotW 1.9.0 game files (a folder with `exefs/` and `romfs/`), the Steam KINGDOM HEARTS HD
+  1.5+2.5 ReMIX on the Deck **unmodded** (a KH2 mod that changed the `kh2_*.pkg` files is refused; your KH2 folder is
+  only read), a Steam Proton (Proton 11.0: it runs one Windows tool of the data build, the game itself needs no Proton)
+  and about 30 GB free.
+- **Install (Desktop Mode):** unpack the `.tar.gz`, open a terminal in that folder and run `./install.sh`. It finds your
+  Steam KH2 and Proton, asks for the BotW folder, downloads the stock Savage Wind 0.6.0-alpha.6 AppImage (checked), sets
+  the game files up (10-20 minutes the first time), builds the mod's data (about 20-25 minutes: keep the Deck plugged
+  in) and checks every file. It installs into `~/LegendOfKairi`. Stopped half-way? Run it again: it goes on.
 - **Steam:** Steam > Games > *Add a Non-Steam Game to My Library* > Browse > `~/LegendOfKairi/kairi.sh` (no Proton /
   compatibility tool). Then play it from Game Mode. Always start it through Steam (a game started outside Steam gets no
   controller input in Game Mode).
-- **Update:** run `~/LegendOfKairi/update.sh` (it checks the author's signature, keeps saves and settings).
+- **Update (from Linux 0.2.1):** run `~/LegendOfKairi/update.sh` (it checks the author's signature, keeps saves and
+  settings, builds the new data; 0.2.1 keeps working until the new data is built and checked).
+- Built and checked on a Steam Deck; other Linux PCs are not proven yet.
 - Saves and settings: `~/LegendOfKairi/sw/save/` and `~/LegendOfKairi/sw/savagewind.ini`. Full steps: `README-DECK.md`
   in the package.
 
@@ -156,6 +160,9 @@ A native Linux build (no Proton) is on the [0.2.1-alpha release](https://github.
 ## Download check
 
 `Legend-of-Kairi-0.2.2-alpha.zip` sha256: `984908a58e0f7d80851fa29514510cacb703ef4b9615781481b03fd4116cb078`
+
+`Legend-of-Kairi-0.2.2-alpha-linux-x86_64.tar.gz` (Steam Deck / Linux) sha256:
+`71cbe8681d7ec350eb5fc8046243ba02ab1f48d04ab7b68a5ece0b05e9eccc95`
 
 `Legend-of-Kairi-0.2.1-alpha.zip` sha256: `50c3677ef258869d7451f7498385b34034a973bbcd5f711274ac6897972adea6`
 
