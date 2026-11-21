@@ -24,8 +24,8 @@
 // Ability field 0 (no Guard ability needed, unlike base Sora's entry); the block-hit is A321 (slot 168, atkp 162 0..40), both
 // in data/forms/limit_hits.bin. The other forms' Id 11: Valor B330 (a leaping slash), Anti F311 (a 12.5 m lunge), Wisdom /
 // Master / Final none - they keep no Guard. User report: "the only form that uses block is Limit" (and Limit could not).
-// Off by default until tested in game: SAVAGEWIND_SORA_GUARD_LIMIT=1 / live "set guardlimit 1".
-static int g_guard_limit = 0;
+// On by default (tested in game); SAVAGEWIND_SORA_GUARD_LIMIT=0 / live "set guardlimit 0" = no Guard in any Drive Form (as before).
+static int g_guard_limit = 1;
 static int g_guard_gate = 0;  // (s91 b5-abil) live "set guardgate 1": Guard needs the ability (id 82) equipped on the Abilities page, as in KH2; default OFF = always; debugall ON = counts as equipped (s91 review)
 static int g_guard = 1;  // live "set guard 0/1" (0 = old behaviour: Square always rolls)
 // (s88 review) live "set guardinv 0/1/2": what the 80 frames after a block swallow. 0 = nothing (only the guard window
