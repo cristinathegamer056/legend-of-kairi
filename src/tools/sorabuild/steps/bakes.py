@@ -95,6 +95,64 @@ def pymerge(ctx, kind, live, add, out):
     ctx.commit(out + ".tmp", out)
 
 
+# ---------------------------------------------------------------- KH2's own motion poses (config pose = kh2)
+# kh2mot.exe (tools/sorabuild/fxrec/fxrec_mot.c) runs the player's KH2 exe headless on Sora's P_EX100 model + motions and writes
+# work/kh2mot/P_EX100.skkm: the body bone matrices of every motion whose ConstraintActivations change a constraint (OpenKH's
+# Kh2AnimEmu ignores them; P_EX100: 18 of 89). sorabake (SORABAKE_KH2MOT) takes those motions' body poses from it for the pose
+# and hit bakes; every other motion stays the emulator's (byte-identical). pose = emu (default): nothing runs, no file.
+CLANG_DEFAULT = "C:/msys64/ucrt64/bin/clang.exe"
+
+
+def _kh2_obj(ctx, name):
+    for part in ("kh2_sixth", "kh2_first"):   # sorabake's ObjFile order
+        p = os.path.join(ctx.kh2, part, "original", "obj", name)
+        if os.path.isfile(p):
+            return p
+    raise SystemExit("[sorabuild] kh2mot: %s is not in the KH2 extract %s" % (name, ctx.kh2))
+
+
+def _kh2mot_tag(ctx):
+    if ctx.pose_mode == "emu":
+        return "emu"
+    return "kh2 src=%s exe=%s" % (sb.src_hash("kh2mot")[:16], ctx.cfg.get("kh2exe", ""))
+
+
+def kh2mot_env(ctx):
+    return {"SORABAKE_KH2MOT": ctx.workp("kh2mot/P_EX100.skkm")} if ctx.pose_mode == "kh2" else {}
+
+
+def _kh2mot(ctx):
+    marker, out = ctx.workp("kh2mot_mode.txt"), ctx.workp("kh2mot/P_EX100.skkm")
+    if ctx.pose_mode == "emu":
+        if os.path.exists(out):
+            os.remove(out)
+        open(marker, "w").write(_kh2mot_tag(ctx) + "\n")
+        return
+    kh2exe = ctx.cfg.get("kh2exe", "")
+    if not (kh2exe and os.path.isfile(kh2exe)):
+        raise SystemExit("[sorabuild] config pose = kh2 needs 'kh2exe' (the KH2 FM exe, Steam or Epic)")
+    d = ctx.workp("kh2mot/build/x")[:-2]
+    exe = os.path.join(d, "kh2mot.exe")
+    if not sb.take_kit_tool(ctx, "kh2mot", d):
+        clang = ctx.cfg.get("clang") or shutil.which("clang") or CLANG_DEFAULT
+        if not os.path.isfile(clang) and not shutil.which(clang):
+            raise SystemExit("[sorabuild] kh2mot needs clang (MSYS2 UCRT64: pacman -S mingw-w64-ucrt-x86_64-clang) - config 'clang'")
+        os.makedirs(d, exist_ok=True)
+        ctx.run(sb.kh2mot_cmd(clang, exe), env={"PATH": os.path.dirname(clang) + os.pathsep + os.environ.get("PATH", "")})
+    ctx.need(exe)
+    ctx.run([exe, kh2exe, _kh2_obj(ctx, "P_EX100.mdlx"), _kh2_obj(ctx, "P_EX100.mset"), out + ".tmp"])
+    ctx.need(out + ".tmp")
+    ctx.commit(out + ".tmp", out)
+    open(marker, "w").write(_kh2mot_tag(ctx) + "\n")
+
+
+def _kh2mot_stale(ctx):
+    try:
+        return open(ctx.workp("kh2mot_mode.txt")).read().strip() != _kh2mot_tag(ctx)
+    except OSError:
+        return True
+
+
 # ---------------------------------------------------------------- Sora (actor 0)
 SORA_ALT = {"SORABAKE_KB_ID": "1", "SORABAKE_MERGE": "1"}
 
@@ -107,14 +165,14 @@ def _sora_model(ctx):
 def _sora_base(ctx):
     d = wd(ctx, "sora_base")
     run_tool(ctx, "sorabake", "bake", [os.path.join(d, "motion.bin"), os.path.join(d, "params.h")])
-    run_tool(ctx, "sorabake", "pose", [os.path.join(d, "pose.bin")])
+    run_tool(ctx, "sorabake", "pose", [os.path.join(d, "pose.bin")], kh2mot_env(ctx))
 
 
 def _sora_hits(ctx):
     d = wd(ctx, "sora_hits")
     base, fb = os.path.join(d, "base.bin"), os.path.join(d, "fbody.bin")
-    run_tool(ctx, "sorabake", "hitbake", [base])
-    run_tool(ctx, "sorabake", "hitbake", [fb], {"SORABAKE_HIT_FBODY": "1"})
+    run_tool(ctx, "sorabake", "hitbake", [base], kh2mot_env(ctx))
+    run_tool(ctx, "sorabake", "hitbake", [fb], dict(kh2mot_env(ctx), SORABAKE_HIT_FBODY="1"))
     out = ctx.outp("sora_hits.bin")
     # s106: every slot of the base bake + slots 664 668 684 788 from the FBODY bake
     ctx.py(os.path.join(BK, "merge_hits.py"), base, fb, out + ".tmp")
@@ -484,8 +542,9 @@ STEPS = [
     Step("cs_build", _cs_build, work_outputs=["cs/%s/%s%s" % (t, t, sb.EXE) for t in
                                              ("sorabake", "partybake", "gobake", "skatebake")]),
     Step("sora_model", _sora_model, outputs=["sora_model.bin"], deps=["cs_build"]),
-    Step("sora_base", _sora_base, work_outputs=["bakes/sora_base/motion.bin", "bakes/sora_base/pose.bin"], deps=["cs_build"]),
-    Step("sora_hits", _sora_hits, outputs=["sora_hits.bin"], deps=["cs_build"]),
+    Step("kh2mot", _kh2mot, work_outputs=["kh2mot_mode.txt"]),
+    Step("sora_base", _sora_base, work_outputs=["bakes/sora_base/motion.bin", "bakes/sora_base/pose.bin"], deps=["cs_build", "kh2mot"]),
+    Step("sora_hits", _sora_hits, outputs=["sora_hits.bin"], deps=["cs_build", "kh2mot"]),
     Step("lim133", _lim133, work_outputs=["bakes/s133/%s_%s.bin" % (n, k) for n in ("sora", "goofy", "donald") for k in ("motion", "pose")],
          deps=["cs_build"]),
     Step("knock149", _knock149, work_outputs=["bakes/s149/%s_%s.bin" % (n, k) for n in ("sora", "goofy") for k in ("motion", "pose")],
@@ -519,3 +578,4 @@ STEPS = [
          deps=["cs_build"]),
     Step("form_final_s92", _final("s92"), outputs=["forms/final_%s.bin" % k for k in ("hits_r_s92", "hits_l_s92")], deps=["cs_build"]),
 ]
+next(st for st in STEPS if st.name == "kh2mot").stale = _kh2mot_stale   # (config pose / kh2mot sources / exe changed: re-run + its dependents)
