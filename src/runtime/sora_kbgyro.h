@@ -41,9 +41,9 @@ static int g_kg_on = 1, g_kg_sens = 100, g_kg_sensy = 100, g_kg_log = 1;
 // (a still pad still reads a little), so the right stick never turned the aim (user report; epictest log: the camera turned only
 // what the gyro asked, 0.7 / -5.2 deg). With this on, a frame whose right stick is past g_kg_dead % sends no gyro motion: BotW's
 // own stick camera turns the aim at its own speed; the gyro's samples of that frame are used up (no jump on letting go).
-// Off by default until tested in game: SAVAGEWIND_SORA_KBTHROW_STICK=1 / live "set kbthrowstick 1"; "set kbthrowstickdz <%>"
-// the stick's dead zone (GUESS 25).
-static int g_kg_stick = 0, g_kg_dead = 25;
+// On by default (tested in game); SAVAGEWIND_SORA_KBTHROW_STICK=0 / live "set kbthrowstick 0" = gyro only (as before);
+// "set kbthrowstickdz <%>" the stick's dead zone (GUESS 25).
+static int g_kg_stick = 1, g_kg_dead = 25;
 static struct {
     bool tried, was, warned;
     HostFn read;
