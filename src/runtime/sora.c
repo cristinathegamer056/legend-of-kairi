@@ -1551,6 +1551,7 @@ static volatile uint64_t g_script_base;  // the windows' frame 0: world entry (0
 static float g_live_stop = -1;           // live "set stop": SAVAGEWIND_SORA_ENEMY_STOP
 static int g_swim_ghost = 35;  // live "set ghost <alpha x100>": his body under the water while swimming (0 = off)
 static int g_puppet = 1, g_climb = 1, g_wstick = -1;  // live "set puppet / climb / wstick" (session 28: Link's own states)
+static int g_jumpclimb = 1;  // (jumpclimb, the climb try) live "set jumpclimb 0/1": no climb try while the jump winds up
 // s85f #1: a talk / pickup / scripted stretch (Link's state word 0 held, see sora frame): live "set evzero <n>" presents
 // of 0 in a row without screen 0x4a, "set evzero4a <n>" with it (0x4a = the message window, last/prev.log old man)
 static int g_ev_zero = 15, g_ev_zero4a = 4;
@@ -5473,6 +5474,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (party_set(key, v)) {}  // (s54 party3: party plog pray pfwd pslot pwarp pkdr plie pblow)
             else if (!strcmp(key, "climb")) g_climb = v != 0;
             else if (!strcmp(key, "gclimb")) g_gclimb = v != 0;
+            else if (!strcmp(key, "jumpclimb")) g_jumpclimb = v != 0, LOG("[sora] jumpclimb %d (%s)\n", g_jumpclimb, g_jumpclimb ? "no climb try in the jump wind-up" : "old: the wind-up may start a climb try");
             else if (!strcmp(key, "climbair")) g_climb_air_ok = v != 0, LOG("[sora] climbair %d (%s)\n", g_climb_air_ok, g_climb_air_ok ? "old: a climb try also in the air" : "no climb try in the air");
             else if (!strcmp(key, "glideclimb")) g_glideclimb = v < 0 ? 0 : v > 2 ? 2 : v;  // (s88 b3-climb)
             else if (!strcmp(key, "bdodge")) g_bdodge = v != 0, LOG("[sora] base Aerial Dodge (tap B) %s\n", g_bdodge ? "on" : "off (old: B in the air = glide only)");
@@ -7570,8 +7572,14 @@ static void sora_mod_frame_body(void) {
         last[0] = p[0], last[1] = p[2];
         // (s110, user: "every time I get on the skateboard and move around it pushes me off") riding: the board's slow start
         // under a pushed stick looked like a stopped push into a wall -> this climb try pulsed X = the board's Triangle = get off
+        // (jumpclimb) user: "stamina depletes drastically at random times when jumping moving forward, but not jumping while
+        // standing still". Log: every drain followed a "climb try (moved 0.000 ...)" right at a jump press: the jump's wind-up
+        // (S.takeoff > 0) holds Sora in place under the pushed stick = a stopped push = this try gave Link the pad (X pulse +
+        // the held B) and BotW's Link ran on stamina for seconds after. The wind-up is no push into a wall (wall_tick skips
+        // it too). On by default; live "set jumpclimb 0" = the old rule.
         bool stopped = g_climb && !SKT.riding && st == LINK_GROUND && !S.special && !S.air_frames && speed > 0 && mv < want / 3 &&
-                       S.act != ACT_GLIDE && S.act != ACT_GLIDE_HOVER;  // (the servo jump keeps the ground word)
+                       S.act != ACT_GLIDE && S.act != ACT_GLIDE_HOVER &&  // (the servo jump keeps the ground word)
+                       !(g_jumpclimb && S.takeoff > 0);
         // (s117, user: "glide, then fall -> an invisible paraglider opens by itself": log = after the glide's B let go the fall
         // still read BotW's ground word and Sora barely moved sideways -> this try gave Link the pad with CLIMB_X's X = BotW's
         // paraglider in the air. Now never while Sora's own ACTION is an air one; live "set climbair 1" = the old rule)
