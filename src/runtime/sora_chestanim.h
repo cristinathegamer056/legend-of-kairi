@@ -17,6 +17,7 @@
 #pragma once
 
 static int g_chestprev_last = 0, g_chestanim = 0;
+static int g_cxp_kb = 1;  // (chestkb) the Keyblade is drawn while the chest-open motion plays (live "set chestkb 0|1")
 static bool g_loading;  // (tentative: defined with the load latch below)
 static int g_cxp_cycle = 1, g_cxp_slot = 550, g_cxp_lead = 0, g_cxp_hold = 6000, g_cxp_drop = 8, g_cxp_fall = 900, g_cxp_n;
 static int g_cxp_reach = 300;  // (s108: chestreach <cm>, a TBox_* actor this near Link during the event = the start)
@@ -54,6 +55,7 @@ static bool cx_live_set(const char *key, int v) {
     else if (!strcmp(key, "chesthold")) g_cxp_hold = v < 0 ? 0 : v > 6000 ? 6000 : v, LOG("[chestanim] live chesthold %d ms\n", g_cxp_hold);
     else if (!strcmp(key, "chestdrop")) g_cxp_drop = v < 1 ? 1 : v > 60 ? 60 : v, LOG("[chestanim] live chestdrop %d cm\n", g_cxp_drop);
     else if (!strcmp(key, "chestreach")) g_cxp_reach = v < 50 ? 50 : v > 600 ? 600 : v, LOG("[chestanim] live chestreach %d cm\n", g_cxp_reach);
+    else if (!strcmp(key, "chestkb")) g_cxp_kb = v != 0, LOG("[chestanim] live chestkb %d (Keyblade %s during the chest motion)\n", g_cxp_kb, g_cxp_kb ? "shown" : "hidden");
     else if (!strcmp(key, "chestfall")) g_cxp_fall = v < 0 ? 0 : v, LOG("[chestanim] live chestfall %d ms (0 = no fallback)\n", g_cxp_fall);
     else return false;
     return true;

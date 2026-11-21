@@ -7403,7 +7403,9 @@ static void sora_mod_frame_body(void) {
                 S.face = face;
                 hp_apply(g_handpose == 2 || (g_handpose == 1 && (SK.on || carry_on())) || (g_thr_on && g_wthrow_fit && g_wpn_cur.def && !g_fmots_on));  // (s262: + the weapon throw's hold)  // (s102 handpose; s217: + carry mode, KH2 closed hands as with the bomb)
                 cxp_blend(g_rpose);  // (s107 b19-chest: KH2 chest motion over Link's pose)
-                if (!g_puppet_kb) keyblade_hide_rig(g_rpose, RIG_CUR), keyblade2_hide(g_rpose);  // (s110 roxpup: the rig in use)
+                // (chestkb) user: "can we use a specific animation where he uses his keyblade to unlock the chest?": the
+                // Keyblade stays drawn while the KH2 chest-open motion plays over the puppet (live "set chestkb 0" = hidden)
+                if (!g_puppet_kb && !(CP.on && g_cxp_kb)) keyblade_hide_rig(g_rpose, RIG_CUR), keyblade2_hide(g_rpose);  // (s110 roxpup: the rig in use)
                 bool gone = false;  // (s54: fully dissolved like BotW's Link at v = 1: not drawn)
                 if (sw == 0x1) {
                     float wv = g_wtsrc ? link_warp_value() : -1;
