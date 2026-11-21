@@ -1829,9 +1829,9 @@ static bool camp_live_set(const char *key, int v);
 // did nothing and wild horses could not be tamed (user report). While Link's state word (actor +0xcec) has bit 0x100000 = riding
 // (GUESS from the epictest logs: 0x100000 from the mount through the ride, left via 0x600002 / 0x100010; also seen on a Lynel's
 // back), L reaches BotW; the d-pad and ZL stay Sora's. Set per world frame by the tick (the state word is game-thread only).
-// Off by default until tested in game: SAVAGEWIND_SORA_RIDE_L1=1 / live "set ridel 1".
+// On by default (tested in game); SAVAGEWIND_SORA_RIDE_L1=0 / live "set ridel 0" = L1 always KH2's (as before).
 #define LINK_SW_RIDING 0x100000u
-static int g_ride_l = 0;
+static int g_ride_l = 1;
 static volatile int g_riding;  // (the tick: g_ride_l and Link riding now)
 static void pad_tap(uint64_t *b, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
     uint64_t now = vk_frame_counter();
