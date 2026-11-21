@@ -4441,12 +4441,17 @@ static bool rag_retarget(int slot, float clock, float face, float scale, bool lo
         if (!tried) tried = 1, gpos = (int (*)(const char *, float *))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_gear_pos");
         bool was = g_bt_hand;
         float tw[3], dd = -1;
-        g_bt_hand = false;
-        if (g_bowtorch && g_bow_on && gpos && gpos("Weapon_Sword_043", tw)) {
+        // (bowtorch flicker fix; user: "flickering with the torch back and forth to the bow"; log: 1248 switches, every "left" = -1 =
+        // the exe had no fresh position that frame, not a far one) a miss keeps the last answer for up to BT_MISS retargets (GUESS 20,
+        // about 1/3 s); only a torch SEEN away from the hand, the bow mode ending or a long miss takes it out of the hand.
+        enum { BT_MISS = 20 };
+        static int miss;
+        if (!g_bowtorch || !g_bow_on) g_bt_hand = false, miss = 0;
+        else if (gpos && gpos("Weapon_Sword_043", tw)) {
             const float *w50 = lb + 50 * 16 + 12;
             dd = sqrtf((tw[0] - w50[0]) * (tw[0] - w50[0]) + (tw[1] - w50[1]) * (tw[1] - w50[1]) + (tw[2] - w50[2]) * (tw[2] - w50[2]));
-            g_bt_hand = dd < g_bt_dist;
-        }
+            g_bt_hand = dd < g_bt_dist, miss = 0;
+        } else if (++miss > BT_MISS) g_bt_hand = false;
         if (g_bt_hand != was) LOG("[bowtorch] the torch %s Link's hand (%.2f u from Weapon_R)\n", g_bt_hand ? "is in" : "left", dd);
     }
     if (((g_thr_on && g_wthrow_fit) || g_bt_hand) && rg == &g_rig_sora && !form) {  // (bowtorch: + the torch in the bow mode)
