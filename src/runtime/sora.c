@@ -2314,8 +2314,8 @@ static float target_surface(const Target *e) {
 // + 50 m within +-60 deg (Angle 1.047) ahead; "ahead" = the camera's direction here (GUESS: the file says only
 // FromPlayer). Release = reach x 1.25 (KH2's 15 / 12: GUESS, BotW's release not traced). Anything else: 20 m.
 // BotW's other checks (on screen, line of sight, +-10 m height) are not done (KH2's search has none either).
-// Off by default (KH2's ranges) until tested in game: SAVAGEWIND_SORA_LOCK_BOTW=1 / live "set lockbotw 1".
-static int g_lock_botw = 0;
+// On by default (tested in game); SAVAGEWIND_SORA_LOCK_BOTW=0 / live "set lockbotw 0" = KH2's 12 m / 15 m for all.
+static int g_lock_botw = 1;
 static float lock_reach(const Target *e, bool release) {  // cm, surface distance
     if (!g_lock_botw) return release ? KH_LOCK_RELEASE : KH_LOCK_RANGE;
     static struct { uint64_t actor; float near_m, fan_m; } cache[32];
