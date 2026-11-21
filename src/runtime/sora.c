@@ -2003,7 +2003,7 @@ static void set_motion(int m) {
     }
 }
 
-static int g_air_ceil = 0;  // (airceil: see fall_motion; live "set airceil 1" / SAVAGEWIND_SORA_AIR_CEIL=1)
+static int g_air_ceil = 1;  // (airceil: see fall_motion; live "set airceil 0" / SAVAGEWIND_SORA_AIR_CEIL=0 = the old Fall)
 static int g_play_trig;  // (s88 review) sounds the last play()'s frame-0 triggers started (fm_drive's voice check)
 static void play(int m) {  // a cut to the motion's start, also when it is already playing (the next swing)
     S.motion = m, S.clock = 0, S.mot = mot_st(m), S.swing++;
@@ -6324,8 +6324,8 @@ static float g_fb_clock, g_fb_len;
 // ~10 KH frames) and near its top the requested rise per step is tiny, so BotW's body lag alone reads as a ceiling
 // (got < CeilingStop 0.49 of the request). In KH2 the ceiling -> Fall is the Jump ACTION's (the apex Fall here is also
 // Jump / Aerial Dodge only); that KH2's attack ACTIONs skip it is a GUESS, not checked in the KH2 exe.
-// Off by default until tested in game: SAVAGEWIND_SORA_AIR_CEIL=1 / live "set airceil 1" = no ceiling stop while an air
-// swing / cast plays (its arc and pose go on). The log line below shows each such stop either way.
+// On by default (tested in game): no ceiling stop while an air swing / cast plays (its arc and pose go on);
+// SAVAGEWIND_SORA_AIR_CEIL=0 / live "set airceil 0" = the old Fall. The log line below shows each such stop either way.
 static void fall_motion(float len) {
     if (S.motion == MOT_FALL) return;
     if (S.mot && S.motion >= 0 && len > 0)
