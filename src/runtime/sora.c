@@ -7196,6 +7196,10 @@ static void sora_mod_frame_body(void) {
             if (!ttried) ttried = 1, tshow = (void (*)(int, const char *, const char *, const float *))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_gear_show");
             static const float tzero[3];
             if (tshow) tshow(1, "Weapon_Sword_043", "", g_thr_delta_ok ? g_thr_delta : tzero);
+            static void (*lfx)(void);  // (linkfx: the torch's fire is Link's; hide him by his model only while the torch is out)
+            static int ltried;
+            if (!ltried) ltried = 1, lfx = (void (*)(void))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_link_fx");
+            if (lfx) lfx();
         } else if (bow || thr || hold) {
             static void (*show)(int, const char *, const char *, const float *);
             static int tried;

@@ -1465,8 +1465,9 @@ void linkpos_hide_link(bool on) { g_hide = on; }
 #define ACTOR_OPACITY_DIRTY 0x68e
 static volatile uint64_t g_opacity_hits, g_opacity_calls;  // (fix 2 below)
 
+static bool lfx_on(void);
 static void hide_frame(void) {
-    if (!g_hide || !servo_body()) return;
+    if (!g_hide || !servo_body() || lfx_on()) return;  // (linkfx: the opacity hook hides his model instead)
     *(float *)(uintptr_t)(g_servo_actor + ACTOR_FINAL_OPACITY) = 0;
     *(float *)(uintptr_t)(g_servo_actor + ACTOR_START_OPACITY) = 0;
     *(uint8_t *)(uintptr_t)(g_servo_actor + ACTOR_OPACITY_DIRTY) = 1;
@@ -3193,6 +3194,33 @@ static void slate_xlu_probe(Cpu *c, uint64_t a) {
             fn == lfn ? ", same" : ", OVERRIDDEN", linkpos_link_state_word());
     }
 }
+// (linkfx) The torch's fire is LINK's: with Link drawn (live showlink 1) the lit torch burns, with him hidden it does not
+// (user tests; the torch's own getFinalOpacity was 1.0 then, Link's 0.0). So while the DLL asks (linkpos_link_fx, each frame;
+// it lapses LFX_FRESH game frames after the last call) Link is hidden through his MODEL only: his opacity factors stay 1 (his
+// effects keep their alpha), BotW's applyOpacityIfDirty runs as is, then the ModelMgr apply (1.9.0 0x710124cd10, the call
+// inside it) again with alpha 0 - as BotW does for a hidden actor (dither when +0x524 bit 2 is clear). GUESS: his other
+// effects show too while this is on (the DLL asks only while the torch is in his hand).
+#define LFX_FRESH 6
+static volatile uint64_t g_lfx_frame;
+void linkpos_link_fx(void) { g_lfx_frame = g_vel_frame_id; }
+static bool lfx_on(void) { return g_lfx_frame && g_vel_frame_id - g_lfx_frame <= LFX_FRESH; }
+static bool link_model_hide(Cpu *c, uint64_t a) {  // (opacity hook, Link) false = not possible here, hide him the old way
+    if (!SS->model_alpha_apply || !SS->model_mgr_got) return false;
+    uint64_t model = *(const uint64_t *)(uintptr_t)(a + 0x4e0), got = SS->model_mgr_got;
+    uint64_t mgrp = *(const uint64_t *)(uintptr_t)got, mgr = in_guest(mgrp) ? *(const uint64_t *)(uintptr_t)mgrp : 0;
+    if (!in_guest(model) || !in_guest(mgr) || !dispatch_lookup(SS->model_alpha_apply)) return false;
+    *(float *)(uintptr_t)(a + ACTOR_FINAL_OPACITY) = 1;
+    *(float *)(uintptr_t)(a + ACTOR_START_OPACITY) = 1;
+    *(uint8_t *)(uintptr_t)(a + ACTOR_OPACITY_DIRTY) = 1;
+    g_opacity_apply(c);
+    Cpu save = *c;
+    c->x[0] = mgr, c->x[1] = model, c->x[2] = (*(const uint32_t *)(uintptr_t)(a + 0x524) & 2) == 0, c->v[0] = 0;
+    guest_call(c, SS->model_alpha_apply);
+    *c = save;
+    static int said;
+    if (!said++) LOG("[linkpos] linkfx: Link hidden through his model only (his effects keep their alpha), model %llx\n", (unsigned long long)model);
+    return true;
+}
 static void slate_xlu_force(Cpu *c, uint64_t a) {
     if (g_slate_xlu != 1 || !SS->model_alpha_apply || !SS->model_mgr_got) return;
     uint64_t model = *(const uint64_t *)(uintptr_t)(a + 0x4e0), got = SS->model_mgr_got;
@@ -3274,6 +3302,7 @@ static void opacity_apply(Cpu *c) {
     uint64_t a = c->x[0];
     if (in_guest(a)) enemy_note(a), break_note(a), tree_note(a), stasis_note(a), fire_note(a), tbox_note(a), show_name_log(a);
     if (g_hide && g_servo_actor && a == g_servo_actor) {
+        if (lfx_on() && link_model_hide(c, a)) return;  // (linkfx: the torch's fire is his)
         zero_opacity(a);
         if (g_opacity_hits++ == 0) LOG("[linkpos] opacity hook: hiding Link (actor %llx)\n", (unsigned long long)g_servo_actor);
     } else if (g_servo_actor && in_guest(a) && is_link_equip(a) && g_hide && !g_no_equip_hide) {
