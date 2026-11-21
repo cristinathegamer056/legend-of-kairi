@@ -245,9 +245,9 @@ enum { MOT_IDLE = 0, MOT_WALK = 1, MOT_RUN = 2, MOT_JUMP = 3, MOT_FALL = 4, MOT_
 // the prty jump height, and when the High Jump level (FUN_140401680) is above 0: that level's fmab height and motion 0xC9 = 201
 // (P_EX100 slot 806 B003, 64 GFR, takes off at GFR 4 like A003). Base Sora only here: Valor's own motion 3 already is B003, the
 // other forms have none. User report: High Jump works but Sora has no High Jump animation.
-// Off by default until tested in game: SAVAGEWIND_SORA_HJ_ANIM=1 / live "set hjanim 1".
+// On by default (tested in game); SAVAGEWIND_SORA_HJ_ANIM=0 / live "set hjanim 0" = the plain jump motion (as before).
 enum { MOT_HIGH_JUMP = 201 };
-static int g_hjanim = 0;
+static int g_hjanim = 1;
 // S32 glide port (recon/S32_glide_port_draft.c): KH2's ACTION 17 hover / 18 glide in Sora's own servo
 enum { ACT_IDLE, ACT_JUMP, ACT_GLIDE_HOVER = 17, ACT_GLIDE = 18 };  // KH2 registry ids (re:0x750D30), as in PHH
 #define ACT_AIR(a) ((a) == ACT_JUMP || (a) == ACT_GLIDE_HOVER || (a) == ACT_GLIDE)  // ACT_FLAGS bit 0
