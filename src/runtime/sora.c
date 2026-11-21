@@ -2227,13 +2227,13 @@ static float g_icon_range = 600;            // live "set iconr <cm>" (s47 user: 
 // AttClientList AttPos = a bone + offset per enemy type, e.g. Bokoblin Spine_1 + 0.75, Moblin / Lynel Spine_2 + 1.25,
 // Hinox Head, Guardian Root + 4.3) instead of 1 u above the feet (and, on big bodies, the aim point at Sora's height).
 // User report: "the lock on placement position for some enemies doesn't match how it is locked on in BotW".
-// 0 = old placement (default), 1 = BotW's marker: the attention point + the ModelList CursorOffsetY (Actor +0x490),
+// 0 = old placement, 1 (default) = BotW's marker: the attention point + the ModelList CursorOffsetY (Actor +0x490),
 // 2 = the attention point alone (for comparison). The "+ CursorOffsetY" is not traced in BotW's marker code; it is the
 // in-game match: the user compared both against BotW (1 "matches BotW better"; the point alone looked like the old
 // placement); log: Lynel chest +1.4 + 1.15 = icon 2.5 u, Hinox head +5.5 + 2.25 = 7.75 u above the feet.
 // SAVAGEWIND_SORA_LOCKPT=<0|1|2> / live "set lockpt <n>". An exe without the export, or a point farther than
 // LOCKPT_MAX_U from the enemy's feet (not a real attention point): the old placement.
-static int g_lockpt = 0;
+static int g_lockpt = 1;  // (on by default: tested in game, the user chose it)
 #define LOCKPT_MAX_U 30.0f
 typedef int (*AttPosFn)(uint64_t, float *, float *);
 static bool lockpt_icon(uint64_t actor, const float feet[3], float out[3]) {
