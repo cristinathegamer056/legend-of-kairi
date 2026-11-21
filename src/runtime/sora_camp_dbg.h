@@ -14,12 +14,12 @@
 // entry in each array (+ a value list below if it is not a toggle) + its place in CP_DB_ORD. Help lines show their first 23 chars (CsDesc.text).
 static const char *const CP_DB_NAME[CP_DB_ROWS] = { "Sora Level", "Unlock Keyblades", "Unlock Drive Forms", "Unlock Summons", "All Abilities", "God Mode", "No Clip",
     "Become Sora", "Outfit", "Auto Outfits", "Party 1", "Party 2", "Infinite Drive", "Drive Form", "Mickey Rescue", "Infinite MP",
-    "High Jump", "Aerial Dodge" };  // (dbgjump)
+    "High Jump", "Aerial Dodge", "Gyro Aim" };  // (dbgjump; dbggyro)
 static const char *const CP_DB_HELP[CP_DB_ROWS] = { "Left/Right: set level", "A or Left/Right: toggle", "A or Left/Right: toggle", "A or Left/Right: toggle", "A or Left/Right: toggle",
     "A or Left/Right: toggle", "Stick, B up, Y down", "Roxas turns into Sora now (Off: story)", "Halloween/Christmas Town, Space Paranoids, Timeless River",
     "Night: Halloween, cold: Christmas", "Left/Right: who stands in Donald's place (this session)", "Left/Right: who stands in Goofy's place (this session)",
     "Drive gauges stay full", "Form now; stays till Off", "Any Enemy, or Now", "MP never runs out",
-    "Base Sora: at least this LV", "Base Sora: at least this LV" };  // (dbgjump)
+    "Base Sora: at least this LV", "Base Sora: at least this LV", "Keyblade throw: gyro aims" };  // (dbgjump; dbggyro)
 #define CP_DB_VIS 7  // (s146) rows shown at once = the 7-row list the window was built for (s140); the list scrolls (p->db_top)
 #define CP_DB_OUTFITS 8  // (s146) Outfit row values: Normal, Halloween Town, Christmas Town, Space Paranoids, Timeless River; (s263) Roxas, Kairi, Green Tunic (= sora_outfit.h OF_N)
 static const char *const CP_DB_OUTFIT_TAG[CP_DB_OUTFITS] = { "Normal", "Halloween", "Christmas", "Paranoids", "Timeless", "Roxas", "Kairi", "Tunic" };  // (<= 9 chars: the tag column is as wide as "L+Triangle"; GUESS that fits)
