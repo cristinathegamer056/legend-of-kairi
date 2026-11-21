@@ -6878,6 +6878,8 @@ static void sora_mod_frame_body(void) {
         int lv = (int)env_f("SAVAGEWIND_SORA_GLIDE_LV", (float)g_glide_lv);
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
+        g_kg_stick = env_f("SAVAGEWIND_SORA_KBTHROW_STICK", (float)g_kg_stick) != 0;
+        if (g_kg_stick) LOG("[kbgyro] kbthrowstick on: the right stick aims the Keyblade throw too\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
         slog_open();
