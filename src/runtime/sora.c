@@ -542,8 +542,9 @@ static char g_thr_name[48];
 // With this on: while the Torch (Weapon_Sword_043) is equipped and the bow mode is on, the torch counts as IN HIS HAND when the exe
 // sees it within g_bt_dist u of Link's right weapon bone (Weapon_R, bone 50; linkpos_gear_pos); then the throw's hand fit runs
 // (palms onto Link's, closed fingers, the grip delta) and the exe draws only the torch, moved onto Sora's grip (lit when BotW lights
-// it); else the bow as before. Off by default until tested: SAVAGEWIND_SORA_BOW_TORCH=1 / live "set bowtorch 1"; "set bowtorchd <cm>".
-static int g_bowtorch = 0;
+// it); else the bow as before. Default ON (user tested in game: torch in hand, no flicker, lit with fire, bow unchanged);
+// SAVAGEWIND_SORA_BOW_TORCH=0 / live "set bowtorch 0" = off; "set bowtorchd <cm>".
+static int g_bowtorch = 1;
 static float g_bt_dist = 0.3f;
 static bool g_bt_hand;  // (rag_retarget: the torch is in Link's hand now)
 // (btvis) the lit torch still showed no fire with Link hidden by his model only (linkfx). GUESS: the fire follows Link's view mask
