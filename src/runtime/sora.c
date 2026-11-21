@@ -536,6 +536,16 @@ static bool g_thr_delta_ok;
 // points at Link). While this is set the exe is asked to draw gear of that name where BotW has it (linkpos_gear_show, the bow's
 // route), until a weapon of that name is equipped again (then it is the hand's) or a load.
 static char g_thr_name[48];
+// (bowtorch) the torch in the bow mode: holding R2 = the bow mode (Sora takes Link's pose, the exe draws only Link's BOW on Sora's
+// hand); X there makes Link take out his melee weapon - the Torch - and Square lights it at a fire, but the torch stayed hidden
+// (user report + epictest bowlog: Link's state word is 0x18000001 / 0x18000000 for the bow AND the torch, so it cannot tell).
+// With this on: while the Torch (Weapon_Sword_043) is equipped and the bow mode is on, the torch counts as IN HIS HAND when the exe
+// sees it within g_bt_dist u of Link's right weapon bone (Weapon_R, bone 50; linkpos_gear_pos); then the throw's hand fit runs
+// (palms onto Link's, closed fingers, the grip delta) and the exe draws only the torch, moved onto Sora's grip (lit when BotW lights
+// it); else the bow as before. Off by default until tested: SAVAGEWIND_SORA_BOW_TORCH=1 / live "set bowtorch 1"; "set bowtorchd <cm>".
+static int g_bowtorch = 0;
+static float g_bt_dist = 0.3f;
+static bool g_bt_hand;  // (rag_retarget: the torch is in Link's hand now)
 static int g_bowmimic = 1;   // (s250) live "set bowmimic 0 / 1": while ZR draws Link's bow, Sora takes Link's pose (default 1 since s251: the user verified it, "mimics links pose good")
 static int g_bowlog;         // (s250 diag) live "set bowlog 1": log Link's state word + the held buttons at each change
 static int g_rootyaw = 1;    // (s250: default ON, the user verified the finisher spin in game; set rootyaw 0 = off)
@@ -4425,7 +4435,21 @@ static bool rag_retarget(int slot, float clock, float face, float scale, bool lo
     //     the middle of that closed hand, still good here) - Link's Weapon_R (bone 50): the bow's route (linkpos_gear_show).
     // Live "set wthrowfit 0" = the s261 look.
     g_thr_delta_ok = false;
-    if (g_thr_on && g_wthrow_fit && rg == &g_rig_sora && !form) {
+    if (rg == &g_rig_sora && !form) {  // (bowtorch) is the torch in Link's right hand (Weapon_R, bone 50) now?
+        static int (*gpos)(const char *, float *);
+        static int tried;
+        if (!tried) tried = 1, gpos = (int (*)(const char *, float *))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_gear_pos");
+        bool was = g_bt_hand;
+        float tw[3], dd = -1;
+        g_bt_hand = false;
+        if (g_bowtorch && g_bow_on && gpos && gpos("Weapon_Sword_043", tw)) {
+            const float *w50 = lb + 50 * 16 + 12;
+            dd = sqrtf((tw[0] - w50[0]) * (tw[0] - w50[0]) + (tw[1] - w50[1]) * (tw[1] - w50[1]) + (tw[2] - w50[2]) * (tw[2] - w50[2]));
+            g_bt_hand = dd < g_bt_dist;
+        }
+        if (g_bt_hand != was) LOG("[bowtorch] the torch %s Link's hand (%.2f u from Weapon_R)\n", g_bt_hand ? "is in" : "left", dd);
+    }
+    if (((g_thr_on && g_wthrow_fit) || g_bt_hand) && rg == &g_rig_sora && !form) {  // (bowtorch: + the torch in the bow mode)
         static const struct { int sw, sm, si, sp, lw, lm, li, lp; } H[2] = {
             {SORA_J_WRIST_R, SORA_J_FINGER_MID_R, 185, 197, LINK_J_WRIST_R, LINK_J_FINGER_C_1_R, 38, 47},
             {SORA_J_WRIST_L, SORA_J_FINGER_MID_L, 93, 105, LINK_J_WRIST_L, LINK_J_FINGER_C_1_L, 14, 23}};
@@ -5492,6 +5516,8 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bigair")) g_big_air = v != 0, LOG("[sora] bigair %d\n", g_big_air);
             else if (!strcmp(key, "rootyaw")) g_rootyaw = v != 0, LOG("[sora] rootyaw %d: %s\n", g_rootyaw, g_rootyaw ? "the body + blade turn by KH2's root yaw curve (finishers spin)" : "root yaw not drawn (old)");  // (s247)
             else if (!strcmp(key, "bowlog")) g_bowlog = v != 0;  // (s250 diag)
+            else if (!strcmp(key, "bowtorch")) g_bowtorch = v != 0;  // (the torch in the bow mode, drawn on Sora's hand)
+            else if (!strcmp(key, "bowtorchd")) g_bt_dist = v / 100.0f;
             else if (!strcmp(key, "bowshow")) g_bowshow = v < 0 ? 0 : v > 2 ? 2 : v, LOG("[sora] bowshow %d: %s\n", g_bowshow, g_bowshow == 2 ? "Link's bow + arrows drawn during the bow mimic, moved onto Sora's left hand" : g_bowshow ? "Link's bow + arrows drawn during the bow mimic, where BotW holds them" : "off (bow + arrows hidden)");  // (s251)
             else if (!strcmp(key, "bowshowlog")) g_bowshowlog = v != 0;  // (s251 diag)
             else if (!strcmp(key, "wthrow")) g_wthrow = v != 0, LOG("[throw] wthrow %d: %s\n", g_wthrow, g_wthrow ? "hold R1 (+ Triangle) with a BotW weapon = Link's throw, Sora takes his pose" : "off (the old Triangle window only)");  // (s261)
@@ -6875,6 +6901,8 @@ static void sora_mod_frame_body(void) {
         int lv = (int)env_f("SAVAGEWIND_SORA_GLIDE_LV", (float)g_glide_lv);
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
+        g_bowtorch = env_f("SAVAGEWIND_SORA_BOW_TORCH", (float)g_bowtorch) != 0;
+        if (g_bowtorch) LOG("[bowtorch] on: the torch in the bow mode is drawn on Sora's hand\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
         slog_open();
@@ -7154,9 +7182,16 @@ static void sora_mod_frame_body(void) {
         }
     }
     {   // (s251 bowshow + s262 the thrown weapon) Link's gear the exe draws while this is called (it stops 6 game frames after the last call)
-        bool bow = g_bow_on && g_bowshow, thr = g_thr_name[0] && g_wthrow_show;
+        bool torch = g_bow_on && g_bt_hand;  // (bowtorch) the torch in Link's hand: drawn on Sora's grip, the bow (on his back) not
+        bool bow = g_bow_on && g_bowshow && !torch, thr = g_thr_name[0] && g_wthrow_show;
         bool hold = g_thr_on && g_wthrow_fit && g_wpn_cur.def && !g_fmots_on && !bow;  // (s262) still in his hand: BotW's place + the hand delta
-        if (bow || thr || hold) {
+        if (torch) {
+            static void (*tshow)(int, const char *, const char *, const float *);
+            static int ttried;
+            if (!ttried) ttried = 1, tshow = (void (*)(int, const char *, const char *, const float *))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_gear_show");
+            static const float tzero[3];
+            if (tshow) tshow(1, "Weapon_Sword_043", "", g_thr_delta_ok ? g_thr_delta : tzero);
+        } else if (bow || thr || hold) {
             static void (*show)(int, const char *, const char *, const float *);
             static int tried;
             if (!tried) {
@@ -7393,7 +7428,7 @@ static void sora_mod_frame_body(void) {
             if (puppet) {
                 if (!S.puppet) LOG("[sora] Link state %#x: Sora takes Link's pose (puppet)\n", sw);
                 S.face = face;
-                hp_apply(g_handpose == 2 || (g_handpose == 1 && (SK.on || carry_on())) || (g_thr_on && g_wthrow_fit && g_wpn_cur.def && !g_fmots_on));  // (s262: + the weapon throw's hold)  // (s102 handpose; s217: + carry mode, KH2 closed hands as with the bomb)
+                hp_apply(g_handpose == 2 || (g_handpose == 1 && (SK.on || carry_on())) || (g_thr_on && g_wthrow_fit && g_wpn_cur.def && !g_fmots_on) || g_bt_hand);  // (bowtorch: + the torch)  // (s262: + the weapon throw's hold)  // (s102 handpose; s217: + carry mode, KH2 closed hands as with the bomb)
                 cxp_blend(g_rpose);  // (s107 b19-chest: KH2 chest motion over Link's pose)
                 if (!g_puppet_kb) keyblade_hide_rig(g_rpose, RIG_CUR), keyblade2_hide(g_rpose);  // (s110 roxpup: the rig in use)
                 bool gone = false;  // (s54: fully dissolved like BotW's Link at v = 1: not drawn)

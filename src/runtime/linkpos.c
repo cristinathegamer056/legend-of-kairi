@@ -3241,6 +3241,32 @@ float linkpos_tbox_near(float pos[3], char *name, int n) {
     return d;
 }
 
+// (bowtorch) where each piece of Link's equipment is (world, its mMtx translation), noted from the opacity hook below
+#define GEARPOS_N 8
+static struct { char name[40]; float pos[3]; uint64_t fr; } g_gearpos[GEARPOS_N];
+static SRWLOCK g_gearpos_lock = SRWLOCK_INIT;
+static void gearpos_note(uint64_t a) {
+    const char *n = actor_name(a);
+    if (!n) return;
+    const float *m = (const float *)(uintptr_t)(a + ACTOR_MTX);
+    AcquireSRWLockExclusive(&g_gearpos_lock);
+    int i, old = 0;
+    for (i = 0; i < GEARPOS_N && strncmp(g_gearpos[i].name, n, sizeof g_gearpos[i].name - 1); i++)
+        if (g_gearpos[i].fr < g_gearpos[old].fr) old = i;
+    if (i == GEARPOS_N) i = old, snprintf(g_gearpos[i].name, sizeof g_gearpos[i].name, "%s", n);
+    g_gearpos[i].pos[0] = m[3], g_gearpos[i].pos[1] = m[7], g_gearpos[i].pos[2] = m[11], g_gearpos[i].fr = g_vel_frame_id;
+    ReleaseSRWLockExclusive(&g_gearpos_lock);
+}
+// the world position of Link's equipment piece <name> seen in the last 2 frames (1), else 0
+int linkpos_gear_pos(const char *name, float out[3]) {
+    int ok = 0;
+    AcquireSRWLockExclusive(&g_gearpos_lock);
+    for (int i = 0; i < GEARPOS_N && !ok; i++)
+        if (name && !strcmp(g_gearpos[i].name, name) && g_vel_frame_id - g_gearpos[i].fr <= 2) memcpy(out, g_gearpos[i].pos, 12), ok = 1;
+    ReleaseSRWLockExclusive(&g_gearpos_lock);
+    return ok;
+}
+
 static void cam_override_late(void);  // (s137 fps: the FPS camera's late rewrite, camera section below)
 static void opacity_apply(Cpu *c) {
     g_opacity_calls++;
@@ -3251,6 +3277,7 @@ static void opacity_apply(Cpu *c) {
         zero_opacity(a);
         if (g_opacity_hits++ == 0) LOG("[linkpos] opacity hook: hiding Link (actor %llx)\n", (unsigned long long)g_servo_actor);
     } else if (g_servo_actor && in_guest(a) && is_link_equip(a) && g_hide && !g_no_equip_hide) {
+        gearpos_note(a);  // (bowtorch: where it is, for linkpos_gear_pos)
         if (slate_hip_wanted(a)) {  // (s94 b8-slatehip)
             slate_hip_apply(a);
             slate_xlu_probe(c, a);  // (s108 slatexlu)
