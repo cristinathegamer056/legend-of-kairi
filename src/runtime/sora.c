@@ -546,6 +546,10 @@ static char g_thr_name[48];
 static int g_bowtorch = 0;
 static float g_bt_dist = 0.3f;
 static bool g_bt_hand;  // (rag_retarget: the torch is in Link's hand now)
+// (btvis) the lit torch still showed no fire with Link hidden by his model only (linkfx). GUESS: the fire follows Link's view mask
+// bit 0 (hide_link clears it; BotW copies Link's mask onto his gear, s113) as the Slate did. While the torch is in his hand that bit
+// stays on (his body stays invisible through opacity; his shadow may draw then). Live "set btvis 0" = the old hide.
+static int g_bt_vis = 1;
 static int g_bowmimic = 1;   // (s250) live "set bowmimic 0 / 1": while ZR draws Link's bow, Sora takes Link's pose (default 1 since s251: the user verified it, "mimics links pose good")
 static int g_bowlog;         // (s250 diag) live "set bowlog 1": log Link's state word + the held buttons at each change
 static int g_rootyaw = 1;    // (s250: default ON, the user verified the finisher spin in game; set rootyaw 0 = off)
@@ -4813,7 +4817,7 @@ static void hide_link(bool h) {
     uint64_t u[64];
     int n = link_units(u, 64);
     // (s128b) Link's BotW weapon in Sora's hand needs the same bit (BotW copies Link's mask onto it): wpnvis 0 = off (sword invisible)
-    bool keep0 = h && g_slvis && (g_sh_vis_now || (g_wpnvis && g_wpn_cur.def && !g_wpn_fake && !g_wpn_name_fn));  // (s128b exe: the sword's own units instead)
+    bool keep0 = h && g_slvis && (g_sh_vis_now || (g_wpnvis && g_wpn_cur.def && !g_wpn_fake && !g_wpn_name_fn) || (g_bt_vis && g_bowtorch && g_bow_on && g_bt_hand));  // (btvis: + the torch)  // (s128b exe: the sword's own units instead)
     for (int i = 0; i < n; i++) {
         volatile uint16_t *vis = (volatile uint16_t *)(uintptr_t)(u[i] + 0xc);
         *vis = h && !keep0 ? (uint16_t)(*vis & ~1u) : (uint16_t)(*vis | 1u);
@@ -5523,6 +5527,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bowlog")) g_bowlog = v != 0;  // (s250 diag)
             else if (!strcmp(key, "bowtorch")) g_bowtorch = v != 0;  // (the torch in the bow mode, drawn on Sora's hand)
             else if (!strcmp(key, "bowtorchd")) g_bt_dist = v / 100.0f;
+            else if (!strcmp(key, "btvis")) g_bt_vis = v != 0;  // (btvis: Link's view bit 0 kept while the torch is out)
             else if (!strcmp(key, "bowshow")) g_bowshow = v < 0 ? 0 : v > 2 ? 2 : v, LOG("[sora] bowshow %d: %s\n", g_bowshow, g_bowshow == 2 ? "Link's bow + arrows drawn during the bow mimic, moved onto Sora's left hand" : g_bowshow ? "Link's bow + arrows drawn during the bow mimic, where BotW holds them" : "off (bow + arrows hidden)");  // (s251)
             else if (!strcmp(key, "bowshowlog")) g_bowshowlog = v != 0;  // (s251 diag)
             else if (!strcmp(key, "wthrow")) g_wthrow = v != 0, LOG("[throw] wthrow %d: %s\n", g_wthrow, g_wthrow ? "hold R1 (+ Triangle) with a BotW weapon = Link's throw, Sora takes his pose" : "off (the old Triangle window only)");  // (s261)
