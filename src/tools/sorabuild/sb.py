@@ -114,8 +114,8 @@ def pick_kh2(cfg):
         r = subprocess.run([exe, img, KH2_LIST, dst], env=e, stdout=f, stderr=subprocess.STDOUT)
     logf = os.path.join(cfg["work"], "logs", "_kh2pick.log")
     if r.returncode == 1:  # kh2pick: 1 = a listed file is missing or its sha256 differs
-        raise SystemExit("[sorabuild] kh2pick: your KH2 files differ from the Steam KH2 FM release (modded or another version? "
-                         "a KH2 mod installed into the .pkg files changes them) - see %s" % logf)
+        raise SystemExit("[sorabuild] kh2pick: your KH2 files differ from the original KH2 FM release (Steam / Epic) (modded or "
+                         "another version? a KH2 mod installed into the .pkg files changes them) - see %s" % logf)
     if r.returncode:
         raise SystemExit("[sorabuild] kh2pick crashed (%d) - see %s" % (r.returncode, logf))
     open(mark, "w").write(tag + "\n")
