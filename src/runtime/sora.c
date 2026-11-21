@@ -6875,6 +6875,11 @@ static void sora_mod_frame_body(void) {
         int lv = (int)env_f("SAVAGEWIND_SORA_GLIDE_LV", (float)g_glide_lv);
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
+        {  // (chestwarp) the chest-open playback from the launcher too: SAVAGEWIND_SORA_CHEST_ANIM=1 (3 = + its recon log), as live "set chestanim"
+            int ca = (int)env_f("SAVAGEWIND_SORA_CHEST_ANIM", (float)g_chestanim);
+            g_chestanim = ca < 0 ? 0 : ca > 3 ? 3 : ca;
+            if (g_chestanim & 1) LOG("[chestanim] on from the launcher (chestanim %d): Sora's KH2 chest-open motion\n", g_chestanim);
+        }
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
         slog_open();
@@ -7309,8 +7314,11 @@ static void sora_mod_frame_body(void) {
     {   // (s107 b19-chest: set chestanim 1) the chest-open playback; the known events are excluded, see sora_chestanim.h
         uint32_t lo = sw_now & 0xffff;
         bool near_bed = hypotf(p[0] - BED_POS[0], p[2] - BED_POS[2]) <= (float)g_bed_r + 3.0f && fabsf(p[1] - BED_POS[1]) <= 6.0f;
-        bool known = dead || sw_now == 0x1 || lo == 0x2 || lo == 0x90 || lo == 0x8002 || wet || g_chev || g_wake_on || SK.on || g_frz_id >= 0 || g_msg_screen || near_bed;
-        cxp_tick(present, st, sw_now, known, p);
+        bool known = dead || lo == 0x2 || lo == 0x90 || lo == 0x8002 || wet || g_chev || g_wake_on || SK.on || g_frz_id >= 0 || g_msg_screen || near_bed;
+        // (chestwarp) user: "it looked like Link's animation": log = the playback started at the chest (TBox_Field_Wood 0.95 m,
+        // state 0) but ended 312 ms later as "event over", while BotW's chest sequence went on ~4 s in Link state 0x1 - the
+        // known 0x1 warp. 0x1 still keeps a playback from STARTING (the warp), but no longer ends one that is playing.
+        cxp_tick(present, st, sw_now, known || (sw_now == 0x1 && !CP.on), p);
     }
     sora_draw_ghost(wet ? g_swim_ghost / 100.0f : 0.0f);
     NET.wet = wet;  // (mp: SNAP flag NF_GHOST)
