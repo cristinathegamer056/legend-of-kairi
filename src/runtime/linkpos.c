@@ -3193,6 +3193,50 @@ static void slate_xlu_probe(Cpu *c, uint64_t a) {
             fn == lfn ? ", same" : ", OVERRIDDEN", linkpos_link_state_word());
     }
 }
+// (torchfx EXPERIMENT) user: the torch "lights" in Sora's hand but shows no fire. applyOpacityIfDirty (1.9.0 0x7101527108)
+// takes the alpha from the actor's VIRTUAL getFinalOpacity (+0x458) and hands it to another virtual (+0x1e8, x0 = actor,
+// s0 = alpha) after the model's ModelMgr apply. GUESS: that +0x1e8 call carries the alpha to the actor's effects (the
+// flame), and the torch's getFinalOpacity is ~0 (its holder Link is hidden). Mode 1 = log (change-only) what the torch's
+// getFinalOpacity returns + both slots + Link's; 2 = also call +0x1e8 again with 1.0 after BotW's apply. Live "set torchfx".
+static volatile int g_tfx;
+void linkpos_torch_fx(int m) { g_tfx = m; }
+static float tfx_final(Cpu *c, uint64_t a) {  // the actor's virtual getFinalOpacity, -1 = none
+    uint64_t vt = *(const uint64_t *)(uintptr_t)a, fn = in_guest(vt) ? *(const uint64_t *)(uintptr_t)(vt + 0x458) : 0;
+    if (!in_guest(fn) || !dispatch_lookup(fn)) return -1;
+    Cpu save = *c;
+    c->x[0] = a;
+    guest_call(c, fn);
+    float v = guest_float_ret(c);
+    *c = save;
+    return v;
+}
+static void torch_fx(Cpu *c, uint64_t a) {
+    if (!g_tfx) return;
+    const char *n = actor_name(a);
+    if (!n || strcmp(n, "Weapon_Sword_043")) return;
+    uint64_t vt = *(const uint64_t *)(uintptr_t)a;
+    uint64_t f61 = in_guest(vt) ? *(const uint64_t *)(uintptr_t)(vt + 0x1e8) : 0, f139 = in_guest(vt) ? *(const uint64_t *)(uintptr_t)(vt + 0x458) : 0;
+    float v = tfx_final(c, a);
+    static int q_last = -99, nlog;
+    int q = (int)(v * 20 + 0.5f);
+    if (q != q_last && nlog < 40) {
+        nlog++, q_last = q;
+        uint64_t l = g_servo_actor, lvt = l ? *(const uint64_t *)(uintptr_t)l : 0;
+        uint64_t l61 = in_guest(lvt) ? *(const uint64_t *)(uintptr_t)(lvt + 0x1e8) : 0;
+        LOG("[torchfx] torch %llx vtable %llx: getFinalOpacity %.3f (factors %.2f %.2f %.2f), +0x1e8 %llx, +0x458 %llx | Link vtable %llx +0x1e8 %llx, getFinalOpacity %.3f, mode %d\n",
+            (unsigned long long)a, (unsigned long long)vt, v, opac(a, ACTOR_OPACITY), opac(a, ACTOR_START_OPACITY), opac(a, ACTOR_FINAL_OPACITY), (unsigned long long)f61,
+            (unsigned long long)f139, (unsigned long long)lvt, (unsigned long long)l61, l ? tfx_final(c, l) : -1.0f, g_tfx);
+    }
+    if (g_tfx >= 2 && in_guest(f61) && dispatch_lookup(f61)) {
+        Cpu save = *c;
+        float one = 1.0f;
+        uint32_t ob;
+        memcpy(&ob, &one, 4);
+        c->x[0] = a, c->v[0] = ob;
+        guest_call(c, f61);
+        *c = save;
+    }
+}
 static void slate_xlu_force(Cpu *c, uint64_t a) {
     if (g_slate_xlu != 1 || !SS->model_alpha_apply || !SS->model_mgr_got) return;
     uint64_t model = *(const uint64_t *)(uintptr_t)(a + 0x4e0), got = SS->model_mgr_got;
@@ -3289,12 +3333,14 @@ static void opacity_apply(Cpu *c) {
             wpn_show(a);
             g_opacity_apply(c);
             slate_xlu_force(c, a);
+            torch_fx(c, a);  // (torchfx experiment)
             return;
         }
         if (show_equip_actor(a)) {  // (s251 bowshow) Link's bow while Sora mimics the shot: shown where BotW holds it, not parked
             wpn_show(a);
             g_opacity_apply(c);
             slate_xlu_force(c, a);
+            torch_fx(c, a);  // (torchfx experiment)
             return;
         }
         gear_note(a);  // (s114 gearpark)

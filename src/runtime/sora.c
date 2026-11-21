@@ -5523,6 +5523,11 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bowlog")) g_bowlog = v != 0;  // (s250 diag)
             else if (!strcmp(key, "bowtorch")) g_bowtorch = v != 0;  // (the torch in the bow mode, drawn on Sora's hand)
             else if (!strcmp(key, "bowtorchd")) g_bt_dist = v / 100.0f;
+            else if (!strcmp(key, "torchfx")) {  // (torchfx experiment, exe linkpos_torch_fx: 1 = log, 2 = + the torch's effect alpha 1)
+                void (*tf)(int) = (void (*)(int))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_torch_fx");
+                if (tf) tf((int)v);
+                LOG("[sora] live: torchfx %d%s\n", (int)v, tf ? "" : " (not in this exe)");
+            }
             else if (!strcmp(key, "bowshow")) g_bowshow = v < 0 ? 0 : v > 2 ? 2 : v, LOG("[sora] bowshow %d: %s\n", g_bowshow, g_bowshow == 2 ? "Link's bow + arrows drawn during the bow mimic, moved onto Sora's left hand" : g_bowshow ? "Link's bow + arrows drawn during the bow mimic, where BotW holds them" : "off (bow + arrows hidden)");  // (s251)
             else if (!strcmp(key, "bowshowlog")) g_bowshowlog = v != 0;  // (s251 diag)
             else if (!strcmp(key, "wthrow")) g_wthrow = v != 0, LOG("[throw] wthrow %d: %s\n", g_wthrow, g_wthrow ? "hold R1 (+ Triangle) with a BotW weapon = Link's throw, Sora takes his pose" : "off (the old Triangle window only)");  // (s261)
