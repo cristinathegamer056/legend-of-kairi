@@ -4110,9 +4110,10 @@ int linkpos_break_hit(uint64_t actor, int n) {
     return after;
 }
 
-// ---- (swhit EXPERIMENT) hit-switches: the Goron cannon lever (BotW AI SwitchHit; research D:/KairiWork/ghidra/botw_switchhit_notes.md).
-// SwitchHit's calc (0x7100a87910) takes "hit" from an attack contact OR *(actor+0x708)+0x1c > 0 (GUESS: an attack received).
-// linkpos_switch_hit writes v there for ONE frame (the old value goes back at the next linkpos frame) - the test of that guess.
+// ---- (swhit) hit-switches: the Goron cannon lever (BotW AI SwitchHit, headless Ghidra on 1.9.0).
+// SwitchHit's calc (0x7100a87910) takes "hit" from an attack contact OR *(actor+0x708)+0x1c > 0: a per-frame "attack received"
+// value (tested: BotW clears it by the next frame itself). linkpos_switch_hit writes v there for ONE frame; the next linkpos
+// frame puts the old value back only if it is still ours (in the test BotW had always cleared it already).
 #define SWHIT_MAX 8
 #define ACTOR_SWHIT_OBJ 0x708
 #define SWHIT_VAL 0x1c

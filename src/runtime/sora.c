@@ -890,11 +890,12 @@ static int brk_blade(const HitWin *win, const float prev[6], const float now[6],
     }
     return hits;
 }
-// (swhit EXPERIMENT) the Keyblade sweep vs BotW hit-switches (the Goron cannon lever): a hit asks the exe to set the switch's
-// "attack received" float (GUESS, linkpos_break.h) for one frame; BotW's own SwitchHit then flips it (or not: the test).
-// Off by default: SAVAGEWIND_SORA_SWHIT=1 / live "set swhit 1"; "set swhitv <x100>" the value (default 1.0),
-// "set swhitr <cm>" / "set swhith <cm>" the lever's cylinder (GUESS 80 / 300 cm).
-static int g_swhit = 0;
+// (swhit) the Keyblade sweep vs BotW hit-switches (the Goron cannon lever): a hit asks the exe to set the switch's "attack
+// received" float (linkpos_break.h) for one frame; BotW's own SwitchHit then flips it and the cannon turns. User report: the
+// Keyblade bounced off the lever (wall repel). Tested: 22 hits, the cannon turned, no repel off it.
+// On by default; SAVAGEWIND_SORA_SWHIT=0 / live "set swhit 0" = it bounces off as before. "set swhitv <x100>" the value
+// (default 1.0), "set swhitr <cm>" / "set swhith <cm>" the lever's cylinder (GUESS 80 / 300 cm; it connected in the test).
+static int g_swhit = 1;
 static float g_swhit_v = 1.0f, g_swhit_r = 0.8f, g_swhit_h = 3.0f;
 static int swh_blade(const HitWin *win, const float prev[6], const float now[6], float to_u) {
     static LinkposSwitchesFn list;
@@ -5469,7 +5470,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "firespkey")) g_fire_spk_y[1] = v / 100.0f;
             else if (!strcmp(key, "wofloor")) g_wo_floor_cm = (float)v;
             else if (!strcmp(key, "woguard")) g_wo_guard = v;
-            else if (!strcmp(key, "swhit")) g_swhit = v != 0;  // (the Keyblade flips the Goron cannon lever: experiment)
+            else if (!strcmp(key, "swhit")) g_swhit = v != 0;  // (the Keyblade flips the Goron cannon lever)
             else if (!strcmp(key, "swhitv")) g_swhit_v = v / 100.0f;
             else if (!strcmp(key, "swhitr")) g_swhit_r = v / 100.0f;
             else if (!strcmp(key, "swhith")) g_swhit_h = v / 100.0f;
