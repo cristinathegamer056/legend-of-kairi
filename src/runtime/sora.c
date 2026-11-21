@@ -2227,8 +2227,10 @@ static float g_icon_range = 600;            // live "set iconr <cm>" (s47 user: 
 // AttClientList AttPos = a bone + offset per enemy type, e.g. Bokoblin Spine_1 + 0.75, Moblin / Lynel Spine_2 + 1.25,
 // Hinox Head, Guardian Root + 4.3) instead of 1 u above the feet (and, on big bodies, the aim point at Sora's height).
 // User report: "the lock on placement position for some enemies doesn't match how it is locked on in BotW".
-// 0 = old placement (default until tested in game), 1 = the attention point, 2 = it + the ModelList CursorOffsetY
-// (Actor +0x490; whether BotW's marker adds it is not traced yet: GUESS, compare 1 / 2 in game).
+// 0 = old placement (default), 1 = BotW's marker: the attention point + the ModelList CursorOffsetY (Actor +0x490),
+// 2 = the attention point alone (for comparison). The "+ CursorOffsetY" is not traced in BotW's marker code; it is the
+// in-game match: the user compared both against BotW (1 "matches BotW better"; the point alone looked like the old
+// placement); log: Lynel chest +1.4 + 1.15 = icon 2.5 u, Hinox head +5.5 + 2.25 = 7.75 u above the feet.
 // SAVAGEWIND_SORA_LOCKPT=<0|1|2> / live "set lockpt <n>". An exe without the export, or a point farther than
 // LOCKPT_MAX_U from the enemy's feet (not a real attention point): the old placement.
 static int g_lockpt = 0;
@@ -2240,13 +2242,14 @@ static bool lockpt_icon(uint64_t actor, const float feet[3], float out[3]) {
     if (!g_lockpt) return false;
     if (!tried) {
         tried = 1, fn = (AttPosFn)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_enemy_attpos");
-        LOG("[sora] lockpt %d: %s\n", g_lockpt, fn ? "BotW's attention point (Actor +0x430)" : "NOT in this exe: old placement");
+        LOG("[sora] lockpt %d: %s\n", g_lockpt, !fn ? "NOT in this exe: old placement"
+            : g_lockpt == 1 ? "BotW's marker (attention point Actor +0x430 + CursorOffsetY)" : "the attention point alone (Actor +0x430)");
     }
     float a[3], cy = 0;
     if (!fn || !fn(actor, a, &cy)) return false;
     float dx = a[0] - feet[0], dy = a[1] - feet[1], dz = a[2] - feet[2];
     if (dx * dx + dy * dy + dz * dz > LOCKPT_MAX_U * LOCKPT_MAX_U) return false;
-    out[0] = a[0], out[1] = a[1] + (g_lockpt == 2 && cy > 0 && cy < 20 ? cy : 0), out[2] = a[2];
+    out[0] = a[0], out[1] = a[1] + (g_lockpt == 1 && cy > 0 && cy < 20 ? cy : 0), out[2] = a[2];
     static uint64_t last_actor;
     static ULONGLONG last_t;
     ULONGLONG now = GetTickCount64();
