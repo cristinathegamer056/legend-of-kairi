@@ -95,10 +95,12 @@ def pymerge(ctx, kind, live, add, out):
 
 
 # ---------------------------------------------------------------- KH2's own motion poses (config pose = kh2)
-# kh2mot.exe (tools/sorabuild/fxrec/fxrec_mot.c) runs the player's KH2 exe headless on Sora's P_EX100 model + motions and writes
-# work/kh2mot/P_EX100.skkm: the body bone matrices of every motion whose ConstraintActivations change a constraint (OpenKH's
-# Kh2AnimEmu ignores them; P_EX100: 18 of 89). sorabake (SORABAKE_KH2MOT) takes those motions' body poses from it for the pose
-# and hit bakes; every other motion stays the emulator's (byte-identical). pose = emu (default): nothing runs, no file.
+# kh2mot.exe (tools/sorabuild/fxrec/fxrec_mot.c) runs the player's KH2 exe headless on each body's model + motions (Sora P_EX100
+# and the Drive Forms' P_EX100_*) and writes work/kh2mot/<model>.skkm: the body bone matrices of every motion whose
+# ConstraintActivations change a constraint (OpenKH's Kh2AnimEmu ignores them; Sora 18 of 89, Valor 7, Wisdom 4, Limit 11,
+# Master 4, Final 3, Anti 0). sorabake (SORABAKE_KH2MOT) takes those motions' body poses from it for the pose and hit bakes;
+# every other motion stays the emulator's (byte-identical). pose = emu (default): nothing runs, no file.
+# Not covered: Final's "old" generation (SORABAKE_FPSFIX=0 frame counts), the carved team-Limit msets (partybake), Roxas, Mickey.
 CLANG_DEFAULT = "C:/msys64/ucrt64/bin/clang.exe"
 
 
@@ -116,15 +118,19 @@ def _kh2mot_tag(ctx):
     return "kh2 src=%s exe=%s" % (sb.src_hash("kh2mot")[:16], ctx.cfg.get("kh2exe", ""))
 
 
-def kh2mot_env(ctx):
-    return {"SORABAKE_KH2MOT": ctx.workp("kh2mot/P_EX100.skkm")} if ctx.pose_mode == "kh2" else {}
+KH2MOT_MODELS = ["P_EX100", "P_EX100_BTLF", "P_EX100_MAGF", "P_EX100_KH1F", "P_EX100_TRIF", "P_EX100_ULTF", "P_EX100_HTLF"]
+
+
+def kh2mot_env(ctx, model="P_EX100"):
+    return {"SORABAKE_KH2MOT": ctx.workp("kh2mot/%s.skkm" % model)} if ctx.pose_mode == "kh2" else {}
 
 
 def _kh2mot(ctx):
-    marker, out = ctx.workp("kh2mot_mode.txt"), ctx.workp("kh2mot/P_EX100.skkm")
+    marker = ctx.workp("kh2mot_mode.txt")
     if ctx.pose_mode == "emu":
-        if os.path.exists(out):
-            os.remove(out)
+        for m in KH2MOT_MODELS:
+            if os.path.exists(ctx.workp("kh2mot/%s.skkm" % m)):
+                os.remove(ctx.workp("kh2mot/%s.skkm" % m))
         open(marker, "w").write(_kh2mot_tag(ctx) + "\n")
         return
     kh2exe = ctx.cfg.get("kh2exe", "")
@@ -139,9 +145,11 @@ def _kh2mot(ctx):
         os.makedirs(d, exist_ok=True)
         ctx.run(sb.kh2mot_cmd(clang, exe), env={"PATH": os.path.dirname(clang) + os.pathsep + os.environ.get("PATH", "")})
     ctx.need(exe)
-    ctx.run([exe, kh2exe, _kh2_obj(ctx, "P_EX100.mdlx"), _kh2_obj(ctx, "P_EX100.mset"), out + ".tmp"])
-    ctx.need(out + ".tmp")
-    ctx.commit(out + ".tmp", out)
+    for m in KH2MOT_MODELS:
+        out = ctx.workp("kh2mot/%s.skkm" % m)
+        ctx.run([exe, kh2exe, _kh2_obj(ctx, m + ".mdlx"), _kh2_obj(ctx, m + ".mset"), out + ".tmp"])
+        ctx.need(out + ".tmp")
+        ctx.commit(out + ".tmp", out)
     open(marker, "w").write(_kh2mot_tag(ctx) + "\n")
 
 
@@ -347,15 +355,16 @@ def _form(f, hits):
         o = lambda k: ctx.outp("forms/%s_%s.bin" % (f, k))
         run_tool(ctx, "sorabake", "bake", [o("motion"), os.path.join(d, "params.h")], form_env(f))
         run_tool(ctx, "sorabake", "model", [o("model")], form_env(f, model=True, ctx=ctx))
-        run_tool(ctx, "sorabake", "pose", [o("pose")], form_env(f))
+        km = kh2mot_env(ctx, FORMS[f]["model"])   # (config pose = kh2) this body's constraint-switching motions from KH2's own code
+        run_tool(ctx, "sorabake", "pose", [o("pose")], dict(form_env(f), **km))
         if hits == "single":
             # limit: SORABAKE_HIT_BODY=1 also takes the body mset's own damaging windows (Zantetsuken K304, s89)
-            run_tool(ctx, "sorabake", "hitbake", [o("hits")], dict(form_env(f), SORABAKE_HIT_BODY="1"))
+            run_tool(ctx, "sorabake", "hitbake", [o("hits")], dict(form_env(f), SORABAKE_HIT_BODY="1", **km))
         elif hits == "lr":
-            run_tool(ctx, "sorabake", "hitbake", [o("hits_r")], form_env(f))
-            run_tool(ctx, "sorabake", "hitbake", [o("hits_l")], form_env(f, left=True))
+            run_tool(ctx, "sorabake", "hitbake", [o("hits_r")], dict(form_env(f), **km))
+            run_tool(ctx, "sorabake", "hitbake", [o("hits_l")], dict(form_env(f, left=True), **km))
         elif hits == "body":
-            run_tool(ctx, "sorabake", "bodyhits", [o("hits_r"), o("hits_l")], form_env(f))
+            run_tool(ctx, "sorabake", "bodyhits", [o("hits_r"), o("hits_l")], dict(form_env(f), **km))
     return run
 
 
@@ -513,16 +522,18 @@ def _final(part):
             run_tool(ctx, "sorabake", "hitbake", [o("hits_l")], dict(form_env("final", left=True), SORABAKE_FPSFIX="0"))
         elif part == "s91":
             new = form_env("final")
+            km = kh2mot_env(ctx, FORMS["final"]["model"])   # (config pose = kh2; not the "old" generation: its x2 frame counts)
             run_tool(ctx, "sorabake", "bake", [o("motion_s91"), os.path.join(d, "params_s91.h")], new)
-            run_tool(ctx, "sorabake", "pose", [o("pose_s91")], new)
-            run_tool(ctx, "sorabake", "hitbake", [o("hits_r_s91")], new)
-            run_tool(ctx, "sorabake", "hitbake", [o("hits_l_s91")], form_env("final", left=True))
+            run_tool(ctx, "sorabake", "pose", [o("pose_s91")], dict(new, **km))
+            run_tool(ctx, "sorabake", "hitbake", [o("hits_r_s91")], dict(new, **km))
+            run_tool(ctx, "sorabake", "hitbake", [o("hits_l_s91")], dict(form_env("final", left=True), **km))
         else:
             new = form_env("final")
+            km = kh2mot_env(ctx, FORMS["final"]["model"])
             k92 = {"SORABAKE_HIT_INTERVAL": "1", "SORABAKE_HIT_RADIUS": "1", "SORABAKE_HIT_FBODY": "1"}
-            run_tool(ctx, "sorabake", "hitbake", [o("hits_r_s92")], dict(new, **k92))
+            run_tool(ctx, "sorabake", "hitbake", [o("hits_r_s92")], dict(new, **k92, **km))
             k92l = {"SORABAKE_HIT_INTERVAL": "1", "SORABAKE_HIT_RADIUS": "1"}   # the left blade file has NO FBODY (the body windows live in the right file only)
-            run_tool(ctx, "sorabake", "hitbake", [o("hits_l_s92")], dict(form_env("final", left=True), **k92l))
+            run_tool(ctx, "sorabake", "hitbake", [o("hits_l_s92")], dict(form_env("final", left=True), **k92l, **km))
     return run
 
 
@@ -545,11 +556,11 @@ STEPS = [
          outputs=["party/goofy_%s.bin" % k for k in ("model", "hits", "motion", "pose", "weapon_flight")], deps=["cs_build", "lim133", "knock149"]),
 ] + [Step("party_" + n, _member(n), outputs=["party/%s_%s.bin" % (n, k) for k in ("model", "hits", "motion", "pose")], deps=["cs_build"])
      for n in MEMBERS] + [
-    Step("form_valor", _form("valor", "lr"), outputs=form_outputs("valor", "lr"), deps=["cs_build"]),
-    Step("form_wisdom", _form("wisdom", None), outputs=form_outputs("wisdom", None), deps=["cs_build"]),
-    Step("form_limit", _form("limit", "single"), outputs=form_outputs("limit", "single"), deps=["cs_build"]),
-    Step("form_master", _form("master", "lr"), outputs=form_outputs("master", "lr"), deps=["cs_build"]),
-    Step("form_anti", _form("anti", "body"), outputs=form_outputs("anti", "body"), deps=["cs_build"]),
+    Step("form_valor", _form("valor", "lr"), outputs=form_outputs("valor", "lr"), deps=["cs_build", "kh2mot"]),
+    Step("form_wisdom", _form("wisdom", None), outputs=form_outputs("wisdom", None), deps=["cs_build", "kh2mot"]),
+    Step("form_limit", _form("limit", "single"), outputs=form_outputs("limit", "single"), deps=["cs_build", "kh2mot"]),
+    Step("form_master", _form("master", "lr"), outputs=form_outputs("master", "lr"), deps=["cs_build", "kh2mot"]),
+    Step("form_anti", _form("anti", "body"), outputs=form_outputs("anti", "body"), deps=["cs_build", "kh2mot"]),
     Step("form_roxas", _generic("roxas", ROXAS), outputs=["forms/roxas_%s.bin" % k for k in ("model", "pose", "motion", "hits")], deps=["cs_build"]),
     Step("form_mickey", _generic("mickey", MICKEY), outputs=["forms/mickey_%s.bin" % k for k in ("model", "pose", "motion", "hits")], deps=["cs_build"]),
     Step("gameover", _gameover, outputs=["gameover_pose.bin"], deps=["cs_build"]),
@@ -562,7 +573,7 @@ STEPS = [
     Step("form_final", _final("old"), outputs=["forms/final_%s.bin" % k for k in ("model", "motion", "pose", "hits_r", "hits_l")],
          deps=["cs_build"]),
     Step("form_final_s91", _final("s91"), outputs=["forms/final_%s.bin" % k for k in ("motion_s91", "pose_s91", "hits_r_s91", "hits_l_s91")],
-         deps=["cs_build"]),
-    Step("form_final_s92", _final("s92"), outputs=["forms/final_%s.bin" % k for k in ("hits_r_s92", "hits_l_s92")], deps=["cs_build"]),
+         deps=["cs_build", "kh2mot"]),
+    Step("form_final_s92", _final("s92"), outputs=["forms/final_%s.bin" % k for k in ("hits_r_s92", "hits_l_s92")], deps=["cs_build", "kh2mot"]),
 ]
 next(st for st in STEPS if st.name == "kh2mot").stale = _kh2mot_stale   # (config pose / kh2mot sources / exe changed: re-run + its dependents)
