@@ -548,7 +548,9 @@ static float g_bt_dist = 0.3f;
 static bool g_bt_hand;  // (rag_retarget: the torch is in Link's hand now)
 // (btvis) the lit torch still showed no fire with Link hidden by his model only (linkfx). GUESS: the fire follows Link's view mask
 // bit 0 (hide_link clears it; BotW copies Link's mask onto his gear, s113) as the Slate did. While the torch is in his hand that bit
-// stays on (his body stays invisible through opacity; his shadow may draw then). Live "set btvis 0" = the old hide.
+// stays on (his body stays invisible through opacity). User tests: the fire shows with it; Link's SHADOW draws then, and nothing
+// tried removed it but not the fire (mDepthShadowCascade 0; his model has ONE unit; mAttributeFlags values) - the user keeps it.
+// Live "set btvis 0" = the old hide.
 static int g_bt_vis = 1;
 static int g_bowmimic = 1;   // (s250) live "set bowmimic 0 / 1": while ZR draws Link's bow, Sora takes Link's pose (default 1 since s251: the user verified it, "mimics links pose good")
 static int g_bowlog;         // (s250 diag) live "set bowlog 1": log Link's state word + the held buttons at each change
