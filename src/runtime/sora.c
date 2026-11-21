@@ -553,6 +553,10 @@ static bool g_bt_hand;  // (rag_retarget: the torch is in Link's hand now)
 // tried removed it but not the fire (mDepthShadowCascade 0; his model has ONE unit; mAttributeFlags values) - the user keeps it.
 // Live "set btvis 0" = the old hide.
 static int g_bt_vis = 1;
+// (btjump) user: with the torch out in the bow mode Triangle did not jump. The bow mode turns Triangle into BotW's A (s251: no
+// hop on Triangle + R1). With this on, while the torch is in Link's hand Triangle reaches BotW as its X = Link's jump, unless R1
+// is held (the s251 case). Off by default until tested: SAVAGEWIND_SORA_BT_JUMP=1 / live "set btjump 1".
+static int g_bt_jump = 0;
 static int g_bowmimic = 1;   // (s250) live "set bowmimic 0 / 1": while ZR draws Link's bow, Sora takes Link's pose (default 1 since s251: the user verified it, "mimics links pose good")
 static int g_bowlog;         // (s250 diag) live "set bowlog 1": log Link's state word + the held buttons at each change
 static int g_rootyaw = 1;    // (s250: default ON, the user verified the finisher spin in game; set rootyaw 0 = off)
@@ -1909,6 +1913,7 @@ static void pad_tap(uint64_t *b, int32_t *lx, int32_t *ly, int32_t *rx, int32_t 
     // (s251 user: with bowmimic "when i press triangle+r1 he does a little hop before": the mimic hands the pad to Link, so his
     // Triangle = Switch X reached BotW as Link's jump [last60.log: state 0x18000002 right after held 0x204]. While the mimic is on
     // Triangle keeps the rule it has while Sora drives, as before s250)
+    else if (g_bt_jump && g_bow_on && g_bt_hand && raw_x && !(*b & BTN_THROW)) {}  // (btjump: the torch is out, Triangle = BotW's jump)
     else if (g_tri_pickup && raw_x && (!g_link_owns || g_bow_on) && !CLIMB_X(now)) *b = (*b & ~BTN_CLIMB) | BTN_ATTACK;
     bool gcl_menu = *(volatile uint32_t *)(uintptr_t)PAUSE_STATE != 0;  // (s88 review: no stick / X / B into a menu)
     if (g_climb_air && now < g_climb_until) {
@@ -5530,6 +5535,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bowlog")) g_bowlog = v != 0;  // (s250 diag)
             else if (!strcmp(key, "bowtorch")) g_bowtorch = v != 0;  // (the torch in the bow mode, drawn on Sora's hand)
             else if (!strcmp(key, "bowtorchd")) g_bt_dist = v / 100.0f;
+            else if (!strcmp(key, "btjump")) g_bt_jump = v != 0, LOG("[sora] live: btjump %d\n", g_bt_jump);  // (btjump)
             else if (!strcmp(key, "btvis")) g_bt_vis = v != 0;  // (btvis: Link's view bit 0 kept while the torch is out)
             else if (!strcmp(key, "bowshow")) g_bowshow = v < 0 ? 0 : v > 2 ? 2 : v, LOG("[sora] bowshow %d: %s\n", g_bowshow, g_bowshow == 2 ? "Link's bow + arrows drawn during the bow mimic, moved onto Sora's left hand" : g_bowshow ? "Link's bow + arrows drawn during the bow mimic, where BotW holds them" : "off (bow + arrows hidden)");  // (s251)
             else if (!strcmp(key, "bowshowlog")) g_bowshowlog = v != 0;  // (s251 diag)
@@ -6915,6 +6921,8 @@ static void sora_mod_frame_body(void) {
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
         g_bowtorch = env_f("SAVAGEWIND_SORA_BOW_TORCH", (float)g_bowtorch) != 0;
+        g_bt_jump = env_f("SAVAGEWIND_SORA_BT_JUMP", (float)g_bt_jump) != 0;
+        if (g_bt_jump) LOG("[bowtorch] btjump on: Triangle = Link's jump while the torch is out\n");
         if (g_bowtorch) LOG("[bowtorch] on: the torch in the bow mode is drawn on Sora's hand\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
