@@ -393,6 +393,7 @@ static void mk_dchg_loop(void);  // (s110m review: the held D-Charge's loop, bef
 // table, the game emits them on its contact system actor.) SAVAGEWIND_SORA_WATER_SPLASH=1 / live "set watersplash 0/1";
 // default 0.
 static int g_watersplash;
+static int g_splash_walk = 45, g_splash_run = 60;  // (contact speed x10)
 static int g_botwsteps = 1;       // (kh2steps, see g_stepdiag) BotW surface footsteps on (tested in game: on by default)
 static int g_stepgain = 100;      // their gain x100
 static const char *g_step_bank;   // this frame's surface bank (NULL = none / KH2)
@@ -5575,6 +5576,8 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
             else if (!strcmp(key, "stepdiag")) g_stepdiag = v != 0, LOG("[steps] stepdiag %d\n", g_stepdiag);  // (kh2steps diag)
+            else if (!strcmp(key, "splashwalk")) g_splash_walk = v < 1 ? 1 : v, LOG("[splash] walk speed %d\n", g_splash_walk);
+            else if (!strcmp(key, "splashrun")) g_splash_run = v < 1 ? 1 : v, LOG("[splash] run speed %d\n", g_splash_run);
             else if (!strcmp(key, "watersplash")) g_watersplash = v != 0, LOG("[splash] watersplash %d\n", g_watersplash);  // (watersplash)
             else if (!strcmp(key, "botwsteps")) g_botwsteps = v != 0, LOG("[steps] botwsteps %d\n", g_botwsteps);  // (kh2steps)
             else if (!strcmp(key, "stepgain")) g_stepgain = v < 0 ? 0 : v > 400 ? 400 : v, LOG("[steps] stepgain %d\n", g_stepgain);
@@ -7420,10 +7423,14 @@ static void sora_mod_frame_body(void) {
                 uint32_t m = 8;  // (material Water, sub 0: the floor ray sees the riverbed)
                 if (wd <= 0.02f) wd = 0.05f;  // (a wet floor: a thin film)
                 float at[3] = {lp[0], lp[1] + (wet && wd <= 0.05f ? 0.0f : wd), lp[2]};  // (on the water surface)
-                float speed = lr && lr() ? 5.0f : 2.5f;  // (a run step = a stronger contact)
+                bool run = lr && lr();
+                // (test 5: splashes only sometimes on Zora's Domain's wet floor although every step was played: GUESS the walk
+                // contact speed 2.5 was under the effect's threshold) live "set splashwalk / splashrun <x10>" (45 / 60)
+                float speed = (run ? g_splash_run : g_splash_walk) / 10.0f;
                 bool ok = ff(at, speed, m, wd);
-                if (logged < 6) logged++, LOG("[splash] step in water (depth %.2f, floor %#x): %s\n", wd, m,
-                                               ok ? "foot effect played" : "the game's contact effects refused");
+                if (logged < 400) logged++, LOG("[splash] %s step in water (depth %.2f, floor %s, speed %.1f): %s\n",
+                                                 run ? "run" : "walk", wd, wet ? "wet" : "wading", speed,
+                                                 ok ? "foot effect played" : "the game's contact effects refused");
             }
         }
     }
