@@ -6557,7 +6557,10 @@ static void ffin_set(int on) {  // (s92) Final's hit bakes _s91 / _s92, live (hi
 #define HOLD_OFF_N 10  // frames with the slot empty before the hold ends
 // (sora_carry.h: "an unrelated +0x88 never starts or keeps carry mode": the slot can hold other things) Only inventory materials
 // count: Item_* (fruit, mushrooms, meat, fish, ore, monster parts ...) and Animal_Insect_* (bugs, lizards). GUESS list.
-static bool hold_name_ok(const char *n) { return !strncmp(n, "Item_", 5) || !strncmp(n, "Animal_Insect_", 14); }
+// (holdinv test 1, F5 mark 084532: holding an ingredient, "Put away / Drop" up) the slot held "CarryBox" (1.33 u away): BotW's
+// container for the items held from the inventory. It counts; the items in it are drawn by name prefix (HOLD_SHOW).
+static bool hold_name_ok(const char *n) { return !strcmp(n, "CarryBox") || !strncmp(n, "Item_", 5) || !strncmp(n, "Animal_Insect_", 14); }
+#define HOLD_SHOW "CarryBox;Item_;Animal_Insect_"  // (gear_show bit 1: near Link and not his gear; GUESS: the held items' names)
 static int hold_tick(uint64_t present, int st, uint32_t sw, bool dead) {
     static uint64_t last_raw, held;
     static int off_n;
@@ -6590,7 +6593,7 @@ static int hold_tick(uint64_t present, int st, uint32_t sw, bool dead) {
     static int tried;
     if (!tried) tried = 1, show = (void (*)(int, const char *, const char *, const float *))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_gear_show");
     static const float zero[3];
-    if (show && name[0] && strcmp(name, "?")) show(2 | 4, "", name, zero);
+    if (show) show(2 | 4, "", HOLD_SHOW, zero);  // (bit 2: the names near Link logged once per switch-on)
     return LINK_OTHER;
 }
 #include "sora_roxsfx.h"  // (s110 roxsfx: Roxas sounds + fx)
