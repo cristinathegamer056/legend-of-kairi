@@ -219,6 +219,7 @@ static int g_kbfield = 1;
 #define BTN_L3 (1ull << 4)  // Switch LSTICK (script_parse names[] order)
 static int g_kbtoggle = 1;
 static bool g_kb_drawn;
+static int g_kbdrawfx, g_kbdfx_last = -1;  // (kbdrawfx: the option, the last drive-path Keyblade hidden state; see kbdfx_tick)
 static void kbf_set(bool hide) {
     static int last_body = -1, last_hide = -1;
     int body = sora_draw_body();
@@ -5578,6 +5579,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 3400.0f;  // (an enemy within this = a fight; user: 34 m, was 15, then 20, 30)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "kbdrawfx")) g_kbdrawfx = v < 0 ? 0 : v > 2 ? 2 : v, LOG("[sora] kbdrawfx %d (%s)\n", g_kbdrawfx, g_kbdrawfx == 1 ? "flash on draw + sheathe" : g_kbdrawfx == 2 ? "flash on draw only" : "off");  // (kbdrawfx)
             else if (!strcmp(key, "kbtoggle")) g_kbtoggle = v != 0, g_kb_drawn = g_kb_drawn && g_kbtoggle, LOG("[sora] kbtoggle %d (%s)\n", g_kbtoggle, g_kbtoggle ? "L3 draws / puts away the Keyblade" : "L3 is BotW's");  // (kbtoggle)
             else if (!strcmp(key, "kbfield")) g_kbfield = v != 0, LOG("[sora] kbfield %d (%s)\n", g_kbfield, g_kbfield ? "no Keyblade in the field motions" : "Keyblade always in his hand");  // (kbfield)
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
@@ -6251,6 +6253,40 @@ static void glide_pose_draw(int from_motion, float from_clock, float face, float
 // variant blends in over KH_LOOP_BLEND (GUESS: KH2's idle / walk / run blend, the s64 drawer), walk / run keeping the cycle's
 // phase; in a swing / the air nothing changes until the next idle / walk / run (set_motion picks the variant).
 // Live: set bstance 0 / 1, set bstancecm <cm>, set bstancehold <tenths of a second>, set bstancelog 0 / 1.
+// (kbdrawfx) user: "Could I add draw and sheathe effects". KH2's own Keyblade appear flash = fx.bin "keyblade_appear" (tools/
+// fxbake.py: W_EX010 element 0, KH2 re:0x3EFA60; baked since s35, never spawned before). Spawned whenever the Keyblade's
+// visibility flips while Sora drives (kbfield / kbtoggle / the battle stance): shown = draw, hidden = sheathe (the same flash on
+// the sheathe is a GUESS: KH2's rule there not traced). At the middle of the Keyblade bones (228..239) of the pose playing, then
+// moved with it while it lives. Not in Link's own states (climb, swim: the puppet path resets the edge), not for guests / forms.
+// No sound: no KH2 draw sound is in the extracted tables. SAVAGEWIND_SORA_KB_DRAWFX=1 / live "set kbdrawfx 0/1/2" (2 = draw only);
+// default 0. Log '[sora] kbdrawfx: ...' with the flash's height above his feet (checks the bone space).
+static int g_kbdfx_h = -1, g_kbdfx_left;  // (g_kbdrawfx, g_kbdfx_last: next to g_kbtoggle)
+static bool kbdfx_blade_mid(float to_u, float out[3], float *h_cm) {
+    static float b[POSE_BUF_BONES * 12];
+    float lm[12];
+    int nb = sora_draw_bone_count();
+    if (!S.mot || IN_GUEST || g_fmots_on || nb < SORA_RAG_BONES || nb > POSE_BUF_BONES || !linkpos_link_mtx(lm) ||
+        !sora_draw_slot_pose(S.mot->slot, S.clock, b)) return false;
+    float q[3] = {0, 0, 0};
+    for (int k = SORA_RAG_SORA_BONES; k < SORA_RAG_BONES; k++)
+        for (int j = 0; j < 3; j++) q[j] += b[k * 12 + 9 + j] / (float)(SORA_RAG_BONES - SORA_RAG_SORA_BONES);
+    float face = S.face + rootyaw_at(S.clock), sn = sinf(face), c = cosf(face);  // (blade_world's model -> world)
+    out[0] = lm[3] + (c * q[0] + sn * q[2]) * to_u, out[1] = lm[7] + q[1] * to_u, out[2] = lm[11] + (-sn * q[0] + c * q[2]) * to_u;
+    if (h_cm) *h_cm = q[1];
+    return true;
+}
+static void kbdfx_tick(bool hidden, float to_u) {
+    float m[3], h = 0;
+    if (g_kbdfx_h >= 0) {
+        if (g_kbdfx_left-- > 0 && sora_fx_alive(g_kbdfx_h)) { if (kbdfx_blade_mid(to_u, m, NULL)) sora_fx_move(g_kbdfx_h, m, S.face); }
+        else g_kbdfx_h = -1;
+    }
+    if (g_kbdfx_last >= 0 && (int)hidden != g_kbdfx_last && (g_kbdrawfx == 1 || (g_kbdrawfx == 2 && !hidden)) && kbdfx_blade_mid(to_u, m, &h)) {
+        g_kbdfx_h = sora_fx_event("keyblade_appear", m, S.face, to_u), g_kbdfx_left = 90;
+        LOG("[sora] kbdrawfx: %s flash (handle %d, slot %d, %.0f cm above his feet)\n", hidden ? "sheathe" : "draw", g_kbdfx_h, S.mot->slot, h);
+    }
+    g_kbdfx_last = hidden;
+}
 static void bs_tick(const Target *tg, int ntg, float kh) {
     float nd = -1;
     bool fight = false, hit = false;
@@ -6909,6 +6945,11 @@ static void sora_mod_frame_body(void) {
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
         g_kbfield = env_f("SAVAGEWIND_SORA_KB_FIELD", (float)g_kbfield) != 0;  // (kbfield)
         g_kbtoggle = env_f("SAVAGEWIND_SORA_KB_TOGGLE", (float)g_kbtoggle) != 0;  // (kbtoggle)
+        {  // (kbdrawfx)
+            int v = (int)env_f("SAVAGEWIND_SORA_KB_DRAWFX", (float)g_kbdrawfx);
+            g_kbdrawfx = v < 0 ? 0 : v > 2 ? 2 : v;
+            if (g_kbdrawfx) LOG("[sora] kbdrawfx %d: KH2's Keyblade appear flash on %s\n", g_kbdrawfx, g_kbdrawfx == 1 ? "draw + sheathe" : "draw");
+        }
         if (!g_kbtoggle) LOG("[sora] kbtoggle off: L3 is BotW's crouch again\n");
         if (!g_kbfield) LOG("[sora] kbfield off: the Keyblade stays in his hand out of battle (the old look)\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
@@ -7354,7 +7395,7 @@ static void sora_mod_frame_body(void) {
     light_tick();  // (s121 a1 light)
     blob_tick();   // (s126: KH2 blob keep / off / auto)
     g_dg_playing = (st == LINK_GROUND || st == LINK_AIR) && !dead && !g_loading;  // (s183 kairi-diag)
-    if (st != LINK_GROUND && st != LINK_AIR) kbf_set(false);  // (kbfield: the puppet keeps its own Keyblade rule)
+    if (st != LINK_GROUND && st != LINK_AIR) kbf_set(false), g_kbdfx_last = -1;  // (kbfield: the puppet keeps its own Keyblade rule; kbdrawfx: no flash on the way back)
     if (st != LINK_GROUND && st != LINK_AIR) {  // climbing, swimming, a cutscene...: Link's (the servo can't drive)
         rox_tick();  // (s110: the body switch also runs while Link has the pad: the new game's wake-up / walk-out cutscenes kept Sora until the first save)
         static uint64_t said;
@@ -8242,7 +8283,12 @@ static void sora_mod_frame_body(void) {
     if (GT.on || g_dbm_clip || (S.special == SP_DAMAGE && !is_free) || nox_win) drive_off();  // (goto hold: zero velocity) BotW's hit push / ragdoll / pick up moves him
     else linkpos_set_velocity(true, vx, vz), linkpos_set_velocity_y(vy_on, vy);  // (the y servo on for the glide too)
     if (!((S.special == SP_DAMAGE && !is_free) || nox_win)) link_face();  // (s87c link face: ground / air only; set linkface 0 = off)
-    kbf_set(g_kbfield && !g_bs_on && !g_kb_drawn && S.mot && (!S.special || S.special == SP_ROLL) && (S.mot->slot & 3) == 2);  // (kbfield: the no-weapon field variant, out of battle; the dodge roll A180 = slot 838 too)
+    {
+        bool kb_hid = g_kbfield && !g_bs_on && !g_kb_drawn && S.mot && (!S.special || S.special == SP_ROLL) && (S.mot->slot & 3) == 2;
+        kbf_set(kb_hid);
+        kbdfx_tick(kb_hid, to_u);  // (kbdrawfx: KH2's appear flash on a draw / sheathe)
+    }
+    // (kbfield: the no-weapon field variant, out of battle; the dodge roll A180 = slot 838 too)
     if (SKT.rider_on) {  // (s110 skate: KH2's skate rider + board, one actor, in place of the body)
         skt_rider_draw(kh, to_u);
         g_lb_prev = g_lb_from = -1, g_lb_prev_sp = false;
