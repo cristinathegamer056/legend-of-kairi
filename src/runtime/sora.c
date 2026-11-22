@@ -483,7 +483,7 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
-static int g_trimenu;  // (trimenu: see g_tri_pickup)
+static int g_trimenu = 1;  // (trimenu: see g_tri_pickup)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -1788,7 +1788,7 @@ static int g_tri_pickup = 1;  // live "set tri 0/1": the pad's own X (PS5 triang
 // (trimenu) user: "when I open the sheikah slate map for the shrine, triangle usually lets you leave the area, but pressing it
 // simulates a O button press". The tri rule above had no pause test (its neighbours do), so in BotW's map / pause menus
 // Triangle still reached BotW as A. With this on, a BotW menu (PAUSE_STATE != 0) gets the pad's own X there.
-// SAVAGEWIND_SORA_TRI_MENU=1 / live "set trimenu 0/1"; default 0.
+// SAVAGEWIND_SORA_TRI_MENU=1 / live "set trimenu 0/1"; default 1 (user tested, on by default).
 // (g_trimenu: declared above the env reader, next to g_bstance)
 static volatile int g_link_owns;  // Link's own state (swim, climb...): X stays BotW's X (swim dash, wall jump: s49)
 #include "sora_prompt.h"  // (s194: BotW's A prompt drawn as Switch X's binding while Sora drives; live "set promptx")
