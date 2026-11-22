@@ -688,6 +688,8 @@ static void hits_load(void) {
     g_cure_pct = env_f("SAVAGEWIND_SORA_CURE_PCT", g_cure_pct);
     g_hit_r = env_f("SAVAGEWIND_SORA_HIT_R", g_hit_r), g_hit_h = env_f("SAVAGEWIND_SORA_HIT_H", g_hit_h);
     g_hit_pad = env_f("SAVAGEWIND_SORA_HIT_PAD", g_hit_pad);
+    g_lightsat = (int)env_f("SAVAGEWIND_SORA_LIGHT_SAT", (float)g_lightsat);  // (lightsat, sora_light.h)
+    if (g_lightsat != 100) LOG("[light] lightsat %d%%: the bodies' saturation after the light\n", g_lightsat);
     const char *fin = getenv("SAVAGEWIND_SORA_FIN_F54");
     if (fin && *fin) g_fin_f54 = (int)strtol(fin, NULL, 0);
     LOG("[sora] hit bake %s: %d slots (damage base %.1f, finisher f54 %#x, enemy cylinder r %.2f h %.2f pad %.2f)\n",

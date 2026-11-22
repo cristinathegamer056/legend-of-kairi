@@ -734,7 +734,7 @@ static void mtx43_inv(const float m[12], float out[12]) {
 // ------------------------------------------------------------------ (s121 light) the light block (game thread)
 // 16 floats, every actor's unless it has its own (sora_draw_actor_light): L0 = sun direction (world, toward the sun) +
 // style (0 = off = the old unlit look, 1 KH2 soft, 2 toon, 3 BotW soft), L1 = sun rgb + amount 0..1, L2 = ambient top rgb +
-// ambient floor 0..1, L3 = ambient bottom rgb + shadow 0..1 (later). Rides with the next skinned frame like the tint;
+// ambient floor 0..1, L3 = ambient bottom rgb + (lightsat) saturation change (0 = none, 0.3 = +30%). Rides with the next skinned frame like the tint;
 // the render thread hands it to the shaders as a per-instance vertex attribute (binding 1). The DLL (runtime/sora_light.h)
 // calls sora_draw_light each frame; n < 16 is ignored.
 static float g_light[16];  // (style 0 until the DLL sends one)
@@ -1655,6 +1655,10 @@ static const char *FRAG_SRC =
     "        int sm = int(v_sp.x + 0.5);\n"
     "        if (sm > 0) sv = mix(1.0, sun_vis((sm == 2 || sm == 4) ? v_sc : v_scc, se), clamp(v_sp.y, 0.0, 1.0));\n"
     "        rgb *= light_of(N, sv);\n"
+    // (lightsat) user: "the kh2 models look a bit greyed out, are we able to match the same color saturation as how they look in
+    // the kh2 menu?" L3.w (was a reserved shadow slot, always 0) = saturation change after the light: rgb pushed away from (> 0)
+    // or toward (< 0) its own luminance; 0 = unchanged, so an older DLL keeps the old look.
+    "        if (abs(v_l3.w) > 1e-4) rgb = max(mix(vec3(dot(rgb, vec3(0.3, 0.59, 0.11))), rgb, 1.0 + v_l3.w), vec3(0.0));\n"
     "        if (sm >= 3) rgb = mix(rgb, se < 0.01 ? vec3(0.1, 0.2, 1.0) : vec3(1.0 - sv, sv, 0.0), 0.75);\n"  // red shade, green sun, blue outside
     "    }\n"
     "    if (pd.t.w > 0.0) rgb = mix(rgb, pd.t.rgb * (0.35 + 0.65 * dot(rgb, vec3(0.3, 0.59, 0.11))), pd.t.w * 0.85)\n"
