@@ -483,7 +483,7 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
-static int g_holdinv;  // (holdinv: see hold_tick, after sora_carry.h)
+static int g_holdinv = 1;  // (holdinv: see hold_tick, after sora_carry.h)
 static volatile bool g_hold_on;  // (holdinv: items held from the inventory right now; pad_tap gives BotW the d-pad then)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
@@ -6556,7 +6556,7 @@ static void ffin_set(int on) {  // (s92) Final's hit bakes _s91 / _s92, live (hi
 // that slot holds an actor near Link, the frame is Link's (Sora takes his hold pose, as in carry mode) and the exe draws that
 // actor (linkpos_gear_show bit 1 by its name: held items take hidden Link's opacity, as the bow's arrow). Every change of the
 // slot is logged; bit 2 logs the actor names near Link once per hold (the names if the GUESS slot is wrong).
-// SAVAGEWIND_SORA_HOLD_INV=1 / live "set holdinv 0/1"; default 0. Log '[hold] ...'.
+// SAVAGEWIND_SORA_HOLD_INV=1 / live "set holdinv 0/1"; default 1 (user tested, on by default). Log '[hold] ...'.
 #define HOLD_OFF_N 10  // frames with the slot empty before the hold ends
 // (sora_carry.h: "an unrelated +0x88 never starts or keeps carry mode": the slot can hold other things) Only inventory materials
 // count: Item_* (fruit, mushrooms, meat, fish, ore, monster parts ...) and Animal_Insect_* (bugs, lizards). GUESS list.
