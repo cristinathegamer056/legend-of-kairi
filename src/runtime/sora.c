@@ -483,7 +483,7 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
-static int g_flamefront;  // (flamefront: see flamefront_tick)
+static int g_flamefront = 1;  // (flamefront: see flamefront_tick; on by default, user tested)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -947,7 +947,7 @@ static bool fire_fns(void) {
 // burning weapon in Link's hand when the exe reports one (linkpos_held_fire, from the fire-light work); the body shader puts
 // those flames' own pixels back over him where they are nearer the camera (sora_draw_flame_front). SAVAGEWIND_SORA_FLAME_FRONT=1
 // / live "set flamefront 0/1", "set flamefrontk <%>" (strength, 100), "set flamefrontt <x100>" (how bright a flame pixel is,
-// 60); default 0.
+// 60); default 1 (user tested: "The campfire flames are now in front of Sora properly!").
 #define FF_SCAN 14.0f
 static int g_ff_k = 100, g_ff_t = 60;
 static void ff_shape(const char *n, float *up, float *r) {  // (the flame's centre above the object's feet, its radius; u)
