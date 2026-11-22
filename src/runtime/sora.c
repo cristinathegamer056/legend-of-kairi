@@ -483,6 +483,7 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
+static int g_slam1;  // (slam0x1: see THROW_SANE_U)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -688,6 +689,7 @@ static void hits_load(void) {
     g_cure_pct = env_f("SAVAGEWIND_SORA_CURE_PCT", g_cure_pct);
     g_hit_r = env_f("SAVAGEWIND_SORA_HIT_R", g_hit_r), g_hit_h = env_f("SAVAGEWIND_SORA_HIT_H", g_hit_h);
     g_hit_pad = env_f("SAVAGEWIND_SORA_HIT_PAD", g_hit_pad);
+    g_slam1 = env_f("SAVAGEWIND_SORA_SLAM_0X1", (float)g_slam1) != 0;  // (slam0x1)
     const char *fin = getenv("SAVAGEWIND_SORA_FIN_F54");
     if (fin && *fin) g_fin_f54 = (int)strtol(fin, NULL, 0);
     LOG("[sora] hit bake %s: %d slots (damage base %.1f, finisher f54 %#x, enemy cylinder r %.2f h %.2f pad %.2f)\n",
@@ -4196,6 +4198,14 @@ static uint64_t link_bones_now(void) {  // [unit+0x198] re-resolved (heap: area 
 // CARRY_HELD_DIST. Live "set throw1 0" = the old rule (0x1 = an event: Sora + the KH2 HUD hidden for the throw's ~1 s).
 #define THROW_SANE_U 6.0f
 static int g_throw1 = 1;
+// (slam0x1) user: "When Sora attacks while jumping holding the torch, the kh2 hud disappears when he slams the weapon to the
+// ground". Log: Link air 0x2 -> 0x1 at the slam (BotW's plunge attack), then back to 0x18000001: the 0x1 read as an event
+// (HUD hidden, warp-out tint). A fast-travel warp's 0x1 comes out of the map screen (a pause), never straight from the air.
+// With this on, a 0x1 stretch entered directly from 0x2 with no pause in the last SLAM_PAUSE_GAP presents = the slam: no
+// event, no warp tint, the throw's wider bone limit. SAVAGEWIND_SORA_SLAM_0X1=1 / live "set slam1 0/1"; default 0.
+// (g_slam1: declared above the env reader, next to g_bstance)
+static bool g_slam1_now;  // (this 0x1 stretch is a slam)
+#define SLAM_PAUSE_GAP 60
 static bool carry_on(void);  // (sora_carry.h, included below)
 static bool link_bones_sane(float *maxd) {
     uint64_t w = link_bones_now();
@@ -5554,6 +5564,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
             else if (!strcmp(key, "throw1")) g_throw1 = v != 0;  // (throw0x1)
+            else if (!strcmp(key, "slam1")) g_slam1 = v != 0, LOG("[sora] slam1 %d (%s)\n", g_slam1, g_slam1 ? "a 0x1 straight from the air is the plunge slam" : "every 0x1 is an event");  // (slam0x1)
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
             else if (!strcmp(key, "slopemax")) g_slope_max = (float)v;
@@ -7222,7 +7233,17 @@ static void sora_mod_frame_body(void) {
         if (ev) st = LINK_OTHER;
         // (throw0x1) user: "when I throw a vase, sora and the kh2 hud disappears for a second": BotW puts Link in 0x1 for ~1 s of
         // the GrabThrow (log: carry on, pot left his hands, 0x1, carry off). While carry mode is on a 0x1 is that throw, not an event.
-        g_event = ev || (sw_now == 0x1 && !dead && !(g_throw1 && carry_on())) || g_chev;
+        {  // (slam0x1) a 0x1 entered straight from the air with no pause just before = the plunge attack's slam
+            static uint32_t prev_sw = ~0u;
+            static uint64_t pause_at;
+            if (GV(uint32_t, PAUSE_STATE, 0)) pause_at = present;
+            if (sw_now == 0x1 && prev_sw != 0x1) {
+                g_slam1_now = g_slam1 && prev_sw == 0x2 && (!pause_at || present - pause_at > SLAM_PAUSE_GAP);
+                if (g_slam1_now) LOG("[sora] slam1: 0x1 straight from the air (no pause): the plunge attack's slam, no event\n");
+            } else if (sw_now != 0x1) g_slam1_now = false;
+            prev_sw = sw_now;
+        }
+        g_event = ev || (sw_now == 0x1 && !dead && !(g_throw1 && carry_on()) && !g_slam1_now) || g_chev;
     }
     cprev_tick(st, dead);  // (s106 b18-chestanim: set chestprev <slot>)
     cx_tick(present, p);  // (s106 b18-chestanim: set chestanim 2 = recon log)
@@ -7363,7 +7384,7 @@ static void sora_mod_frame_body(void) {
         // load's spawn (no glow)
         static int ev_kind;  // 0 none, 1 warp-out, 2 arrival
         static uint64_t ev_at, out_at;
-        bool throw1 = g_throw1 && sw == 0x1 && carry_on();  // (throw0x1: the 0x1 inside a carry = the throw: no warp tint)
+        bool throw1 = (g_throw1 && sw == 0x1 && carry_on()) || (sw == 0x1 && g_slam1_now);  // (throw0x1: the 0x1 inside a carry = the throw: no warp tint; slam0x1: + the plunge slam)
         bool vis = sw == 0x1 && !dead && !g_loading && !throw1;
         if (vis && !was_vis) {
             bool after_load = g_load_end && present - g_load_end < 600, pending = out_at && present - out_at < 7200;
