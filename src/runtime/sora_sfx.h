@@ -51,6 +51,7 @@ int sora_sfx_hit(int atkp_row, float gain, const float pos[3]);
 void sora_sfx_step_surface(const char *bank, float gain);
 // (watersplash) how many of Sora's walk / run steps have fired while a surface bank was armed (his own steps only)
 unsigned sora_sfx_steps_fired(void);
+bool sora_sfx_last_step_run(void);  // (watersplash) the last counted step was a run step
 
 void sora_sfx_stop_all(void);  // e.g. Sora mode off / game paused
 bool sora_sfx_ready(void);     // the pack is loaded and the device opened

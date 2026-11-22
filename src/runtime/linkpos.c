@@ -3868,9 +3868,12 @@ bool linkpos_raycast(const float from[3], const float to[3], float hit[3], float
 //   (bit 1 = the contact sound path, FUN_71011f5fd8: off, Sora has his own steps).
 // Here: type 0xf, the point `pos`, velocity (0, -speed, 0), the material raw `mat`, NO stepping actor: FUN_71011f3708 returns
 // early for an actor whose xlink holder +0xcc lacks bits 0xc (Link is hidden by the mod), so the caller states the water
-// itself (mat = 8 Water, pos = on the surface) and the system actor plays it.
+// itself (mat = 8 Water, pos = on the surface) and the system actor plays it. Without an actor, FUN_71011f5ab4 never sets
+// the water depth property (5), so it kept the last contact's value (user test 3: splashes only sometimes): `depth` >= 0
+// sets it first on the system actor's ELink user (*(*(*(mgr+0xa0)+0x30)+0x568)+0x48) with FUN_7100f515ec(s0 value, x0 user,
+// w1 index) = xlink2 setPropertyValue (float).
 // Inside linkpos_frame only; false when it could not run. 1.8.2: no addresses = false.
-bool linkpos_foot_effect(const float pos[3], float speed, uint32_t mat) {
+bool linkpos_foot_effect(const float pos[3], float speed, uint32_t mat, float depth) {
     Cpu *c = g_in_frame ? kernel_current_cpu() : NULL;
     if (!c || !pos || !SS->contact_fx_mgr_ptr || !dispatch_lookup(SS->contact_rec_init) || !dispatch_lookup(SS->contact_fx_play))
         return false;
@@ -3892,6 +3895,20 @@ bool linkpos_foot_effect(const float pos[3], float speed, uint32_t mat) {
     *(int32_t *)(r + 0x90) = 0xf;           // (contact type: a foot)
     *(uint8_t *)(r + 0xc4) = 4;             // (the contact effect only)
     *c = save;
+    if (depth >= 0 && SS->xlink_set_prop_f && dispatch_lookup(SS->xlink_set_prop_f)) {  // (the water depth property)
+        uint64_t sub = *(const uint64_t *)(uintptr_t)(mgr + 0xa0);
+        uint64_t sa = in_guest(sub) ? *(const uint64_t *)(uintptr_t)(sub + 0x30) : 0;
+        uint64_t xh = in_guest(sa) ? *(const uint64_t *)(uintptr_t)(sa + 0x568) : 0;
+        uint64_t user = in_guest(xh) ? *(const uint64_t *)(uintptr_t)(xh + 0x48) : 0;
+        if (in_guest(user)) {
+            c->sp = sp;
+            c->x[0] = user, c->x[1] = 5;
+            c->v[0] = 0;
+            memcpy(&c->v[0], &depth, 4);
+            guest_call(c, SS->xlink_set_prop_f);
+            *c = save;
+        }
+    }
     c->sp = sp;
     for (int i = 2; i < 9; i++) c->x[i] = 0;
     c->x[0] = mgr, c->x[1] = rec;

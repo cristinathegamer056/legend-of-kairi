@@ -369,7 +369,9 @@ void sora_sfx_step_surface(const char *bank, float gain) {
 }
 // KH2 footstep sound id -> the armed bank's matching BotW step (-1 = keep KH2's)
 static unsigned g_steps_fired;  // (watersplash) Sora's walk / run steps so far (sora_sfx_steps_fired)
+static bool g_last_step_run;    // (watersplash) that step was a run step (KH2 cues 16..19)
 unsigned sora_sfx_steps_fired(void) { return g_steps_fired; }
+bool sora_sfx_last_step_run(void) { return g_last_step_run; }
 static int step_swap(int id) {
     if (!g_step_bank[0] || id < 0 || (uint32_t)id >= G.h->n_sounds) return -1;
     const char *key = G.snd[id].key;
@@ -377,7 +379,7 @@ static int step_swap(int id) {
     int cue = atoi(key + 19);
     char c = cue >= 16 && cue <= 19 ? 'n' : cue >= 20 && cue <= 23 ? 's' : cue == 25 ? 'j' : cue == 26 ? 'l' : 0;
     if (!c) return -1;
-    if (c == 's' || c == 'n') g_steps_fired++;
+    if (c == 's' || c == 'n') g_steps_fired++, g_last_step_run = c == 'n';
     static struct { char bank[24]; char c; int first, count; } cache[48];
     static int ncache;
     static unsigned turn;

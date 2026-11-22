@@ -7392,7 +7392,9 @@ static void sora_mod_frame_body(void) {
         }
     }
     if (g_watersplash) {  // (watersplash) BotW's own foot splash per step while wading
-        typedef bool (*FootFx)(const float *, float, uint32_t);
+        typedef bool (*FootFx)(const float *, float, uint32_t, float);
+        typedef bool (*LastRun)(void);
+        static LastRun lr;
         typedef unsigned (*Steps)(void);
         static FootFx ff;
         static Steps sf;
@@ -7402,6 +7404,7 @@ static void sora_mod_frame_body(void) {
             tried = 1;
             ff = (FootFx)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_foot_effect");
             sf = (Steps)(void *)GetProcAddress(GetModuleHandleA(NULL), "sora_sfx_steps_fired");
+            lr = (LastRun)(void *)GetProcAddress(GetModuleHandleA(NULL), "sora_sfx_last_step_run");
             LOG("[splash] %s\n", ff && sf ? "ready" : "this exe has no linkpos_foot_effect / sora_sfx_steps_fired (NEEDS EXE RELINK)");
             if (sf) seen = sf();
         }
@@ -7413,8 +7416,8 @@ static void sora_mod_frame_body(void) {
             if (step && wd > 0.02f && linkpos_link_pos(lp)) {
                 uint32_t m = 8;  // (material Water, sub 0: the floor ray sees the riverbed)
                 float at[3] = {lp[0], lp[1] + wd, lp[2]};  // (on the water surface)
-                float speed = g_step_bank && strstr(g_step_bank, "Water") ? 3.0f : 2.0f;
-                bool ok = ff(at, speed, m);
+                float speed = lr && lr() ? 5.0f : 2.5f;  // (a run step = a stronger contact)
+                bool ok = ff(at, speed, m, wd);
                 if (logged < 6) logged++, LOG("[splash] step in water (depth %.2f, floor %#x): %s\n", wd, m,
                                                ok ? "foot effect played" : "the game's contact effects refused");
             }
