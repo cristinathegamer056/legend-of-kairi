@@ -203,9 +203,10 @@ void sora_draw_ghost(float alpha);  // (sora_draw.c, s48: his body where the sce
 void sora_draw_actor_weapon(int id, bool shown);  // (sora_draw.c: the weapon groups, KH2 group attr 0x100, shown / skipped)
 int sora_draw_body(void);
 // (kbfield) user: "the keyblade to physically disappear from Sora's hands when he is not in battle, similar to how it behaves in
-// kh2 when there are no enemies around". KH2's field motions are the no-weapon variants (slot id * 4 + 2 / 3; the party's
-// weapon rule, S35_HELPER_P_PARTY.md 1.2 / sora_party.h party_weapon_field_hidden): while Sora's drawn motion is one of them
-// (bstance off: field idle / walk / run, and any other motion baked with a field variant) and no special plays, his Keyblade
+// kh2 when there are no enemies around". Variants (sora_params.h): 0 battle, 1 battle no weapon, 2 field (no weapon), 3 field +
+// weapon. The field walk / run used to be 3 (the arms still hold the Keyblade: user "his animation as if he's still holding
+// it"); with kbfield, out of battle (bstance off) idle / walk / run take 2 first (mot_st; bake: idle 2, walk 6, run 10). While
+// the drawn motion is variant 2 (also jump / fall / land, which only have 2), out of battle and no special plays, his Keyblade
 // groups are skipped. Swings / spells / Guard have battle slots only, so the Keyblade is back for them. The puppet path (Link has
 // the pad: climb, chest playback with chestkb) always shows it (its own keyblade_hide rule). No KH2 appear / vanish effect yet.
 // SAVAGEWIND_SORA_KB_FIELD=1 / live "set kbfield 1"; default 0 = always in his hand.
@@ -507,8 +508,9 @@ static bool g_bs_on;   // a fight is on right now (or its hold still runs); alwa
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
 static int g_bs_log = 1;
 static const Mot *mot_st(int id) {
-    static const int var[] = {0, 1, 3, 2};
-    return g_bs_on && id >= MOT_IDLE && id <= MOT_RUN ? mot_var(id, var) : mot_of(id);
+    static const int var[] = {0, 1, 3, 2}, nowpn[] = {2, 3, 0, 1};  // (kbfield: field idle / walk / run = the no-weapon variant 2 first)
+    if (id < MOT_IDLE || id > MOT_RUN) return mot_of(id);
+    return g_bs_on ? mot_var(id, var) : g_kbfield ? mot_var(id, nowpn) : mot_of(id);
 }
 
 static uint32_t mot_bits(const Mot *m, float t) {
@@ -8218,7 +8220,7 @@ static void sora_mod_frame_body(void) {
     if (GT.on || g_dbm_clip || (S.special == SP_DAMAGE && !is_free) || nox_win) drive_off();  // (goto hold: zero velocity) BotW's hit push / ragdoll / pick up moves him
     else linkpos_set_velocity(true, vx, vz), linkpos_set_velocity_y(vy_on, vy);  // (the y servo on for the glide too)
     if (!((S.special == SP_DAMAGE && !is_free) || nox_win)) link_face();  // (s87c link face: ground / air only; set linkface 0 = off)
-    kbf_set(g_kbfield && S.mot && !S.special && (S.mot->slot & 3) >= 2);  // (kbfield: a field variant = no Keyblade, as KH2)
+    kbf_set(g_kbfield && !g_bs_on && S.mot && !S.special && (S.mot->slot & 3) == 2);  // (kbfield: the no-weapon field variant, out of battle)
     if (SKT.rider_on) {  // (s110 skate: KH2's skate rider + board, one actor, in place of the body)
         skt_rider_draw(kh, to_u);
         g_lb_prev = g_lb_from = -1, g_lb_prev_sp = false;
