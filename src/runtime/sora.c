@@ -486,6 +486,8 @@ static const Mot *mot_of(int id) {
 static int g_hflip, g_hflip_tail = 200;  // (hflip: see the riding block)
 static bool g_hflip_fall;
 #define HFLIP_MAX_MS 900
+#define HFLIP_MIN_MS 250
+#define HFLIP_FLOOR_U 0.1f
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -7323,28 +7325,37 @@ static void sora_mod_frame_body(void) {
         // until HFLIP_TAIL_MS after Link starts coming down (3 frames lower), HFLIP_MAX_MS at most, or the ground; then he drives
         // again straight into KH2's Fall (g_hflip_fall, the drive step). GUESS timings. SAVAGEWIND_SORA_HORSE_FLIP=1 / live
         // "set hflip 0/1", "set hfliptail <ms>"; default 0. Log '[sora] hflip: ...'.
+        // (hflip test 1: never started; log: the jump off shows Link state 0x18000002, read as GROUND for the whole flip, so
+        // "off the ground" never held and Sora stood until the walk-off saw the drop) The edge alone starts it now; Link's
+        // height over the floor (a ray, HFLIP_FLOOR_U) ends it after HFLIP_MIN_MS, the state word is not used.
         static int was_ride;
-        static uint64_t dm_end;
+        static uint64_t dm_end, dm_start;
         static float py;
         static int down;
         int ride_raw = !dead && !g_loading && (sw_now & LINK_SW_RIDING) != 0;
         float lp[3];
         bool hp = linkpos_link_pos(lp);
         uint64_t nowms = GetTickCount64();
-        if (g_hflip && was_ride && !ride_raw && st != LINK_GROUND && hp)
-            dm_end = nowms + HFLIP_MAX_MS, down = 0, py = lp[1],
+        float hfl = -1;  // (Link's height over the floor, u; -1 = no floor within 3 u)
+        if (hp) {
+            float a[3] = {lp[0], lp[1] + 0.2f, lp[2]}, b[3] = {lp[0], lp[1] - 3.0f, lp[2]}, h[3], n[3];
+            if (linkpos_raycast(a, b, h, n) && n[1] > 0.5f) hfl = lp[1] - h[1];
+        }
+        if (g_hflip && was_ride && !ride_raw && hp)
+            dm_end = nowms + HFLIP_MAX_MS, dm_start = nowms, down = 0, py = lp[1],
             LOG("[sora] hflip: jumped off the horse (Link state %#x): Sora takes Link's flip\n", sw_now);
         was_ride = ride_raw;
         if (dm_end) {
-            bool over = !g_hflip || dead || g_loading || nowms >= dm_end || st == LINK_GROUND || ride_raw;
+            bool floor = nowms >= dm_start + HFLIP_MIN_MS && hfl >= 0 && hfl < HFLIP_FLOOR_U;  // (down on the floor: landed / a step off)
+            bool over = !g_hflip || dead || g_loading || nowms >= dm_end || floor || ride_raw;
             if (!over && hp) {
                 down = lp[1] < py - 0.002f ? down + 1 : 0, py = lp[1];
                 if (down == 3 && dm_end > nowms + (uint64_t)g_hflip_tail) dm_end = nowms + (uint64_t)g_hflip_tail;  // (coming down: the flip's tail)
             }
             if (over) {
-                g_hflip_fall = st != LINK_GROUND && !dead;
-                LOG("[sora] hflip: flip over (%s, Link state %#x)%s\n", st == LINK_GROUND ? "landed" : nowms >= dm_end ? "time" : "other", sw_now,
-                    g_hflip_fall ? ": Sora's Fall" : "");
+                g_hflip_fall = !dead && !floor && (hfl < 0 || hfl > 0.3f);
+                LOG("[sora] hflip: flip over (%s, Link state %#x, %.2f u over the floor)%s\n", floor ? "on the floor" : nowms >= dm_end ? "time" : "other",
+                    sw_now, hfl, g_hflip_fall ? ": Sora's Fall" : "");
                 dm_end = 0;
             } else st = LINK_OTHER;  // (the puppet: Link's flip)
         }
