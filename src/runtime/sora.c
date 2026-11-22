@@ -484,6 +484,7 @@ static const Mot *mot_of(int id) {
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
 static int g_holdinv;  // (holdinv: see hold_tick, after sora_carry.h)
+static volatile bool g_hold_on;  // (holdinv: items held from the inventory right now; pad_tap gives BotW the d-pad then)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -1882,7 +1883,9 @@ static void pad_tap(uint64_t *b, int32_t *lx, int32_t *ly, int32_t *rx, int32_t 
     // and the KH2 pause menu, which also sits on pause state 2, still eats the whole pad in camp_pad below)
     bool bmenu = *(volatile uint32_t *)(uintptr_t)PAUSE_STATE == 2 && g_menu_pass;
     *b &= ~BTN_TEST_ENEMY;
-    if (!bmenu && !g_slate_pass && !SLATE_LIVE(now)) *b &= ~BTN_MENU;  // (Sora's only: the game never sees them - the d-pad and L are KH2's menu; s93: unless the Slate)
+    // (holdinv test 2, user: "pressing the down d pad increases the distance to throw the ingredients, but when I press it, nothing
+    // happens") BotW's hold prompts use the d-pad ("Far"); while the items are held the d-pad is BotW's (L stays KH2's)
+    if (!bmenu && !g_slate_pass && !SLATE_LIVE(now)) *b &= ~(g_hold_on ? BTN_SHORTCUT : BTN_MENU);  // (Sora's only: the game never sees them - the d-pad and L are KH2's menu; s93: unless the Slate)
     if (SLATE_LIVE(now) && now >= g_slate_l_from && now < g_slate_l_until) *b |= BTN_SHORTCUT;  // (s93: the L tap that uses the rune)
     if (!g_zl_pass && !bmenu) *b &= ~BTN_LOCK;  // (ZL is KH2's lock-on)
     // (KH2's triangle = the reaction command: BotW gets A instead of the jump; Sora still saw the raw pad above, and
@@ -6580,13 +6583,13 @@ static int hold_tick(uint64_t present, int st, uint32_t sw, bool dead) {
     if (h) {
         off_n = 0;
         if (h != held) {
-            held = h;
+            held = h, g_hold_on = true;
             snprintf(name, sizeof name, "%s", carry_actor_name(h));
             LOG("[hold] on: Link holds %s (%.2f u away): Sora takes his pose, the item is drawn\n", name, d);
         }
     } else if (held && ++off_n >= HOLD_OFF_N) {
         LOG("[hold] off: %s left his hands (present %llu)\n", name, (unsigned long long)present);
-        held = 0, name[0] = 0, S.fresh = true;
+        held = 0, name[0] = 0, S.fresh = true, g_hold_on = false;
     }
     if (!held) return st;
     static void (*show)(int, const char *, const char *, const float *);
