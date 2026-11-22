@@ -3374,33 +3374,58 @@ static int g_hudslide;
 #define HSLIDE_SPEED 2.5f
 #define HSLIDE_NY 0.92f
 #define HSLIDE_DOWN 1.5f
-#define HSLIDE_HOLD_MS 600
-static bool hud_sliding(void) {
+#define HSLIDE_HOLD_MS 2000  // (test 2: was 600; also bridges the gaps between a slope's state-0 stretches)
+#define HSLIDE_START_MS 500
+// (hudslide test 2, user: "during the slides the kh2 hud somewhat flickers in and out") Log: one slope = several state-0
+// stretches (0 <-> 0x18000000), and each new stretch hid the HUD until two fresh position samples showed the speed (the
+// samples were only taken inside a stretch). Now: sampled every frame (QPC ms); inside a stretch a slide frame (fast + steep)
+// keeps it up for HSLIDE_HOLD_MS, and a stretch that starts on steep ground (HSLIDE_START_MS) is a slide from its first frame.
+static double hsl_ms(void) {
+    static LARGE_INTEGER f;
+    LARGE_INTEGER n;
+    if (!f.QuadPart) QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&n);
+    return (double)n.QuadPart * 1000.0 / (double)f.QuadPart;
+}
+static double g_hsl_at;  // (the last slide frame, ms; 0 = none)
+static bool g_hsl_steep;  // (the floor under Link is steep this frame)
+static void hud_slide_sample(void) {  // (every hud_update: speed + floor)
     static float lp[3];
-    static ULONGLONG lt, slide_at;
+    static double lt;
     static bool have;
     float p[3];
-    ULONGLONG now = GetTickCount64();
-    if (!linkpos_link_pos(p)) { have = false; return false; }
-    bool fast = false;
+    double now = hsl_ms();
+    g_hsl_steep = false;
+    if (!g_hudslide || !linkpos_link_pos(p)) { have = false; return; }
     float v = 0;
-    if (have && now > lt) {
+    bool fast = false;
+    if (have && now - lt > 1.0) {
         float dx = p[0] - lp[0], dy = p[1] - lp[1], dz = p[2] - lp[2], dt = (float)(now - lt) / 1000.0f;
         v = sqrtf(dx * dx + dy * dy + dz * dz) / g_k / dt;
         fast = dt < 0.5f && v > HSLIDE_SPEED;
     }
-    if (!have || now > lt) memcpy(lp, p, sizeof lp), lt = now, have = true;
+    if (!have || now - lt > 1.0) memcpy(lp, p, sizeof lp), lt = now, have = true;
     float a[3] = {p[0], p[1] + 0.3f * g_k, p[2]}, b[3] = {p[0], p[1] - HSLIDE_DOWN * g_k, p[2]}, h[3], n[3];
-    bool steep = fast && linkpos_raycast(a, b, h, n) && n[1] > 0.2f && n[1] < HSLIDE_NY;
-    if (steep) {
-        if (!slide_at || now - slide_at > HSLIDE_HOLD_MS) LOG("[sora] hudslide: Link sliding (%.1f m/s, floor n.y %.2f): KH2 HUD stays up\n", v, n[1]);
-        slide_at = now;
+    g_hsl_steep = linkpos_raycast(a, b, h, n) && n[1] > 0.2f && n[1] < HSLIDE_NY;
+    if (g_event && fast && g_hsl_steep) {
+        if (!g_hsl_at || now - g_hsl_at > HSLIDE_HOLD_MS) LOG("[sora] hudslide: Link sliding (%.1f m/s, floor n.y %.2f): KH2 HUD stays up\n", v, n[1]);
+        g_hsl_at = now;
     }
-    return slide_at && now - slide_at <= HSLIDE_HOLD_MS;
+}
+static bool hud_sliding(void) {  // (inside a state-0 stretch: a slide, not an event)
+    static bool was_ev;
+    static double ev_at;
+    double now = hsl_ms();
+    if (g_event && !was_ev) ev_at = now;
+    was_ev = g_event;
+    if (g_hsl_at && now - g_hsl_at <= HSLIDE_HOLD_MS) return true;
+    return g_event && g_hsl_steep && now - ev_at <= HSLIDE_START_MS;  // (a stretch starting on steep ground, before the speed shows)
 }
 static bool hud_ev_hidden(void) {
     static int last = -1;
-    const char *why = !g_hudev ? NULL : g_event && !(g_hudslide && hud_sliding()) ? "event" : g_msg_screen ? "message window 0x4a" : g_frz_id >= 0 ? "freeze screen" : NULL;
+    hud_slide_sample();
+    bool sliding = g_hudslide && hud_sliding();  // (every frame: it tracks the stretch starts)
+    const char *why = !g_hudev ? NULL : g_event && !sliding ? "event" : g_msg_screen ? "message window 0x4a" : g_frz_id >= 0 ? "freeze screen" : NULL;
     if ((why != NULL) != last) {
         if (why || last == 1) LOG("[sora] hudev: KH2 HUD %s%s (Link state %#x, freeze screen %d)\n", why ? "hidden: " : "shown again", why ? why : "",
                                   linkpos_link_state_word(), g_frz_id);
