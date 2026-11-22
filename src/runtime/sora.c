@@ -488,8 +488,8 @@ static int g_bstance = 1;  // live "set bstance 0 / 1"
 // he dies". Each malice tick (2 quarter hearts every ~130 frames) played KH2's flinch, which owns him (no move) until its
 // free frames; the next tick came first, so he never got out. With this on, a hit whose BotW call was malice's (exe
 // linkpos_player_dmg_last: a2 6, f54 0 = no reaction size; within MALNF_AGE frames of the life drop) takes the life but
-// plays no flinch. SAVAGEWIND_SORA_MALICE_NOFLINCH=1 / live "set malnoflinch 0/1"; default 0. Log '[sora] malice: ...'.
-static int g_malnoflinch;
+// plays no flinch. SAVAGEWIND_SORA_MALICE_NOFLINCH=1 / live "set malnoflinch 0/1"; default 1 (user tested, on by default). Log '[sora] malice: ...'.
+static int g_malnoflinch = 1;
 #define MALNF_AGE 20
 static bool malice_hit(void) {  // (the hit just seen was a malice tick)
     static int (*fn)(int *);
