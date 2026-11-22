@@ -169,6 +169,23 @@ static void guard_release(const char *why) {
     parry_link_clear(why);
 }
 
+// (adblock) user: "In KH2, Aerial Dodge worked more like a block rather than invincibility. So if an enemy were to hit you
+// while you were in aerial dodge, the attack would get blocked or deflected." While the Aerial Dodge motion plays in the air
+// (base Sora's sora_bdodge.h or Master's sora_master.h, both MOT_AIR_DODGE) the exe's hit drop is on from every side, as the
+// guard window's; a dropped hit = the guard's Keyblade spark + clang (ad_block), but the dodge goes on: no reflect motion, no
+// 80 invulnerable frames. SAVAGEWIND_SORA_AIR_DODGE_BLOCK=1 / live "set adblock 0/1" (sora.c); default 0.
+static int g_adblock;
+static bool g_ad_prev;  // (last frame's dodge window: the exe's drop runs the game frame after the set, like set_win_prev)
+static void ad_block(const float p[3], float to_u, int dmg) {
+    if (vk_frame_counter() <= G.block_at + 2) return;  // (one block per hit, as guard_block)
+    G.block_at = vk_frame_counter();
+    float c[3] = {p[0] + sinf(S.face) * 0.5f, p[1] + 0.9f, p[2] + cosf(S.face) * 0.5f};
+    sora_fx_event(kbfx_name("hit_guard"), c, S.face, to_u);  // (the guard's spark, w_ex010.3)
+    static int se = -2;
+    if (se == -2) se = sora_sfx_id("wall_hit");  // (the guard's clang, GUESS as guard_block)
+    if (se >= 0) sora_sfx_play_at(se, 1.0f, c);
+    LOG("[sora] AERIAL DODGE deflected a hit (damage %d) at %.3f %.3f %.3f: the dodge goes on\n", dmg, p[0], p[1], p[2]);
+}
 // (s258) the Reaction Command Dodge's invulnerable KH frames (sora_react.h rc_run). Own counter: G.inv only counts with an
 // enemy within 4 m (nearest_enemy), and a Lynel's charge / swing hit Sora with the Lynel 5.5 - 7.2 m away (last60.log s258).
 static float g_rc_inv;
@@ -183,6 +200,8 @@ static bool guard_frame(const float p[3], float to_u, float kh, int *hits_seen, 
     bool inv = (G.inv > 0 && (g_guard_inv >= 2 || (g_guard_inv == 1 && nearest_enemy(p, e)))) || g_rc_inv > 0;  // (s258: the Reaction Dodge's frames need no enemy within 4 m)
     bool rf = mg_reflect_up();  // (s133 magic) Reflect's barrier is up: every hit is blocked like the guard window's, the Guardian beam is reflected
     bool win = g_guard && guard_window() && guard_front(p), want = win || inv || rf || pl_invuln();  // (s133 limits: a party Limit runs = invulnerable)
+    bool adw = g_adblock && S.motion == MOT_AIR_DODGE && ACT_AIR(S.act) && !S.special;  // (adblock: the Aerial Dodge blocks)
+    want = want || adw;
     bool refunded = false;
     int life = linkpos_link_life();
     G.set_win_prev = G.set_win, G.set_win = win;
@@ -200,7 +219,13 @@ static bool guard_frame(const float p[3], float to_u, float kh, int *hits_seen, 
     if (G.exe_ok) {
         p_guard_set(want || mk_drops_hits() || g_dbm_god ? 1 : 0);  // (s110 review: this ran after mk_tick and cleared Mickey mode's drop every driving frame)
         int b = p_guard_blocks();  // (the drop ran in the game frame after last frame's set: its reason is set_win_prev)
-        if (b != G.blocks_seen) { G.blocks_seen = b; if (!mk_drops_hits()) guard_block(p, to_u, p_guard_dmg(), "exe drop", G.set_win_prev || win); }  // (Mickey's drops: sora_mickey.h charges them)
+        if (b != G.blocks_seen) {
+            G.blocks_seen = b;
+            bool by_guard = G.set_win_prev || win;
+            if (mk_drops_hits()) {}  // (Mickey's drops: sora_mickey.h charges them)
+            else if (!by_guard && (g_ad_prev || adw)) ad_block(p, to_u, p_guard_dmg());  // (adblock: deflected, the dodge goes on)
+            else guard_block(p, to_u, p_guard_dmg(), "exe drop", by_guard);
+        }
     } else if (want && link_hits != *hits_seen && G.life_prev > 0 && life > 0 && life < G.life_prev &&
                vk_frame_counter() <= G.life_at + 2) {  // (life 0: BotW's death already ran; a stale life_prev would over-heal)
         uint64_t a = link_actor();
@@ -211,5 +236,6 @@ static bool guard_frame(const float p[3], float to_u, float kh, int *hits_seen, 
         }
     }
     G.life_prev = refunded ? G.life_prev : life, G.life_at = vk_frame_counter();
+    g_ad_prev = adw;
     return refunded;
 }
