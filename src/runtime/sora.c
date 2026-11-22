@@ -394,6 +394,7 @@ static void mk_dchg_loop(void);  // (s110m review: the held D-Charge's loop, bef
 // default 0.
 static int g_watersplash;
 static int g_splash_walk = 45, g_splash_run = 60;  // (contact speed x10)
+static int g_splashmode = 1;  // (v8) 1 = our own emit with the handle checked (linkpos_foot_effect2), 0 = the game's contact path
 static int g_botwsteps = 1;       // (kh2steps, see g_stepdiag) BotW surface footsteps on (tested in game: on by default)
 static int g_stepgain = 100;      // their gain x100
 static const char *g_step_bank;   // this frame's surface bank (NULL = none / KH2)
@@ -5578,6 +5579,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "stepdiag")) g_stepdiag = v != 0, LOG("[steps] stepdiag %d\n", g_stepdiag);  // (kh2steps diag)
             else if (!strcmp(key, "splashwalk")) g_splash_walk = v < 1 ? 1 : v, LOG("[splash] walk speed %d\n", g_splash_walk);
             else if (!strcmp(key, "splashrun")) g_splash_run = v < 1 ? 1 : v, LOG("[splash] run speed %d\n", g_splash_run);
+            else if (!strcmp(key, "splashmode")) g_splashmode = v != 0, LOG("[splash] mode %d (%s)\n", g_splashmode, g_splashmode ? "own emit" : "game contact path");
             else if (!strcmp(key, "watersplash")) g_watersplash = v != 0, LOG("[splash] watersplash %d\n", g_watersplash);  // (watersplash)
             else if (!strcmp(key, "botwsteps")) g_botwsteps = v != 0, LOG("[steps] botwsteps %d\n", g_botwsteps);  // (kh2steps)
             else if (!strcmp(key, "stepgain")) g_stepgain = v < 0 ? 0 : v > 400 ? 400 : v, LOG("[steps] stepgain %d\n", g_stepgain);
@@ -7400,6 +7402,8 @@ static void sora_mod_frame_body(void) {
         typedef bool (*FootFx)(const float *, float, uint32_t, float);
         typedef bool (*LastRun)(void);
         static LastRun lr;
+        typedef int (*FootFx2)(const float *, float, uint32_t, float);
+        static FootFx2 ff2;
         typedef unsigned (*Steps)(void);
         static FootFx ff;
         static Steps sf;
@@ -7410,6 +7414,7 @@ static void sora_mod_frame_body(void) {
             ff = (FootFx)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_foot_effect");
             sf = (Steps)(void *)GetProcAddress(GetModuleHandleA(NULL), "sora_sfx_steps_fired");
             lr = (LastRun)(void *)GetProcAddress(GetModuleHandleA(NULL), "sora_sfx_last_step_run");
+            ff2 = (FootFx2)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_foot_effect2");
             LOG("[splash] %s\n", ff && sf ? "ready" : "this exe has no linkpos_foot_effect / sora_sfx_steps_fired (NEEDS EXE RELINK)");
             if (sf) seen = sf();
         }
@@ -7427,10 +7432,14 @@ static void sora_mod_frame_body(void) {
                 // (test 5: splashes only sometimes on Zora's Domain's wet floor although every step was played: GUESS the walk
                 // contact speed 2.5 was under the effect's threshold) live "set splashwalk / splashrun <x10>" (45 / 60)
                 float speed = (run ? g_splash_run : g_splash_walk) / 10.0f;
-                bool ok = ff(at, speed, m, wd);
+                static const char *const R2[] = {"could not run", "NO EFFECT (handle 0)", "STALE handle", "emitted + placed"};
+                int r2 = -1;
+                bool ok = false;
+                if (g_splashmode && ff2) r2 = ff2(at, speed, m, wd);
+                else ok = ff(at, speed, m, wd);
                 if (logged < 400) logged++, LOG("[splash] %s step in water (depth %.2f, floor %s, speed %.1f): %s\n",
                                                  run ? "run" : "walk", wd, wet ? "wet" : "wading", speed,
-                                                 ok ? "foot effect played" : "the game's contact effects refused");
+                                                 r2 >= 0 ? R2[r2 & 3] : ok ? "game path played" : "the game's contact effects refused");
             }
         }
     }

@@ -3925,6 +3925,66 @@ bool linkpos_foot_effect(const float pos[3], float speed, uint32_t mat, float de
     return on;
 }
 
+// (watersplash v8, user test 7: still only some steps splash) the same as linkpos_foot_effect's game path, but done here so
+// the result of every step is known: the xlink properties FUN_71011f5ab4 sets for a record without a stepping actor
+// (ints: 0 material, 1 = FUN_7101597fa0(*mat table, material, sub) sub-material index, 6 = 2, 0xc = 0; floats: 3 / 4 speed,
+// 5 water depth, 7 = 1 (Water), 0xd = 0, 0xe = 1) on the contact system actor's ELink user, then FUN_7101100bd0 (x8 Handle,
+// x0 actor, x1 "FootEffect") and, for a live handle (inst +0x20 == id), the position / scale / flag 4 as the game writes
+// them. Returns 0 = could not run, 1 = no effect emitted (handle 0), 2 = stale handle, 3 = emitted and placed.
+int linkpos_foot_effect2(const float pos[3], float speed, uint32_t mat, float depth) {
+    Cpu *c = g_in_frame ? kernel_current_cpu() : NULL;
+    if (!c || !pos || !SS->contact_fx_mgr_ptr || !SS->elink_emit || !dispatch_lookup(SS->elink_emit) ||
+        !dispatch_lookup(SS->xlink_set_prop_f) || !dispatch_lookup(SS->xlink_set_prop_i) || !dispatch_lookup(SS->mat_sub_index))
+        return 0;
+    uint64_t gp = *(const uint64_t *)(uintptr_t)SS->contact_fx_mgr_ptr;
+    uint64_t mgr = in_guest(gp) ? *(const uint64_t *)(uintptr_t)gp : 0;
+    uint64_t sub = in_guest(mgr) ? *(const uint64_t *)(uintptr_t)(mgr + 0xa0) : 0;
+    uint64_t sa = in_guest(sub) ? *(const uint64_t *)(uintptr_t)(sub + 0x30) : 0;
+    uint64_t xh = in_guest(sa) ? *(const uint64_t *)(uintptr_t)(sa + 0x568) : 0;
+    uint64_t user = in_guest(xh) ? *(const uint64_t *)(uintptr_t)(xh + 0x48) : 0;
+    uint64_t tp = *(const uint64_t *)(uintptr_t)SS->mat_table_ptr;
+    uint64_t mt = in_guest(tp) ? *(const uint64_t *)(uintptr_t)tp : 0;
+    if (!in_guest(user) || !in_guest(mt)) return 0;
+    Cpu save = *c;
+    uint64_t sp = (c->sp - 0x200) & ~0xfull;
+    int material = (int)(mat & 63u), submat = (int)((mat >> 6) & 15u);
+    // the sub-material index
+    c->sp = sp, c->x[0] = mt, c->x[1] = (uint64_t)material, c->x[2] = (uint64_t)submat;
+    guest_call(c, SS->mat_sub_index);
+    int subidx = (int)(uint32_t)c->x[0];
+    *c = save;
+    const int ip[][2] = {{0, material}, {1, subidx}, {6, 2}, {0xc, 0}};
+    for (int i = 0; i < 4; i++) {
+        c->sp = sp, c->x[0] = user, c->x[1] = (uint64_t)ip[i][0], c->x[2] = (uint64_t)(uint32_t)ip[i][1];
+        guest_call(c, SS->xlink_set_prop_i);
+        *c = save;
+    }
+    const struct { int idx; float v; } fp[] = {{3, speed}, {4, speed}, {5, depth}, {7, 1.0f}, {0xd, 0.0f}, {0xe, 1.0f}};
+    for (int i = 0; i < 6; i++) {
+        c->sp = sp, c->x[0] = user, c->x[1] = (uint64_t)fp[i].idx, c->v[0] = 0;
+        memcpy(&c->v[0], &fp[i].v, 4);
+        guest_call(c, SS->xlink_set_prop_f);
+        *c = save;
+    }
+    // emit
+    memset((void *)(uintptr_t)sp, 0, 0x40);
+    strcpy((char *)(uintptr_t)(sp + 0x10), "FootEffect");
+    c->sp = sp;
+    for (int i = 2; i < 8; i++) c->x[i] = 0;
+    c->x[0] = sa, c->x[1] = sp + 0x10, c->x[8] = sp;
+    guest_call(c, SS->elink_emit);
+    *c = save;
+    uint64_t inst = *(const uint64_t *)(uintptr_t)sp;
+    uint32_t id = *(const uint32_t *)(uintptr_t)(sp + 8);
+    if (!inst) return 1;
+    if (!in_guest(inst) || *(const uint32_t *)(uintptr_t)(inst + 0x20) != id) return 2;
+    uint8_t *e = (uint8_t *)(uintptr_t)inst;
+    *(float *)(e + 0xa8) = pos[0], *(float *)(e + 0xac) = pos[1], *(float *)(e + 0xb0) = pos[2];
+    *(float *)(e + 0xb4) = 1.0f, *(float *)(e + 0xb8) = 1.0f, *(float *)(e + 0xbc) = 1.0f;
+    *(uint32_t *)(e + 0x180) |= 4;
+    return 3;
+}
+
 // (kh2steps) linkpos_raycast + the hit's material: the helper's x4 = an out record (1.9.0 FUN_7100bd78a0 -> FUN_7100bd74a0:
 // if x4, *(int)(x4 + 8) = (int) RayCast[0x10] (the hit's MaterialMask raw value, GUESS: material in the low bits), *(u64)(x4 +
 // 0x10) = 0). *mat = that raw value (0 without a hit). Same rules as linkpos_raycast (inside linkpos_frame only).
