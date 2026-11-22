@@ -483,7 +483,7 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
-static int g_slam1;  // (slam0x1: see THROW_SANE_U)
+static int g_slam1 = 1;  // (slam0x1: see THROW_SANE_U)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -4202,7 +4202,7 @@ static int g_throw1 = 1;
 // ground". Log: Link air 0x2 -> 0x1 at the slam (BotW's plunge attack), then back to 0x18000001: the 0x1 read as an event
 // (HUD hidden, warp-out tint). A fast-travel warp's 0x1 comes out of the map screen (a pause), never straight from the air.
 // With this on, a 0x1 stretch entered directly from 0x2 with no pause in the last SLAM_PAUSE_GAP presents = the slam: no
-// event, no warp tint, the throw's wider bone limit. SAVAGEWIND_SORA_SLAM_0X1=1 / live "set slam1 0/1"; default 0.
+// event, no warp tint, the throw's wider bone limit. SAVAGEWIND_SORA_SLAM_0X1=1 / live "set slam1 0/1"; default 1 (user tested, on by default).
 // (g_slam1: declared above the env reader, next to g_bstance)
 static bool g_slam1_now;  // (this 0x1 stretch is a slam)
 #define SLAM_PAUSE_GAP 60
