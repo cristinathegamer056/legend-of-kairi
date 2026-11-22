@@ -220,7 +220,7 @@ static int g_kbfield = 1;
 static int g_kbtoggle = 1;
 static bool g_kb_drawn;
 static int g_kbdfx_bone = -3, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side, g_kbdfx_orient = 1, g_kbdfx_dir = 1, g_kbdfx_lenpct = 100;  // (kbdrawfx placement knobs; see kbdfx_blade_mid)
-static int g_kbdrawfx, g_kbdfx_last = -1;  // (kbdrawfx: the option, the last drive-path Keyblade hidden state; see kbdfx_tick)
+static int g_kbdrawfx = 1, g_kbdfx_last = -1;  // (kbdrawfx: the option, the last drive-path Keyblade hidden state; see kbdfx_tick)
 static void kbf_set(bool hide) {
     static int last_body = -1, last_hide = -1;
     int body = sora_draw_body();
@@ -6267,7 +6267,7 @@ static void glide_pose_draw(int from_motion, float from_clock, float face, float
 // the sheathe is a GUESS: KH2's rule there not traced). At the middle of the Keyblade bones (228..239) of the pose playing, then
 // moved with it while it lives. Not in Link's own states (climb, swim: the puppet path resets the edge), not for guests / forms.
 // No sound: no KH2 draw sound is in the extracted tables. SAVAGEWIND_SORA_KB_DRAWFX=1 / live "set kbdrawfx 0/1/2" (2 = draw only);
-// default 0. Log '[sora] kbdrawfx: ...' with the flash's height above his feet (checks the bone space).
+// default 1 (user: on by default, flash on sheathe too). Log '[sora] kbdrawfx: ...' with the flash's height above his feet (checks the bone space).
 static int g_kbdfx_h = -1, g_kbdfx_left;  // (g_kbdrawfx, g_kbdfx_last: next to g_kbtoggle)
 // (kbdrawfx tune, user test 1: "the flash does show on the keyblade, but the placement needs to be adjusted") live knobs:
 // kbdfxbone = the anchor (-3 = the grip 228 with the turn below, else the blade middle; -1 = middle of the Keyblade bones,
