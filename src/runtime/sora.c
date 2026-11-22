@@ -6280,7 +6280,37 @@ static int g_kbdfx_h = -1, g_kbdfx_left;  // (g_kbdrawfx, g_kbdfx_last: next to 
 static float g_kbdfx_rot[9];
 static bool g_kbdfx_rot_ok;
 static float g_kbdfx_len;  // (the blade's grip -> tip, cm, for the log)
+static bool g_kbdfx_grip_used;  // (the last placement came from the drawn grip)
+// (user test 4, F5 marks 063528 / 063529: from the grip, but up toward his shoulder while the blade points down.) The
+// Keyblade bones span only ~27 cm and their farthest one is not on the blade line. The blade axis as DRAWN = the grip
+// bone 228's -Y column (sora_draw_grip_world; linkpos.c s128 weapon mount: "+Z (the blade) = grip -Y", tested in game).
+// With kbdfxbone -3 + the turn: the flash at the drawn grip, model +x along that axis (kbdfxdir -1 = the other way).
+bool sora_draw_grip_world(float out[12], float *scale, float vel_out[3]);
+static bool kbdfx_from_grip(float to_u, float out[3], float *h_cm) {
+    float gw[12], sc = 0, lm[12];
+    if (!g_kbdfx_orient || g_kbdfx_bone != -3 || !sora_draw_grip_world(gw, &sc, NULL) || !linkpos_link_mtx(lm)) return false;
+    float d = g_kbdfx_dir < 0 ? 1.0f : -1.0f, w[3] = {d * gw[1], d * gw[5], d * gw[9]};  // (world: -Y column = toward the tip)
+    float l = sqrtf(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+    if (l < 1e-4f) return false;
+    float sn = sinf(S.face), c = cosf(S.face);
+    float x[3] = {(c * w[0] - sn * w[2]) / l, w[1] / l, (sn * w[0] + c * w[2]) / l};  // (world -> model: the fx's own yaw undone)
+    float ref[3] = {0, 1, 0};
+    if (fabsf(x[1]) > 0.9f) ref[1] = 0, ref[2] = 1;
+    float dt = ref[0] * x[0] + ref[1] * x[1] + ref[2] * x[2], y[3] = {ref[0] - dt * x[0], ref[1] - dt * x[1], ref[2] - dt * x[2]};
+    float yl = sqrtf(y[0] * y[0] + y[1] * y[1] + y[2] * y[2]);
+    if (yl < 1e-4f) return false;
+    y[0] /= yl, y[1] /= yl, y[2] /= yl;
+    float z[3] = {x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]};
+    for (int r = 0; r < 3; r++) g_kbdfx_rot[r * 3 + 0] = x[r], g_kbdfx_rot[r * 3 + 1] = y[r], g_kbdfx_rot[r * 3 + 2] = z[r];
+    g_kbdfx_rot_ok = true, g_kbdfx_len = -1;
+    // (the knobs in his facing frame, cm: +fwd ahead, +up, +side = his right (GUESS sign), as kbdfx_blade_mid)
+    float ox = -(float)g_kbdfx_side, oz = (float)g_kbdfx_fwd;
+    out[0] = gw[3] + (c * ox + sn * oz) * to_u, out[1] = gw[7] + (float)g_kbdfx_up * to_u, out[2] = gw[11] + (-sn * ox + c * oz) * to_u;
+    if (h_cm) *h_cm = (gw[7] - lm[7]) / to_u;
+    return true;
+}
 static bool kbdfx_blade_mid(float to_u, float out[3], float *h_cm) {
+    if ((g_kbdfx_grip_used = kbdfx_from_grip(to_u, out, h_cm))) return true;
     static float b[POSE_BUF_BONES * 12];
     float lm[12];
     int nb = sora_draw_bone_count();
@@ -6353,7 +6383,7 @@ static void kbdfx_tick(bool hidden, float to_u) {
         kbdfx_orient(g_kbdfx_h);
         LOG("[sora] kbdrawfx: %s flash (handle %d, slot %d, %.0f cm above his feet; anchor %d, fwd %d up %d side %d; blade %.0f cm, turn %s)\n", hidden ? "sheathe" : "draw",
             g_kbdfx_h, S.mot->slot, h, g_kbdfx_bone, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side, g_kbdfx_len,
-            !g_kbdfx_orient ? "off" : g_kbdfx_rot_ok ? "along the blade" : "none (no blade)");
+            !g_kbdfx_orient ? "off" : !g_kbdfx_rot_ok ? "none (no blade)" : g_kbdfx_grip_used ? "along the drawn blade (grip -Y)" : "along the bones");
     }
     g_kbdfx_last = hidden;
 }
