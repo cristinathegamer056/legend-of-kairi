@@ -3369,8 +3369,8 @@ static int g_hudev = 1;
 // a talk / chest / cutscene, so g_event hid the HUD. BotW's own HUD stays up there. A slide = Link moving faster than
 // HSLIDE_SPEED m/s over a floor steeper than HSLIDE_NY (normal y) within HSLIDE_DOWN m below his feet (log: 7 m/s, n.y 0.5..0.7);
 // a talk / sign / chest keeps him still. Held HSLIDE_HOLD_MS after the last such frame (airborne bumps). Only the "event"
-// reason is lifted (a message window / freeze screen still hides it). SAVAGEWIND_SORA_HUD_SLIDE=1 / live "set hudslide 0/1"; default 0.
-static int g_hudslide;
+// reason is lifted (a message window / freeze screen still hides it). SAVAGEWIND_SORA_HUD_SLIDE=1 / live "set hudslide 0/1"; default 1 (user tested, on by default).
+static int g_hudslide = 1;
 #define HSLIDE_SPEED 2.5f
 #define HSLIDE_NY 0.92f
 #define HSLIDE_DOWN 1.5f
