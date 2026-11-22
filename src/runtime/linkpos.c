@@ -3857,6 +3857,31 @@ bool linkpos_raycast(const float from[3], const float to[3], float hit[3], float
     return ok;
 }
 
+// (watersplash) BotW's effect trigger on Link: 1.9.0 FUN_7101100bd0(x0 Handle* out (16 B), x1 Actor*, x2 const char* key)
+// = if actor+0x568 (its xlink holder) and holder+0x48 (the ELink user instance): FUN_7100f3fc10 -> xlink2 searchAndEmit(key,
+// handle) ("searchAndEmit(%s)", 0x7100f50e80); the handle stays 0 when the user has no such key. 59 game callers. The effect
+// plays at Link (his bones / position = Sora's, Link is only hidden) and picks its variant (water, mud ...) from his state.
+// Returns true when something was emitted. Inside linkpos_frame only; 1.8.2: no address = false.
+bool linkpos_elink_emit(const char *key) {
+    Cpu *c = g_in_frame ? kernel_current_cpu() : NULL;
+    if (!c || !key || !key[0] || strlen(key) > 0x5f || !SS->elink_emit || !dispatch_lookup(SS->elink_emit)) return false;
+    uint64_t pinfo = *(uint64_t *)(uintptr_t)PLAYER_INFO_PTR;
+    if (!in_guest(pinfo)) return false;
+    uint64_t actor = *(uint64_t *)(uintptr_t)(pinfo + PLAYER_ACTOR);
+    if (!in_guest(actor)) return false;
+    Cpu save = *c;
+    uint64_t sp = (c->sp - 0x100) & ~0xfull;  // handle at +0, the key string at +0x10 (both guest memory)
+    memset((void *)(uintptr_t)sp, 0, 0x80);
+    strcpy((char *)(uintptr_t)(sp + 0x10), key);
+    c->sp = sp;
+    c->x[0] = sp, c->x[1] = actor, c->x[2] = sp + 0x10;
+    for (int i = 3; i < 9; i++) c->x[i] = 0;
+    guest_call(c, SS->elink_emit);
+    bool ok = *(const uint64_t *)(uintptr_t)sp != 0;
+    *c = save;
+    return ok;
+}
+
 // (kh2steps) linkpos_raycast + the hit's material: the helper's x4 = an out record (1.9.0 FUN_7100bd78a0 -> FUN_7100bd74a0:
 // if x4, *(int)(x4 + 8) = (int) RayCast[0x10] (the hit's MaterialMask raw value, GUESS: material in the low bits), *(u64)(x4 +
 // 0x10) = 0). *mat = that raw value (0 without a hit). Same rules as linkpos_raycast (inside linkpos_frame only).
