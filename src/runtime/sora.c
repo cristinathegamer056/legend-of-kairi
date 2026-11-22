@@ -7659,7 +7659,7 @@ static void sora_mod_frame_body(void) {
             g_climb_until = present + CLIMB_TRY, push = 0, g_climb_nox = !x_wall(p, S.face);
             if (g_climb_nox) probe_start(present);
             LOG("[sora] climb try (X pressed%s) at %.3f %.3f %.3f: Link gets the pad\n", g_climb_nox ? ", no wall: pick up, no jump" : "", p[0], p[1], p[2]);
-        } else if (push >= CLIMB_PUSH && present >= cool_until) {
+        } else if (push >= CLIMB_PUSH && present >= cool_until && !ad_hold()) {  // (adblock: no climb try right after a deflect)
             g_climb_until = present + CLIMB_TRY, push = 0;
             LOG("[sora] climb try at %.3f %.3f %.3f (moved %.3f of %.3f u): Link gets the pad\n", p[0], p[1], p[2], mv, want);
         } else if ((gpush >= GLIDE_PUSH || wray_n >= 2) && present >= cool_until) {
@@ -7731,6 +7731,7 @@ static void sora_mod_frame_body(void) {
         bool stopped = !updraft && S.req < -LAND_MIN_REQ && got > S.req * LAND_GOT;  // landed: the fall was stopped
         if (!stopped) FR.veto = 0;
         else if (land_veto(z_up, p)) stopped = false;  // (s54: no floor under him - BotW holds him on a wall / edge)
+        else if (ad_hold()) stopped = false;  // (adblock: a deflect's guard reaction held him mid-air, not a landing)
         bool by_ray = !stopped && land_by_ray(present, z_up, &ray_ground);  // (s54: the step he reaches the floor)
         if (stopped || by_ray) {
             LOG("[sora] land at %.3f %.3f %.3f after %.1f KH frames, peak +%.1f cm (%s)\n", p[0], p[1], p[2], S.air,

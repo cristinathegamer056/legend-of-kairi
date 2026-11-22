@@ -181,7 +181,16 @@ static void guard_release(const char *why) {
 // dropped with the spark + clang, and the dodge goes on (a reflect while dodging = ad_block, not the guard's reflect motion).
 static int g_adblock;
 static bool g_ad_prev;  // (last frame's dodge window: the exe's drop runs the game frame after the set, like set_win_prev)
+// (adblock test 2, user: "When the deflection happens, Sora reverts to links glidding animation") Log: the deflected hit held
+// Link in place mid-air (BotW's guard reaction), Sora's jump read the stopped fall as a landing ("land ... (stopped)" at
+// +155 cm), the stopped push against a wall then started a climb try = Link got the pad in the air and BotW opened the
+// paraglider (state 0x8002), whose pose the puppet copied. For AD_HOLD_MS after a deflect: no stopped-fall landing and no
+// push climb try (sora.c).
+#define AD_HOLD_MS 500
+static uint64_t g_ad_hold_ms;
+static bool ad_hold(void) { return g_ad_hold_ms && GetTickCount64() < g_ad_hold_ms; }
 static void ad_block(const float p[3], float to_u, int dmg) {
+    g_ad_hold_ms = GetTickCount64() + AD_HOLD_MS;  // (no stopped-fall landing / climb try right after it)
     if (vk_frame_counter() <= G.block_at + 2) return;  // (one block per hit, as guard_block)
     G.block_at = vk_frame_counter();
     float c[3] = {p[0] + sinf(S.face) * 0.5f, p[1] + 0.9f, p[2] + cosf(S.face) * 0.5f};
