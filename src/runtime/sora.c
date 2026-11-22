@@ -219,7 +219,7 @@ static int g_kbfield = 1;
 #define BTN_L3 (1ull << 4)  // Switch LSTICK (script_parse names[] order)
 static int g_kbtoggle = 1;
 static bool g_kb_drawn;
-static int g_kbdfx_bone = -3, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side, g_kbdfx_orient = 1;  // (kbdrawfx placement knobs; see kbdfx_blade_mid)
+static int g_kbdfx_bone = -3, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side, g_kbdfx_orient = 1, g_kbdfx_dir = 1;  // (kbdrawfx placement knobs; see kbdfx_blade_mid)
 static int g_kbdrawfx, g_kbdfx_last = -1;  // (kbdrawfx: the option, the last drive-path Keyblade hidden state; see kbdfx_tick)
 static void kbf_set(bool hide) {
     static int last_body = -1, last_hide = -1;
@@ -5581,6 +5581,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
             else if (!strcmp(key, "kbdfxbone")) g_kbdfx_bone = v, LOG("[sora] kbdrawfx anchor %d (-3 grip + turn, -1 blade middle, -2 tip, else that bone)\n", v);
+            else if (!strcmp(key, "kbdfxdir")) g_kbdfx_dir = v < 0 ? -1 : 1, LOG("[sora] kbdrawfx dir %d\n", g_kbdfx_dir);
             else if (!strcmp(key, "kbdfxorient")) g_kbdfx_orient = v != 0, LOG("[sora] kbdrawfx turn %d (%s)\n", g_kbdfx_orient, g_kbdfx_orient ? "along the blade" : "his facing only");
             else if (!strcmp(key, "kbdfxfwd")) g_kbdfx_fwd = v, LOG("[sora] kbdrawfx fwd %d cm\n", v);
             else if (!strcmp(key, "kbdfxup")) g_kbdfx_up = v, LOG("[sora] kbdrawfx up %d cm\n", v);
@@ -6274,7 +6275,7 @@ static int g_kbdfx_h = -1, g_kbdfx_left;  // (g_kbdrawfx, g_kbdfx_last: next to 
 // (user test 2, F5 marks 062042 / 062045: the sparkle starts beside the blade and runs off sideways.) The recording
 // (fxrec kh2_fx.bin w_ex010.0: bound to W_EX010 bone 2, pax 0x441) is a sparkle that runs ~180 cm along the weapon's own
 // x (model -x after the bound flip) = grip -> tip, so KH2 turns it with the Keyblade. sora_fx_orient (exe) turns it so model
-// -x = the blade's grip -> tip; kbdfxorient 0 = yaw only (test 1). GUESS: bone 2's x = the blade axis; its roll is free here.
+// +x = the blade's grip -> tip (test 3: not -x); kbdfxorient 0 = yaw only (test 1). GUESS: bone 2's x = the blade axis; its roll is free here.
 // (kbdfx knobs: g_kbdfx_bone / _fwd / _up / _side, declared next to g_kbdrawfx)
 static float g_kbdfx_rot[9];
 static bool g_kbdfx_rot_ok;
@@ -6296,7 +6297,10 @@ static bool kbdfx_blade_mid(float to_u, float out[3], float *h_cm) {
         }
         g_kbdfx_len = sqrtf(best > 0 ? best : 0), g_kbdfx_rot_ok = false;
         if (g_kbdfx_len > 1) {
-            float x[3] = {-(tp[0] - g[0]) / g_kbdfx_len, -(tp[1] - g[1]) / g_kbdfx_len, -(tp[2] - g[2]) / g_kbdfx_len};  // (model +x maps here)
+            // (user test 3, F5 marks 062939 / 062941: with model -x -> grip->tip the sparkle ran from the grip AWAY from the blade, the
+            // mirror line; so model +x -> grip->tip. kbdfxdir -1 = the test 3 direction.)
+            float k = (g_kbdfx_dir < 0 ? -1.0f : 1.0f) / g_kbdfx_len;
+            float x[3] = {(tp[0] - g[0]) * k, (tp[1] - g[1]) * k, (tp[2] - g[2]) * k};  // (model +x maps here)
             float ref[3] = {0, 1, 0};
             if (fabsf(x[1]) > 0.9f) ref[1] = 0, ref[2] = 1;  // (a blade near vertical: his forward is the reference)
             float dt = ref[0] * x[0] + ref[1] * x[1] + ref[2] * x[2], y[3] = {ref[0] - dt * x[0], ref[1] - dt * x[1], ref[2] - dt * x[2]};
