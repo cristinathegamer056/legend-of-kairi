@@ -386,7 +386,7 @@ static void mk_ball_tick(float kh, float to_u);  // (s117 pearl: Mickey's Pearl 
 static void mk_hit(int atkp, uint64_t actor);  // a hit of his: Drive gauge
 static void mk_dchg_loop(void);  // (s110m review: the held D-Charge's loop, before the motion end check)
 #include "sora_wisdom_lv.h" // (s75: Wisdom EXP per kill + form levels; needs IN_WISDOM)
-static int g_botwsteps;           // (kh2steps, see g_stepdiag) BotW surface footsteps on
+static int g_botwsteps = 1;       // (kh2steps, see g_stepdiag) BotW surface footsteps on (tested in game: on by default)
 static int g_stepgain = 100;      // their gain x100
 static const char *g_step_bank;   // this frame's surface bank (NULL = none / KH2)
 #include "sora_kbfx.h"      // (s89 kbfx: each Keyblade's own swing ribbon + hit sparks; S89_HELPER_KBFX.md)
@@ -495,7 +495,8 @@ static int g_stepdiag;
 // ray's material (raw & 63, sub (raw >> 6) & 15, BotW's PhysicsSubMaterialTable order) -> a pack bank "bs/<bank>"; wading
 // (water depth > 0.02 m) -> WaterShallow (< 0.25) / WaterMdlDepth (< 0.5) / WaterDeep. Needs the exe's sora_sfx_step_surface
 // + linkpos_raycast_mat and an sfx.bin with the steps (sorabuild sfx_botwsteps); anything missing = KH2's steps.
-// SAVAGEWIND_SORA_BOTW_STEPS=1 / live "set botwsteps 0/1", "set stepgain <x100>" (default 100); default 0.
+// SAVAGEWIND_SORA_BOTW_STEPS=0/1 / live "set botwsteps 0/1", "set stepgain <x100>" (default 100); default 1 (user tested:
+// "the sound sounds fine"; level = the pack's, set by the user's in-game pick).
 // (declared above sora_kbfx.h: g_botwsteps, g_stepgain, g_step_bank)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0

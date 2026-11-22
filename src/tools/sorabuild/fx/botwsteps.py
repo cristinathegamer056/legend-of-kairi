@@ -18,6 +18,7 @@ Packed (keys / names, the runtime looks them up by these strings):
           ONE volume (Sound.volume) = the KH2 class's loudness (se705 #16-19 run, #20-23 walk, #25 jump, #26 land, as packed in
           the input with their own volume) / the BotW class's mean over the land banks; so every surface sits at KH2's step level
           and the surfaces keep BotW's differences between them (water louder than grass ...). Loudness = the loudest 50 ms RMS.
+          x STEP_LEVEL 0.5 (the user's pick in game: live stepgain 50).
   names   "bs/<bank>/<c>" -> the class's first sound (its variants follow, consecutive);  "bs_mark" -> the first BotW step sound
   banks   the M_Mt_ name without "M_Mt_" (Grass, StoneDgnHeavy, ...); water: WaterShallow, WaterMdlDepth, WaterDeep (s / n only)
 
@@ -32,6 +33,7 @@ import subprocess
 import sys
 import wave
 
+STEP_LEVEL = 0.5  # (user test: "the best volume number is at 50" = half the KH2-matched level)
 TOE_DELAY = {"s": 0.09, "n": 0.06}  # GUESS: heel -> toe gap of a BotW step (s); tune by ear
 RATE = 48000
 FOOT = [("L", "00"), ("R", "00"), ("L", "01"), ("R", "01")]
@@ -166,9 +168,9 @@ def main():
     gain = {}
     for c in "snjl":
         if kh2.get(c) and botw.get(c):
-            gain[c] = (sum(kh2[c]) / len(kh2[c])) / (sum(botw[c]) / len(botw[c]))
+            gain[c] = STEP_LEVEL * (sum(kh2[c]) / len(kh2[c])) / (sum(botw[c]) / len(botw[c]))
         else:
-            gain[c] = 0.3  # (no KH2 reference in the input: a safe quiet level)
+            gain[c] = 0.15  # (no KH2 reference in the input: a safe quiet level)
     print("[botwsteps] class volumes (KH2 level / BotW level): " + ", ".join("%s %.3f" % (c, gain[c]) for c in "snjl"))
     new_s, new_n = bytearray(), bytearray()
     first = ns
