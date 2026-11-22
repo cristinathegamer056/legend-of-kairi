@@ -505,7 +505,7 @@ static const Mot *mot_of(int id) {
 // since s260: the user verified it, "worked great").
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
-static float g_bs_cm = 3000.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
+static float g_bs_cm = 3400.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
 static int g_bs_log = 1;
 static const Mot *mot_st(int id) {
     static const int var[] = {0, 1, 3, 2}, nowpn[] = {2, 3, 0, 1};  // (kbfield: field idle / walk / run = the no-weapon variant 2 first)
@@ -5566,7 +5566,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "slope")) g_slope = v != 0;  // (s64 slope follow)
             else if (!strcmp(key, "lblend")) g_lblend = v != 0;  // (s64 idle / walk / run blend)
             else if (!strcmp(key, "bstance")) g_bstance = v != 0;  // (s259 KH2's battle stance while a fight is on)
-            else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 3000.0f;  // (an enemy within this = a fight; user: 30 m, was 15, then 20)
+            else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 3400.0f;  // (an enemy within this = a fight; user: 34 m, was 15, then 20, 30)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
             else if (!strcmp(key, "kbfield")) g_kbfield = v != 0, LOG("[sora] kbfield %d (%s)\n", g_kbfield, g_kbfield ? "no Keyblade in the field motions" : "Keyblade always in his hand");  // (kbfield)
@@ -6235,7 +6235,7 @@ static void glide_pose_draw(int from_motion, float from_clock, float face, float
 }
 
 // (s259 bstance) is a fight on? KH2's real test is enemy awareness (re:0x3AB690), which has no BotW twin yet, so this is the
-// party's stand-in (pc_battle, sora_party.h): a live enemy within g_bs_cm of Sora (default 3000: user 30 m, after 20 m "bring that up to 20 meters"; was 1500 = PC_BATTLE_CM, the party's: Donald /
+// party's stand-in (pc_battle, sora_party.h): a live enemy within g_bs_cm of Sora (default 3400: user 34 m, after 20 m and 30 m; "bring that up to 20 meters"; was 1500 = PC_BATTLE_CM, the party's: Donald /
 // Goofy (still 15 m) and Sora changed stance together), or a hit on Sora. He relaxes g_bs_hold seconds after the last such frame (GUESS 3 s:
 // the user's "a few seconds after"). At a switch on the ground the pose drawn last is frozen as the from-pose and the other
 // variant blends in over KH_LOOP_BLEND (GUESS: KH2's idle / walk / run blend, the s64 drawer), walk / run keeping the cycle's
