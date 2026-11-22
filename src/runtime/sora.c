@@ -483,7 +483,7 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
-static int g_footik, g_footik_log;  // (footik: see fik_apply)
+static int g_footik = 1, g_footik_log;  // (footik: see fik_apply; on by default, user tested)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -4276,7 +4276,7 @@ static void keyblade2_hide(float *bones) {
 // the whole body (no leg stretches); each leg is then lifted by its offset minus that drop: a two-bone IK (hip -> knee ->
 // ankle, the knee kept in its animated plane) through the rig's subtree masks, the foot turned back to its animated angle.
 // Offsets / drop are smoothed (FIK_TAU s) and the whole effect ramps in over FIK_RAMP s. SAVAGEWIND_SORA_FOOT_IK=1 /
-// live "set footik 0/1", "set footiklog 0/1"; default 0. Log '[footik] ...'.
+// live "set footik 0/1", "set footiklog 0/1"; default 1 (user tested, on by default). Log '[footik] ...'.
 static bool g_fik_now;  // (the drive path's draw block: the poses drawn now go through fik_apply)
 // (footik test 2, user: "some flickering running or walking up a slope") Log: the weight fell to 0 mid-run (the gate dropped:
 // the plain pose for a frame = the body / legs popped) and the ground values jumped frame to frame. Now: g_fik_gate (ground, no
