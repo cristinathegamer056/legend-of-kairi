@@ -173,13 +173,13 @@ static void guard_release(const char *why) {
 // while you were in aerial dodge, the attack would get blocked or deflected." While the Aerial Dodge motion plays in the air
 // (base Sora's sora_bdodge.h or Master's sora_master.h, both MOT_AIR_DODGE) the exe's hit drop is on from every side, as the
 // guard window's; a dropped hit = the guard's Keyblade spark + clang (ad_block), but the dodge goes on: no reflect motion, no
-// 80 invulnerable frames. SAVAGEWIND_SORA_AIR_DODGE_BLOCK=1 / live "set adblock 0/1" (sora.c); default 0.
+// 80 invulnerable frames. SAVAGEWIND_SORA_AIR_DODGE_BLOCK=1 / live "set adblock 0/1" (sora.c); default 2 = deflect (user tested both; 1 = block).
 // (adblock 2, user: "Instead of it blocking, are we able to have it like how link deflects with his shield. So that potential
 // attacks or projectiles get reflected back.") Mode 2 = deflect: during the dodge Link's own guard + just-guard bits are raised
 // (parry_link_frame, the guard's s92 option A) and the beam reflect is on from every side (as Reflect's barrier), so BotW's
 // vanilla shield parry sends what it can back (a Guardian beam: REFLECT x0.3 speed at the enemies); melee hits are still
 // dropped with the spark + clang, and the dodge goes on (a reflect while dodging = ad_block, not the guard's reflect motion).
-static int g_adblock;
+static int g_adblock = 2;
 static bool g_ad_prev;  // (last frame's dodge window: the exe's drop runs the game frame after the set, like set_win_prev)
 // (adblock test 2, user: "When the deflection happens, Sora reverts to links glidding animation") Log: the deflected hit held
 // Link in place mid-air (BotW's guard reaction), Sora's jump read the stopped fall as a landing ("land ... (stopped)" at
