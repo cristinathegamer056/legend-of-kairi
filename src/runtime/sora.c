@@ -483,6 +483,7 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
+static int g_holdinv;  // (holdinv: see hold_tick, after sora_carry.h)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -688,6 +689,7 @@ static void hits_load(void) {
     g_cure_pct = env_f("SAVAGEWIND_SORA_CURE_PCT", g_cure_pct);
     g_hit_r = env_f("SAVAGEWIND_SORA_HIT_R", g_hit_r), g_hit_h = env_f("SAVAGEWIND_SORA_HIT_H", g_hit_h);
     g_hit_pad = env_f("SAVAGEWIND_SORA_HIT_PAD", g_hit_pad);
+    g_holdinv = env_f("SAVAGEWIND_SORA_HOLD_INV", (float)g_holdinv) != 0;  // (holdinv)
     const char *fin = getenv("SAVAGEWIND_SORA_FIN_F54");
     if (fin && *fin) g_fin_f54 = (int)strtol(fin, NULL, 0);
     LOG("[sora] hit bake %s: %d slots (damage base %.1f, finisher f54 %#x, enemy cylinder r %.2f h %.2f pad %.2f)\n",
@@ -5548,6 +5550,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 1500.0f;  // (an enemy within this = a fight)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "holdinv")) g_holdinv = v != 0, LOG("[hold] holdinv %d (%s)\n", g_holdinv, g_holdinv ? "items held from the inventory: Link's pose + drawn" : "off");  // (holdinv)
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
             else if (!strcmp(key, "slopemax")) g_slope_max = (float)v;
@@ -6543,6 +6546,53 @@ static void ffin_set(int on) {  // (s92) Final's hit bakes _s91 / _s92, live (hi
 #include "sora_slate.h"  // (s93 b7-runes: Sheikah Slate row + Magnesis + rune recon)
 #include "sora_slatehip.h"  // (s94 b8-slatehip: the Slate on Sora's hip)
 #include "sora_carry.h"  // (s217 world: carrying barrels / rocks / pots = Link's frame while he is in BotW's PlayerGrab; live carry, default off)
+// (holdinv) user: "When Sora is holding items in his hands, for example ingredients to cook, instead of using links carry
+// animation, Sora's KH2 animation still plays out. On top of that, the ingredients remain hidden". The log had no "[carry] on":
+// carry mode needs BotW's PlayerGrab (barrels / rocks / pots), and an inventory hold is not a lift. GUESS: the held items are
+// Link +0x88 too (the carried-object slot BotW's grab actions read, carry_held_now). With this on, while carry mode is off and
+// that slot holds an actor near Link, the frame is Link's (Sora takes his hold pose, as in carry mode) and the exe draws that
+// actor (linkpos_gear_show bit 1 by its name: held items take hidden Link's opacity, as the bow's arrow). Every change of the
+// slot is logged; bit 2 logs the actor names near Link once per hold (the names if the GUESS slot is wrong).
+// SAVAGEWIND_SORA_HOLD_INV=1 / live "set holdinv 0/1"; default 0. Log '[hold] ...'.
+#define HOLD_OFF_N 10  // frames with the slot empty before the hold ends
+// (sora_carry.h: "an unrelated +0x88 never starts or keeps carry mode": the slot can hold other things) Only inventory materials
+// count: Item_* (fruit, mushrooms, meat, fish, ore, monster parts ...) and Animal_Insect_* (bugs, lizards). GUESS list.
+static bool hold_name_ok(const char *n) { return !strncmp(n, "Item_", 5) || !strncmp(n, "Animal_Insect_", 14); }
+static int hold_tick(uint64_t present, int st, uint32_t sw, bool dead) {
+    static uint64_t last_raw, held;
+    static int off_n;
+    static char name[48];
+    uint64_t a = link_actor();
+    uint64_t raw = a && rd_ok(a + 0x88, 8) ? *(const uint64_t *)(uintptr_t)(a + 0x88) : 0;
+    if (g_holdinv && raw != last_raw) {
+        float d = -1;
+        uint64_t ok = carry_held_now(a, &d);
+        LOG("[hold] Link +0x88 = %llx %s (%.2f u away%s), state %#x, carry %d at present %llu\n", (unsigned long long)raw,
+            raw ? carry_actor_name(raw) : "-", d, raw && !ok ? ", not a held object" : "", sw, carry_on(), (unsigned long long)present);
+    }
+    last_raw = raw;
+    float d = -1;
+    uint64_t h = g_holdinv && !dead && !g_loading && !carry_on() && !IN_MICKEY ? carry_held_now(a, &d) : 0;
+    if (h && !hold_name_ok(carry_actor_name(h))) h = 0;  // (not an inventory material: the change line above names it)
+    if (h) {
+        off_n = 0;
+        if (h != held) {
+            held = h;
+            snprintf(name, sizeof name, "%s", carry_actor_name(h));
+            LOG("[hold] on: Link holds %s (%.2f u away): Sora takes his pose, the item is drawn\n", name, d);
+        }
+    } else if (held && ++off_n >= HOLD_OFF_N) {
+        LOG("[hold] off: %s left his hands (present %llu)\n", name, (unsigned long long)present);
+        held = 0, name[0] = 0, S.fresh = true;
+    }
+    if (!held) return st;
+    static void (*show)(int, const char *, const char *, const float *);
+    static int tried;
+    if (!tried) tried = 1, show = (void (*)(int, const char *, const char *, const float *))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_gear_show");
+    static const float zero[3];
+    if (show && name[0] && strcmp(name, "?")) show(2 | 4, "", name, zero);
+    return LINK_OTHER;
+}
 #include "sora_roxsfx.h"  // (s110 roxsfx: Roxas sounds + fx)
 #include "sora_ffx.h"    // (s93 b7-ffx: Final swing fx + Final / Limit own trail windows)
 #include "sora_abilfx.h"  // (s107 b19-abilfx: KH2 fx + SE of the combo-ability attacks)
@@ -7301,6 +7351,7 @@ static void sora_mod_frame_body(void) {
     wpn_tick(!dead && !g_loading && !carry_on());  // (s128 wpn: Link's BotW weapon in Sora's hand; s217: not while he carries an object - last frame's carry mode)
     st = sk_tick(present, st, sw_now);  // (s93 b7-runes: Slate mode = Link's pad + Sora puppets him, like the swim latch)
     st = carry_tick(present, st, sw_now, dead, g_loading, swim_at != 0);  // (s217 world: carry mode = the same, while Link carries; st unchanged while carry is 0)
+    st = hold_tick(present, st, sw_now, dead);  // (holdinv: items held from the inventory = Link's frame + drawn)
     orb_tick(present, p, dead || g_loading);  // (s131 orbs)
     sv_tick(present, p, dead || g_loading);   // (s131 savept)
     skt_tick(present, st, p, dead || g_loading);  // (s110 skate: the board's place + draw, auto get-off)
