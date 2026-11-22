@@ -3892,6 +3892,13 @@ bool linkpos_foot_effect(const float pos[3], float speed, uint32_t mat, float de
     *(float *)(r + 0x0c) = pos[0], *(float *)(r + 0x1c) = pos[1], *(float *)(r + 0x2c) = pos[2];  // (the matrix translation)
     *(float *)(r + 0x48) = 0, *(float *)(r + 0x4c) = -speed, *(float *)(r + 0x50) = 0;            // (contact velocity)
     *(uint32_t *)(r + 0x80) = mat;          // (the floor's MaterialMask raw)
+    // (test 6: splashes only on some steps, walking too, all requests played) FUN_71011f5ab4 also sets xlink property 4 =
+    // rec+0x54, 7 = rec+0x9c (1.0 for a Water floor), 0xe = rec+0xa0 (1.0 only while a global flag, +0x192f4 bit 0x8000000, is
+    // set): left at the init's 0 they made the effect GUESS zero-strength except while that flag was on. The game's contact
+    // code fills them; here 1.0 / 1.0 and the contact speed.
+    *(float *)(r + 0x54) = speed;
+    *(float *)(r + 0x9c) = 1.0f;
+    *(float *)(r + 0xa0) = 1.0f;
     *(int32_t *)(r + 0x90) = 0xf;           // (contact type: a foot)
     *(uint8_t *)(r + 0xc4) = 4;             // (the contact effect only)
     *c = save;
