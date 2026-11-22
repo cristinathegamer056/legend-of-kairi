@@ -387,13 +387,12 @@ static void mk_hit(int atkp, uint64_t actor);  // a hit of his: Drive gauge
 static void mk_dchg_loop(void);  // (s110m review: the held D-Charge's loop, before the motion end check)
 #include "sora_wisdom_lv.h" // (s75: Wisdom EXP per kill + form levels; needs IN_WISDOM)
 // (watersplash) user: "when Sora is walking or running on water, have his footsteps make splashes". On each of Sora's KH2
-// walk / run steps (exe sora_sfx_steps_fired) while wading (water depth > 2 cm), BotW's own foot effect trigger is emitted on
-// Link (exe linkpos_elink_emit -> xlink searchAndEmit): Link's effect table picks the water variant. Which key Link's table
-// has is not known yet: the first wading step tries every WSPL_KEYS name once and logs which emitted ('[splash] key ...'),
-// then the first that did is used (live "set splashkey N" forces WSPL_KEYS[N], -1 = auto). Needs both exe exports
-// (else off, logged). SAVAGEWIND_SORA_WATER_SPLASH=1 / live "set watersplash 0/1"; default 0.
+// walk / run steps (exe sora_sfx_steps_fired) while wading (water depth > 2 cm), the exe plays BotW's own foot contact effect
+// on the water surface above his feet (linkpos_foot_effect: a type-0xf contact record, material Water, no stepping actor:
+// the game's contact effect manager plays its own FootEffect for water). (Test 2: "FootEffect" etc. are not in Link's own xlink
+// table, the game emits them on its contact system actor.) SAVAGEWIND_SORA_WATER_SPLASH=1 / live "set watersplash 0/1";
+// default 0.
 static int g_watersplash;
-static int g_splashkey = -1;
 static int g_botwsteps = 1;       // (kh2steps, see g_stepdiag) BotW surface footsteps on (tested in game: on by default)
 static int g_stepgain = 100;      // their gain x100
 static const char *g_step_bank;   // this frame's surface bank (NULL = none / KH2)
@@ -5576,7 +5575,6 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
             else if (!strcmp(key, "stepdiag")) g_stepdiag = v != 0, LOG("[steps] stepdiag %d\n", g_stepdiag);  // (kh2steps diag)
             else if (!strcmp(key, "watersplash")) g_watersplash = v != 0, LOG("[splash] watersplash %d\n", g_watersplash);  // (watersplash)
-            else if (!strcmp(key, "splashkey")) g_splashkey = v, LOG("[splash] splashkey %d\n", g_splashkey);
             else if (!strcmp(key, "botwsteps")) g_botwsteps = v != 0, LOG("[steps] botwsteps %d\n", g_botwsteps);  // (kh2steps)
             else if (!strcmp(key, "stepgain")) g_stepgain = v < 0 ? 0 : v > 400 ? 400 : v, LOG("[steps] stepgain %d\n", g_stepgain);
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
@@ -7393,43 +7391,32 @@ static void sora_mod_frame_body(void) {
             }
         }
     }
-    if (g_watersplash) {  // (watersplash) a splash per step while wading
-        static const char *const WSPL_KEYS[] = {"FootEffect", "FootRipple_L", "Footprint", "FootPrint", "Step",
-                                                 "ContactGround_InWater", "InWater_Walk", "Water_Splash01", "WaterSplash"};
-        enum { NK = (int)(sizeof WSPL_KEYS / sizeof *WSPL_KEYS) };
-        typedef bool (*Emit)(const char *);
+    if (g_watersplash) {  // (watersplash) BotW's own foot splash per step while wading
+        typedef bool (*FootFx)(const float *, float, uint32_t);
         typedef unsigned (*Steps)(void);
-        static Emit em;
+        static FootFx ff;
         static Steps sf;
-        static int tried, probed, pick = -1;
+        static int tried, logged;
         static unsigned seen;
-        static bool left;
         if (!tried) {
             tried = 1;
-            em = (Emit)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_elink_emit");
+            ff = (FootFx)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_foot_effect");
             sf = (Steps)(void *)GetProcAddress(GetModuleHandleA(NULL), "sora_sfx_steps_fired");
-            LOG("[splash] %s\n", em && sf ? "ready" : "this exe has no linkpos_elink_emit / sora_sfx_steps_fired (NEEDS EXE RELINK)");
+            LOG("[splash] %s\n", ff && sf ? "ready" : "this exe has no linkpos_foot_effect / sora_sfx_steps_fired (NEEDS EXE RELINK)");
             if (sf) seen = sf();
         }
-        if (em && sf) {
+        if (ff && sf) {
             unsigned now = sf();
             bool step = now != seen;
             seen = now;
-            if (step && link_water_depth() > 0.02f) {
-                if (!probed) {  // (first wading step: which keys does Link's effect table have?)
-                    probed = 1;
-                    for (int i = 0; i < NK; i++) {
-                        bool ok = em(WSPL_KEYS[i]);
-                        LOG("[splash] key %d \"%s\": %s\n", i, WSPL_KEYS[i], ok ? "EMITTED" : "not in Link's table");
-                        if (ok && pick < 0) pick = i;
-                    }
-                    LOG("[splash] using %s\n", pick >= 0 ? WSPL_KEYS[pick] : "nothing (no key emitted)");
-                } else {
-                    int k = g_splashkey >= 0 && g_splashkey < NK ? g_splashkey : pick;
-                    const char *key = k >= 0 ? WSPL_KEYS[k] : NULL;
-                    if (key && !strcmp(key, "FootRipple_L")) key = (left = !left) ? "FootRipple_L" : "FootRipple_R";
-                    if (key) em(key);
-                }
+            float lp[3], wd = link_water_depth();
+            if (step && wd > 0.02f && linkpos_link_pos(lp)) {
+                uint32_t m = 8;  // (material Water, sub 0: the floor ray sees the riverbed)
+                float at[3] = {lp[0], lp[1] + wd, lp[2]};  // (on the water surface)
+                float speed = g_step_bank && strstr(g_step_bank, "Water") ? 3.0f : 2.0f;
+                bool ok = ff(at, speed, m);
+                if (logged < 6) logged++, LOG("[splash] step in water (depth %.2f, floor %#x): %s\n", wd, m,
+                                               ok ? "foot effect played" : "the game's contact effects refused");
             }
         }
     }

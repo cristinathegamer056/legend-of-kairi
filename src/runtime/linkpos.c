@@ -3857,31 +3857,48 @@ bool linkpos_raycast(const float from[3], const float to[3], float hit[3], float
     return ok;
 }
 
-// (watersplash) BotW's effect trigger on Link: 1.9.0 FUN_7101100bd0: Handle (16 B) returned by value = the AArch64 indirect
-// result register x8 (Ghidra shows it as param_1), x0 Actor*, x1 const char* key. (First version passed the handle in x0:
-// the game took it for the actor, found no xlink holder and wrote its empty handle through x8 = 0: crash, user test 1.)
-// = if actor+0x568 (its xlink holder) and holder+0x48 (the ELink user instance): FUN_7100f3fc10 -> xlink2 searchAndEmit(key,
-// handle) ("searchAndEmit(%s)", 0x7100f50e80); the handle stays 0 when the user has no such key. 59 game callers. The effect
-// plays at Link (his bones / position = Sora's, Link is only hidden) and picks its variant (water, mud ...) from his state.
-// Returns true when something was emitted. Inside linkpos_frame only; 1.8.2: no address = false.
-bool linkpos_elink_emit(const char *key) {
+// (watersplash) BotW's own foot effect (dust / water splash) at a point, the way the game plays contact effects (1.9.0):
+//   record = FUN_710058194c(rec) (a 3x4 matrix at 0 = identity, normal (0,1,0) at +0x30, scale 1 at +0x3c, MaterialMasks at
+//   +0x60 / +0x78 (raw at +0x80), +0xb8 actor 0, +0xc0 2, +0xc4 flags 6), then FUN_71011f1ab4(mgr = *(*0x7101d66ab8), rec):
+//   if mgr+0xb0 and flags bit 2 -> FUN_71011f3708(*(mgr+0xa0), rec): type rec+0x90 0xf / 0x13 / 0x16 / 0x17 = a foot -> distance
+//   cull (40) -> FUN_71011f5ab4 sets the xlink properties of the system actor *(sub+0x30) (0 material, 1 sub-material, 3 speed
+//   = |rec+0x48|, 5 water depth; from the stepping actor rec+0xb8 when its in-water flag +0x68f is set: its water material
+//   +0x6fc / +0x700 and surface +0x6f0) and lifts the point to the water surface -> searchAndEmit("FootEffect") on the actor,
+//   else on the system actor -> the effect's position / scale (+0xa8 / +0xb4, flag +0x180 | 4). Flags 4 = the effect only
+//   (bit 1 = the contact sound path, FUN_71011f5fd8: off, Sora has his own steps).
+// Here: type 0xf, the point `pos`, velocity (0, -speed, 0), the material raw `mat`, NO stepping actor: FUN_71011f3708 returns
+// early for an actor whose xlink holder +0xcc lacks bits 0xc (Link is hidden by the mod), so the caller states the water
+// itself (mat = 8 Water, pos = on the surface) and the system actor plays it.
+// Inside linkpos_frame only; false when it could not run. 1.8.2: no addresses = false.
+bool linkpos_foot_effect(const float pos[3], float speed, uint32_t mat) {
     Cpu *c = g_in_frame ? kernel_current_cpu() : NULL;
-    if (!c || !key || !key[0] || strlen(key) > 0x5f || !SS->elink_emit || !dispatch_lookup(SS->elink_emit)) return false;
-    uint64_t pinfo = *(uint64_t *)(uintptr_t)PLAYER_INFO_PTR;
-    if (!in_guest(pinfo)) return false;
-    uint64_t actor = *(uint64_t *)(uintptr_t)(pinfo + PLAYER_ACTOR);
-    if (!in_guest(actor)) return false;
+    if (!c || !pos || !SS->contact_fx_mgr_ptr || !dispatch_lookup(SS->contact_rec_init) || !dispatch_lookup(SS->contact_fx_play))
+        return false;
+    uint64_t gp = *(const uint64_t *)(uintptr_t)SS->contact_fx_mgr_ptr;
+    if (!in_guest(gp)) return false;
+    uint64_t mgr = *(const uint64_t *)(uintptr_t)gp;
+    if (!in_guest(mgr)) return false;
     Cpu save = *c;
-    uint64_t sp = (c->sp - 0x100) & ~0xfull;  // handle at +0, the key string at +0x10 (both guest memory)
-    memset((void *)(uintptr_t)sp, 0, 0x80);
-    strcpy((char *)(uintptr_t)(sp + 0x10), key);
+    uint64_t sp = (c->sp - 0x200) & ~0xfull;  // the record (0x100 B) at sp + 0x100, below the live guest sp
+    uint64_t rec = sp + 0x100;
+    memset((void *)(uintptr_t)rec, 0, 0x100);
     c->sp = sp;
-    for (int i = 2; i < 8; i++) c->x[i] = 0;
-    c->x[0] = actor, c->x[1] = sp + 0x10, c->x[8] = sp;  // (x8 = the returned Handle)
-    guest_call(c, SS->elink_emit);
-    bool ok = *(const uint64_t *)(uintptr_t)sp != 0;
+    c->x[0] = rec;
+    guest_call(c, SS->contact_rec_init);
+    uint8_t *r = (uint8_t *)(uintptr_t)rec;
+    *(float *)(r + 0x0c) = pos[0], *(float *)(r + 0x1c) = pos[1], *(float *)(r + 0x2c) = pos[2];  // (the matrix translation)
+    *(float *)(r + 0x48) = 0, *(float *)(r + 0x4c) = -speed, *(float *)(r + 0x50) = 0;            // (contact velocity)
+    *(uint32_t *)(r + 0x80) = mat;          // (the floor's MaterialMask raw)
+    *(int32_t *)(r + 0x90) = 0xf;           // (contact type: a foot)
+    *(uint8_t *)(r + 0xc4) = 4;             // (the contact effect only)
     *c = save;
-    return ok;
+    c->sp = sp;
+    for (int i = 2; i < 9; i++) c->x[i] = 0;
+    c->x[0] = mgr, c->x[1] = rec;
+    guest_call(c, SS->contact_fx_play);
+    bool on = (c->x[0] & 1) != 0;  // (false = the manager's effects are off)
+    *c = save;
+    return on;
 }
 
 // (kh2steps) linkpos_raycast + the hit's material: the helper's x4 = an out record (1.9.0 FUN_7100bd78a0 -> FUN_7100bd74a0:

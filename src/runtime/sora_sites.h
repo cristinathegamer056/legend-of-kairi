@@ -28,7 +28,9 @@
     X(die_enemy_caller_b,      0x7000684c6cull, 0x700079819cull)    \
     /* linkpos.c: ray cast, gdt, fire, enemy target redirect */     \
     X(ray_ground_seg,          0x7000ac4390ull, 0x7000bd78a0ull)    \
-    X(elink_emit,              0x0ull,          0x7001100bd0ull)    \
+    X(contact_fx_mgr_ptr,      0x0ull,          0x7001d66ab8ull)    \
+    X(contact_rec_init,        0x0ull,          0x700058194cull)    \
+    X(contact_fx_play,         0x0ull,          0x70011f1ab4ull)    \
     X(gdt_mgr,                 0x7001cd9908ull, 0x7001e3b188ull)    \
     X(gdt_get_bool,            0x700102385cull, 0x70011375ecull)    \
     X(gdt_get_s32,             0x70010238f4ull, 0x7001137684ull)    \
