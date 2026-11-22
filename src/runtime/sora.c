@@ -483,6 +483,12 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
+// (rollinv) user: "In KH2, Sora's dodge roll gave him brief invincibility. Is it possible to give dodge roll here the same
+// function?" At the roll's start Sora gets g_rollinv invulnerable KH frames (60 a second): the Reaction Command Dodge's own
+// counter g_rc_inv (sora_guard.h), so the exe drops every hit on Link meanwhile (no life lost, no flinch; a swallowed hit is
+// only logged: no guard spark / sound / motion). GUESS 20 (1/3 s from the start; KH2's exact window not traced).
+// SAVAGEWIND_SORA_ROLL_INV=<KH frames> / live "set rollinv <KH frames>"; default 0 = none.
+static int g_rollinv;
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -688,6 +694,8 @@ static void hits_load(void) {
     g_cure_pct = env_f("SAVAGEWIND_SORA_CURE_PCT", g_cure_pct);
     g_hit_r = env_f("SAVAGEWIND_SORA_HIT_R", g_hit_r), g_hit_h = env_f("SAVAGEWIND_SORA_HIT_H", g_hit_h);
     g_hit_pad = env_f("SAVAGEWIND_SORA_HIT_PAD", g_hit_pad);
+    g_rollinv = (int)env_f("SAVAGEWIND_SORA_ROLL_INV", (float)g_rollinv);  // (rollinv)
+    g_rollinv = g_rollinv < 0 ? 0 : g_rollinv > 120 ? 120 : g_rollinv;
     const char *fin = getenv("SAVAGEWIND_SORA_FIN_F54");
     if (fin && *fin) g_fin_f54 = (int)strtol(fin, NULL, 0);
     LOG("[sora] hit bake %s: %d slots (damage base %.1f, finisher f54 %#x, enemy cylinder r %.2f h %.2f pad %.2f)\n",
@@ -5548,6 +5556,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 1500.0f;  // (an enemy within this = a fight)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "rollinv")) g_rollinv = v < 0 ? 0 : v > 120 ? 120 : v, LOG("[sora] rollinv %d KH frames (%s)\n", g_rollinv, g_rollinv ? "the dodge roll is invulnerable for them" : "no roll invincibility");  // (rollinv)
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
             else if (!strcmp(key, "slopemax")) g_slope_max = (float)v;
@@ -7930,7 +7939,8 @@ static void sora_mod_frame_body(void) {
         (!fm_in_form() || IN_LIMIT) && roll_learned() && stam_pay("Dodge Roll", g_rollstam)) {  // (s69: Valor has no Dodge Roll; its bake has no roll slot. s89: Limit's own A180, growth Dodge Roll. s97: 1/8 wheel)
         if (sspeed > 0) S.face = atan2f(sdir[0], sdir[1]);  // the roll goes where the stick points
         play(MOT_ROLL), S.special = SP_ROLL;
-        LOG("[sora] roll at %.3f %.3f %.3f face %.1f\n", p[0], p[1], p[2], S.face * 180 / PI);
+        if (g_rollinv > 0 && (float)g_rollinv > g_rc_inv) g_rc_inv = (float)g_rollinv;  // (rollinv: KH2's dodge roll invincibility)
+        LOG("[sora] roll at %.3f %.3f %.3f face %.1f%s\n", p[0], p[1], p[2], S.face * 180 / PI, g_rollinv > 0 ? " (invulnerable frames on)" : "");
     }
     // the air: re:0x3BA9A0 airborne = ACTION flag bit 0 (JUMP, GLIDE_HOVER, GLIDE), base Sora has no no-gravity
     // motions: each air swing is its own small jump start (re:0x3D78D0 -> re:0x3CBB00), which also leaves a glide
