@@ -4192,6 +4192,11 @@ static uint64_t link_bones_now(void) {  // [unit+0x198] re-resolved (heap: area 
 // s54: are Link's bones a real pose? (s28: save loads in state 0x1 gave none) Every translation finite and within
 // BONES_SANE_U of his feet, and not all on one point; *maxd = the farthest bone from the feet (u), -1 without bones
 #define BONES_SANE_U 3.0f
+// (throw0x1) the same check for the 0x1 frames of a carry's throw (sora_carry.h): the arm + object reach further. GUESS 6 u =
+// CARRY_HELD_DIST. Live "set throw1 0" = the old rule (0x1 = an event: Sora + the KH2 HUD hidden for the throw's ~1 s).
+#define THROW_SANE_U 6.0f
+static int g_throw1 = 1;
+static bool carry_on(void);  // (sora_carry.h, included below)
 static bool link_bones_sane(float *maxd) {
     uint64_t w = link_bones_now();
     float lm[12];
@@ -5548,6 +5553,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 1500.0f;  // (an enemy within this = a fight)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "throw1")) g_throw1 = v != 0;  // (throw0x1)
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
             else if (!strcmp(key, "slopemax")) g_slope_max = (float)v;
@@ -7214,7 +7220,9 @@ static void sora_mod_frame_body(void) {
         was = ev;
         g_cxp_zero = ev;  // (s107 b19-chest)
         if (ev) st = LINK_OTHER;
-        g_event = ev || (sw_now == 0x1 && !dead) || g_chev;
+        // (throw0x1) user: "when I throw a vase, sora and the kh2 hud disappears for a second": BotW puts Link in 0x1 for ~1 s of
+        // the GrabThrow (log: carry on, pot left his hands, 0x1, carry off). While carry mode is on a 0x1 is that throw, not an event.
+        g_event = ev || (sw_now == 0x1 && !dead && !(g_throw1 && carry_on())) || g_chev;
     }
     cprev_tick(st, dead);  // (s106 b18-chestanim: set chestprev <slot>)
     cx_tick(present, p);  // (s106 b18-chestanim: set chestanim 2 = recon log)
@@ -7355,7 +7363,8 @@ static void sora_mod_frame_body(void) {
         // load's spawn (no glow)
         static int ev_kind;  // 0 none, 1 warp-out, 2 arrival
         static uint64_t ev_at, out_at;
-        bool vis = sw == 0x1 && !dead && !g_loading;
+        bool throw1 = g_throw1 && sw == 0x1 && carry_on();  // (throw0x1: the 0x1 inside a carry = the throw: no warp tint)
+        bool vis = sw == 0x1 && !dead && !g_loading && !throw1;
         if (vis && !was_vis) {
             bool after_load = g_load_end && present - g_load_end < 600, pending = out_at && present - out_at < 7200;
             ev_kind = !after_load ? 1 : pending ? 2 : 0, ev_at = present;
@@ -7371,6 +7380,12 @@ static void sora_mod_frame_body(void) {
                 LOG("[sora] puppet in 0x1: bones %s (max dist %.2f u, bones %llx)%s\n", ev_ok ? "sane" : "junk", maxd,
                     (unsigned long long)link_bones_now(), g_puppet_ev ? "" : " [set puppetev 0]");
             last_ev_ok = ev_ok;
+        } else if (throw1) {  // (throw0x1) Link's throw pose reaches past BONES_SANE_U (log: 3.05 u): a wider limit, still finite
+            float maxd = -1;
+            link_bones_sane(&maxd);
+            ev_ok = g_puppet_ev && isfinite(maxd) && maxd > 0.3f && maxd < THROW_SANE_U;
+            static int said = -1;
+            if (ev_ok != said) LOG("[sora] throw0x1: 0x1 during a carry = the throw, puppet %s (bones max dist %.2f u)\n", ev_ok ? "kept" : "off: junk", maxd), said = ev_ok;
         } else if (sw == 0x1) ev_ok = false;
         was_ev = sw == 0x1;
         // (s57 user: "when sora dies i dont see link go into rag doll, it shows sora over him") dying = life 0, before
@@ -7397,7 +7412,7 @@ static void sora_mod_frame_body(void) {
                 cxp_blend(g_rpose);  // (s107 b19-chest: KH2 chest motion over Link's pose)
                 if (!g_puppet_kb) keyblade_hide_rig(g_rpose, RIG_CUR), keyblade2_hide(g_rpose);  // (s110 roxpup: the rig in use)
                 bool gone = false;  // (s54: fully dissolved like BotW's Link at v = 1: not drawn)
-                if (sw == 0x1) {
+                if (sw == 0x1 && !throw1) {  // (throw0x1: no warp glow on the throw)
                     float wv = g_wtsrc ? link_warp_value() : -1;
                     static float l_wv = -2;  // (probe: BotW's ramp, a line per 0.05 step)
                     if (fabsf(wv - l_wv) >= 0.05f || (wv == 0) != (l_wv == 0))
