@@ -209,8 +209,8 @@ int sora_draw_body(void);
 // the drawn motion is variant 2 (also jump / fall / land, which only have 2), out of battle and no special plays, his Keyblade
 // groups are skipped. Swings / spells / Guard have battle slots only, so the Keyblade is back for them. The puppet path (Link has
 // the pad: climb, chest playback with chestkb) always shows it (its own keyblade_hide rule). No KH2 appear / vanish effect yet.
-// SAVAGEWIND_SORA_KB_FIELD=1 / live "set kbfield 1"; default 0 = always in his hand.
-static int g_kbfield;
+// SAVAGEWIND_SORA_KB_FIELD=0 / live "set kbfield 0" = always in his hand (the old look); default 1 (user tested, user's choice).
+static int g_kbfield = 1;
 static void kbf_set(bool hide) {
     static int last_body = -1, last_hide = -1;
     int body = sora_draw_body();
@@ -6898,7 +6898,7 @@ static void sora_mod_frame_body(void) {
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
         g_kbfield = env_f("SAVAGEWIND_SORA_KB_FIELD", (float)g_kbfield) != 0;  // (kbfield)
-        if (g_kbfield) LOG("[sora] kbfield on: no Keyblade in his hand in the field motions (no enemy near)\n");
+        if (!g_kbfield) LOG("[sora] kbfield off: the Keyblade stays in his hand out of battle (the old look)\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
         slog_open();
