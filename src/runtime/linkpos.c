@@ -4572,6 +4572,22 @@ static Cpu *fire_cpu(const char *what, uint64_t fn) {
     return NULL;
 }
 
+// (updraft) 1 = the listed fire object is burning now (its chemical state 2), 0 = not, -1 = unknown / refused. Read only:
+// the same getChemical guest call as linkpos_fire_ignite (inside linkpos_frame), nothing written.
+int linkpos_fire_burning(uint64_t actor) {
+    if (!in_guest(actor) || !fire_actor_ok(actor)) return -1;
+    uint64_t vt = *(const uint64_t *)(uintptr_t)actor;
+    uint64_t getc = in_guest(vt) ? *(const uint64_t *)(uintptr_t)(vt + 8 * VT_GET_CHEMICAL) : 0;
+    Cpu *c = fire_cpu("burning", getc);
+    if (!c) return -1;
+    Cpu save = *c;
+    c->x[0] = actor;
+    guest_call(c, getc);
+    uint64_t chem = c->x[0];
+    *c = save;
+    return in_guest(chem) ? *(const uint8_t *)(uintptr_t)(chem + CHEM_STATE) == 2 : -1;
+}
+
 // 1 = burning now, 2 = asked (state not 2 yet), 0 = nothing to do (no chemical, not burnable, burning already), -1 refused
 int linkpos_fire_ignite(uint64_t actor) {
     if (!in_guest(actor) || !fire_actor_ok(actor)) return -1;

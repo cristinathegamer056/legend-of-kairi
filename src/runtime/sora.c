@@ -1786,6 +1786,35 @@ static const Updraft UPDRAFTS[] = {
 #include "sora_updraft_data.inc"
 };
 static int g_updraft = 1, g_updraft_k = 50;
+// (updraft, fire) user tested at a campfire: BotW's fire updraft is a chemical element (not a map column). Above a BURNING
+// campfire / cooking pot (linkpos's fire-object list: FireWood / CookSet; linkpos_fire_burning) within g_fireup_r u
+// across and g_fireup_h u above its feet, the push is g_fireup_push u/s straight up (all GUESSES; the same g_updraft_k %).
+// Live "set fireup 0/1", "set fireupr / fireuph / fireupv <dm>" (tenths of a unit).
+static int g_fireup = 1, g_fireup_r = 15, g_fireup_h = 150, g_fireup_push = 200;
+// the up push (u/s) when p is in the updraft of a burning campfire / pot, else -1 (else its list index)
+static int fireup_at(const float p[3], float push[3]) {
+    static LinkposFireObjsFn objs;
+    static LinkposFireBurningFn burning;
+    static int tried;
+    if (!tried) {
+        tried = 1;
+        objs = (LinkposFireObjsFn)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_fire_objects");
+        burning = (LinkposFireBurningFn)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_fire_burning");
+        LOG("[sora] updraft: fire updrafts %s\n", objs && burning ? "on (campfires / cooking pots)" : "MISSING (exe without linkpos_fire_burning)");
+    }
+    if (!objs || !burning) return -1;
+    LinkposFireObj o[48];
+    int n = objs(o, 48);
+    float r = g_fireup_r / 10.0f, h = g_fireup_h / 10.0f;
+    for (int i = 0; i < n; i++) {
+        if (!strstr(o[i].name, "FireWood") && !strstr(o[i].name, "CookSet")) continue;
+        float dx = p[0] - o[i].pos[0], dy = p[1] - o[i].pos[1], dz = p[2] - o[i].pos[2];
+        if (dx * dx + dz * dz > r * r || dy < 0 || dy > h || burning(o[i].actor) != 1) continue;
+        push[0] = push[2] = 0, push[1] = g_fireup_push / 10.0f;
+        return i;
+    }
+    return -1;
+}
 // the push (u/s, world) of the column p (u, world) is in, else -1
 static int updraft_at(const float p[3], float push[3]) {
     for (int i = 0; i < (int)(sizeof UPDRAFTS / sizeof UPDRAFTS[0]); i++) {
@@ -5600,6 +5629,10 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "ride") || !strcmp(key, "wind")) ride_wind_set(key[0] == 'r', v != 0);  // s88: platform carry / wind push
             else if (!strcmp(key, "glide")) g_glide_on = v != 0;
             else if (!strcmp(key, "updraft")) g_updraft = v != 0, LOG("[sora] updraft %d\n", g_updraft);  // (updraft)
+            else if (!strcmp(key, "fireup")) g_fireup = v != 0;  // (updraft, fire)
+            else if (!strcmp(key, "fireupr")) g_fireup_r = v < 1 ? 1 : v;
+            else if (!strcmp(key, "fireuph")) g_fireup_h = v < 1 ? 1 : v;
+            else if (!strcmp(key, "fireupv")) g_fireup_push = v < 0 ? 0 : v;
             else if (!strcmp(key, "updraftk")) g_updraft_k = v < 0 ? 0 : v > 300 ? 300 : v, LOG("[sora] updraftk %d%%\n", g_updraft_k);
             else if (!strcmp(key, "glidestam")) g_glidestam = v < 0 ? 0 : v > 2 ? 2 : v;
             else if (!strcmp(key, "dodgestam")) g_dodgestam = v < 0 ? 0 : v > 1000 ? 1000 : v, LOG("[sora] Aerial Dodge stamina cost %d (1000 a wheel, 0 = free)\n", g_dodgestam);
@@ -8192,8 +8225,13 @@ static void sora_mod_frame_body(void) {
             static int in_col = -1;
             float push[3];
             int col = g_updraft ? updraft_at(p, push) : -1;
+            if (col < 0 && g_updraft && g_fireup) {  // (fire) a burning campfire / pot below: column ids 1000 + list index
+                int f = fireup_at(p, push);
+                if (f >= 0) col = 1000 + f;
+            }
             if (col != in_col)
-                LOG("[sora] updraft: %s column %d at %.1f %.1f %.1f\n", col >= 0 ? "in" : "out of", col >= 0 ? col : in_col, p[0], p[1], p[2]), in_col = col;
+                LOG("[sora] updraft: %s %s %d at %.1f %.1f %.1f\n", col >= 0 ? "in" : "out of", (col >= 0 ? col : in_col) >= 1000 ? "fire" : "column",
+                    (col >= 0 ? col : in_col) % 1000, p[0], p[1], p[2]), in_col = col;
             if (col >= 0) {
                 float k = (float)g_updraft_k / 100.0f / to_u / 60.0f;  // (u/s -> cm per KH frame)
                 move[0] += push[0] * k * kh, move[1] += push[2] * k * kh;
