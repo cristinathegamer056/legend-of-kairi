@@ -3357,11 +3357,29 @@ static void hurt_log(int life) {
     }
     prev = life;
 }
+// (hudev) user: "during cutscenes and when speaking with npcs the kh2 hud still displays ... when there is a cutscene, or
+// when you are speaking with npcs or reading a sign, the kh2 hud disappears". BotW hides its own HUD there. Hidden while:
+// g_event (Link's state word 0 held = talks / pickups / scripted stretches, state 0x1 = warps / story events, the chest
+// camera), the message window (screen 0x4a, g_msg_screen) or a freeze screen (g_frz_id, item popups) is up. GUESS that this
+// covers every case: signs / cutscenes may use other screens ('screen diff' log lines show them; add them here).
+// SAVAGEWIND_SORA_HUD_EV=1 / live "set hudev 1"; default 0 = the HUD stays up (the old behaviour).
+static int g_hudev;
+static bool hud_ev_hidden(void) {
+    static int last = -1;
+    const char *why = !g_hudev ? NULL : g_event ? "event" : g_msg_screen ? "message window 0x4a" : g_frz_id >= 0 ? "freeze screen" : NULL;
+    if ((why != NULL) != last) {
+        if (why || last == 1) LOG("[sora] hudev: KH2 HUD %s%s (Link state %#x, freeze screen %d)\n", why ? "hidden: " : "shown again", why ? why : "",
+                                  linkpos_link_state_word(), g_frz_id);
+        last = why != NULL;
+    }
+    return why != NULL;
+}
 static void hud_update(void) {
     enemy_place_sync();  // (s92 hud)
     int life = linkpos_link_life();
     hurt_log(life);
     if (life <= 0) { sora_hud_off(); sora_sfx_loop("danger", false); return; }
+    if (hud_ev_hidden()) { sora_hud_off(); return; }  // (hudev)
     if (life > g_hud_life_max) g_hud_life_max = life;
     // (s57: the max seen since the last hot reload made Cure +2 at 6 / 12; BotW's own max hearts, quarter hearts)
     static unsigned gdt_n;
@@ -5548,6 +5566,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 1500.0f;  // (an enemy within this = a fight)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "hudev")) g_hudev = v != 0, LOG("[sora] hudev %d (%s)\n", g_hudev, g_hudev ? "no KH2 HUD in talks / cutscenes / message windows" : "KH2 HUD always up");  // (hudev)
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
             else if (!strcmp(key, "slopemax")) g_slope_max = (float)v;
@@ -6875,6 +6894,8 @@ static void sora_mod_frame_body(void) {
         int lv = (int)env_f("SAVAGEWIND_SORA_GLIDE_LV", (float)g_glide_lv);
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
+        g_hudev = env_f("SAVAGEWIND_SORA_HUD_EV", (float)g_hudev) != 0;  // (hudev)
+        if (g_hudev) LOG("[sora] hudev on: no KH2 HUD in talks / cutscenes / message windows\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
         slog_open();
