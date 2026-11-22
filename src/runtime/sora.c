@@ -483,7 +483,7 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
-static int g_hflip, g_hflip_tail = 200;  // (hflip: see the riding block)
+static int g_hflip = 1, g_hflip_tail = 200;  // (hflip: see the riding block; on by default, user tested)
 static bool g_hflip_fall;
 #define HFLIP_MAX_MS 900
 #define HFLIP_MIN_MS 250
@@ -7324,7 +7324,7 @@ static void sora_mod_frame_body(void) {
         // -> not riding while off the ground = the jump off the horse: Sora takes Link's pose (puppet, st LINK_OTHER) for the flip,
         // until HFLIP_TAIL_MS after Link starts coming down (3 frames lower), HFLIP_MAX_MS at most, or the ground; then he drives
         // again straight into KH2's Fall (g_hflip_fall, the drive step). GUESS timings. SAVAGEWIND_SORA_HORSE_FLIP=1 / live
-        // "set hflip 0/1", "set hfliptail <ms>"; default 0. Log '[sora] hflip: ...'.
+        // "set hflip 0/1", "set hfliptail <ms>"; default 1 (user tested). Log '[sora] hflip: ...'.
         // (hflip test 1: never started; log: the jump off shows Link state 0x18000002, read as GROUND for the whole flip, so
         // "off the ground" never held and Sora stood until the walk-off saw the drop) The edge alone starts it now; Link's
         // height over the floor (a ray, HFLIP_FLOOR_U) ends it after HFLIP_MIN_MS, the state word is not used.
