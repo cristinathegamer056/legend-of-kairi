@@ -6877,6 +6877,8 @@ static void sora_mod_frame_body(void) {
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
         {  // (chestwarp) the chest-open playback from the launcher too: SAVAGEWIND_SORA_CHEST_ANIM=1 (3 = + its recon log), as live "set chestanim"
             int ca = (int)env_f("SAVAGEWIND_SORA_CHEST_ANIM", (float)g_chestanim);
+            g_cxp_sw = env_f("SAVAGEWIND_SORA_CHEST_SW", (float)g_cxp_sw) != 0;  // (chestsw)
+            if (g_cxp_sw) LOG("[chestanim] chestsw on: a chest start needs Link's state word 0\n");
             g_chestanim = ca < 0 ? 0 : ca > 3 ? 3 : ca;
             if (g_chestanim & 1) LOG("[chestanim] on from the launcher (chestanim %d): Sora's KH2 chest-open motion\n", g_chestanim);
         }

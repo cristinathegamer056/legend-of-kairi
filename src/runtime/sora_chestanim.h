@@ -31,6 +31,12 @@ static int g_cxp_kh2 = 1;
 static bool g_loading;  // (tentative: defined with the load latch below)
 static int g_cxp_cycle = 1, g_cxp_slot = 550, g_cxp_lead = 0, g_cxp_hold = 6000, g_cxp_drop = 8, g_cxp_fall = 900, g_cxp_n;
 static int g_cxp_reach = 300;  // (s108: chestreach <cm>, a TBox_* actor this near Link during the event = the start)
+// (chestsw) user: "when I was using the torch ... whenever I went close to an already open chest, Sora's model would play
+// out his chest opening animation". With the torch out Link is in his own states (st LINK_OTHER, word 0x18000001 /
+// 0x18000000), so walking within chestreach of ANY chest (open ones too: no chest flag is read) started it. Every real
+// opening in the user's logs started with the word exactly 0 (BotW holds Link for the chest demo). With this on, the
+// "chest" start needs word 0. SAVAGEWIND_SORA_CHEST_SW=1 / live "set chestsw 0/1"; default 0. Log '[chestanim] skip: ...'.
+static int g_cxp_sw;
 static bool g_cxp_zero;  // (slice 2) set in sora.c: the state-0 event stretch (Link's word 0 held g_ev_zero presents) is on
 static int g_cprev_req = -1;  // slot asked for by the key, taken by cprev_tick on the next driven frame
 #define CX_PER_FRAME 40
@@ -64,6 +70,7 @@ static bool cx_live_set(const char *key, int v) {
     else if (!strcmp(key, "chestlead")) g_cxp_lead = v < 0 ? 0 : v > 3000 ? 3000 : v, LOG("[chestanim] live chestlead %d ms\n", g_cxp_lead);
     else if (!strcmp(key, "chesthold")) g_cxp_hold = v < 0 ? 0 : v > 6000 ? 6000 : v, LOG("[chestanim] live chesthold %d ms\n", g_cxp_hold);
     else if (!strcmp(key, "chestdrop")) g_cxp_drop = v < 1 ? 1 : v > 60 ? 60 : v, LOG("[chestanim] live chestdrop %d cm\n", g_cxp_drop);
+    else if (!strcmp(key, "chestsw")) g_cxp_sw = v != 0, LOG("[chestanim] live chestsw %d (%s)\n", g_cxp_sw, g_cxp_sw ? "a chest start needs Link's state word 0" : "any state near a chest");
     else if (!strcmp(key, "chestreach")) g_cxp_reach = v < 50 ? 50 : v > 600 ? 600 : v, LOG("[chestanim] live chestreach %d cm\n", g_cxp_reach);
     else if (!strcmp(key, "chestkb")) g_cxp_kb = v != 0, LOG("[chestanim] live chestkb %d (Keyblade %s during the chest motion)\n", g_cxp_kb, g_cxp_kb ? "shown" : "hidden");
     else if (!strcmp(key, "chestkh2")) g_cxp_kh2 = v < 0 ? 0 : v > 2 ? 2 : v, LOG("[chestanim] live chestkh2 %d (%s)\n", g_cxp_kh2, g_cxp_kh2 == 2 ? "KH2's small chest motion, the big one on shrine chests" : g_cxp_kh2 ? "KH2's small chest motion on every chest" : "the A130 / A140 / A141 cycle");
@@ -255,7 +262,16 @@ static void cxp_tick(uint64_t present, int st, uint32_t sw, bool excluded, const
     char tn[48] = "";
     float td = tbox ? tbox(NULL, tn, sizeof tn) : -1;
     if (tbox) {
-        if (td >= 0 && td * 100.0f <= (float)g_cxp_reach) why = "chest";
+        if (td >= 0 && td * 100.0f <= (float)g_cxp_reach) {
+            if (!g_cxp_sw || sw == 0) why = "chest";
+            else {  // (chestsw: Link in his own state near a chest = not its opening; once per stretch)
+                static uint32_t said_sw;
+                static double said_ms;
+                if (said_sw != sw || g_cxp_ev_ms != said_ms)
+                    said_sw = sw, said_ms = g_cxp_ev_ms,
+                    LOG("[chestanim] skip: chest %s %.2f m from Link but his state word is %#x, not 0 (no chest opening; chestsw)\n", tn, td, sw);
+            }
+        }
     } else if (drop * 100.0 >= g_cxp_drop) why = "kneel";
     else if (g_cxp_fall && g_cxp_zero && !g_chev && now - g_cxp_ev_ms >= g_cxp_fall) {
         float d, a;
