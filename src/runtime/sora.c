@@ -212,9 +212,9 @@ int sora_draw_body(void);
 // SAVAGEWIND_SORA_KB_FIELD=0 / live "set kbfield 0" = always in his hand (the old look); default 1 (user tested, user's choice).
 static int g_kbfield = 1;
 // (kbtoggle) user: "a toggle to have sora's keyblade appear and disappear ... the left stick button". L3 (Switch LSTICK) flips
-// g_kb_drawn: on = the battle stance is forced (bs_tick: a fight frame), so the battle idle / walk / run hold the Keyblade with no
-// enemy near; off = the automatic rule again (enemies / hits; the hold is cut so he relaxes at once when none is near). KH2 never
-// sheathes in a fight, so with an enemy near it stays out. While Sora drives (not in a menu, not in Link's own states) L3 does
+// g_kb_drawn. (user, test 1: "he has the keyblade out but not in his battle stance") On, out of battle: the FIELD stance with the
+// Keyblade = KH2's variant 3 (field + weapon: walk 7, run 11; idle has none, so the field idle 2 with the Keyblade shown); off = the
+// field no-weapon variant 2, Keyblade hidden (kbfield). The battle stance stays enemies / hits only, and shows the Keyblade anyway. While Sora drives (not in a menu, not in Link's own states) L3 does
 // not reach BotW (it was BotW's crouch under him). SAVAGEWIND_SORA_KB_TOGGLE=1 / live "set kbtoggle 1"; default 0 = L3 is BotW's.
 #define BTN_L3 (1ull << 4)  // Switch LSTICK (script_parse names[] order)
 static int g_kbtoggle;
@@ -516,9 +516,9 @@ static bool g_bs_on;   // a fight is on right now (or its hold still runs); alwa
 static float g_bs_cm = 3400.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
 static int g_bs_log = 1;
 static const Mot *mot_st(int id) {
-    static const int var[] = {0, 1, 3, 2}, nowpn[] = {2, 3, 0, 1};  // (kbfield: field idle / walk / run = the no-weapon variant 2 first)
+    static const int var[] = {0, 1, 3, 2}, nowpn[] = {2, 3, 0, 1}, wpn[] = {3, 2, 0, 1};  // (kbfield: field = no-weapon variant 2 first; kbtoggle drawn: field + weapon 3 first)
     if (id < MOT_IDLE || id > MOT_RUN) return mot_of(id);
-    return g_bs_on ? mot_var(id, var) : g_kbfield ? mot_var(id, nowpn) : mot_of(id);
+    return g_bs_on ? mot_var(id, var) : g_kbfield ? mot_var(id, g_kb_drawn ? wpn : nowpn) : mot_of(id);
 }
 
 static uint32_t mot_bits(const Mot *m, float t) {
@@ -6260,7 +6260,7 @@ static void bs_tick(const Target *tg, int ntg, float kh) {
             if (nd < 0 || d < nd) nd = d;
         }
         hit = S.special == SP_DAMAGE;
-        fight = hit || g_kb_drawn || (nd >= 0 && nd < g_bs_cm);  // (kbtoggle: L3 holds it)
+        fight = hit || (nd >= 0 && nd < g_bs_cm);
     }
     if (fight) g_bs_left = g_bs_hold * KH_FPS;
     else if (g_bs_left > 0) g_bs_left -= kh;
@@ -6291,7 +6291,7 @@ static void bs_tick(const Target *tg, int ntg, float kh) {
     }
     if (g_bs_log)
         LOG("[sora] bstance: battle %s (%s, nearest enemy %.0f cm of %d, range %.0f, hold %.1f s), motion %d %s\n", on ? "ON" : "off",
-            !g_bstance ? "key off" : hit ? "Sora was hit" : g_kb_drawn ? "L3 toggle" : on ? "enemy in range" : "hold over", nd, ntg, g_bs_cm, g_bs_hold, S.motion,
+            !g_bstance ? "key off" : hit ? "Sora was hit" : on ? "enemy in range" : "hold over", nd, ntg, g_bs_cm, g_bs_hold, S.motion,
             !sw ? "kept (next idle / walk / run takes the variant)" : blend ? "-> the other variant, blended" : "-> the other variant, cut");
     if (sw && g_bs_log) LOG("[sora] bstance: slot %d at clock %.1f\n", S.mot->slot, S.clock);
 }
@@ -7902,8 +7902,13 @@ static void sora_mod_frame_body(void) {
     int ntg = targets_build(p, to_u, tg, 64);
     if (g_kbtoggle && (press & BTN_L3)) {  // (kbtoggle)
         g_kb_drawn = !g_kb_drawn;
-        if (!g_kb_drawn) g_bs_left = 0;  // (no 3 s hold after a manual put-away)
-        LOG("[sora] kbtoggle: L3 -> Keyblade %s\n", g_kb_drawn ? "drawn (battle stance held)" : "automatic (enemies / hits)");
+        const Mot *nm = S.mot && !S.special && S.motion >= MOT_IDLE && S.motion <= MOT_RUN ? mot_st(S.motion) : NULL;
+        if (nm && nm != S.mot && S.mot->frames > 0 && nm->frames > 0) {  // (the field variant swaps now, the cycle's phase kept)
+            float ph = S.clock / (float)S.mot->frames;
+            S.mot = nm, S.clock = (ph < 0 ? 0 : ph > 1 ? 1 : ph) * (float)nm->frames;
+        }
+        LOG("[sora] kbtoggle: L3 -> Keyblade %s (motion %d slot %d)\n", g_kb_drawn ? "drawn (field stance + Keyblade)" : "put away (field stance)",
+            S.motion, S.mot ? S.mot->slot : -1);
     }
     bs_tick(tg, ntg, kh);  // (s259 bstance: battle stance on / off, before this frame's idle / walk / run pick)
     lock_tick(tg, ntg, kh, bits, S.face, r1 && g_targets_on && !sm_fps_busy());  // (s137 review S2: no R1 lock in FPS Mode, its R1 cycles targets)
@@ -8237,7 +8242,7 @@ static void sora_mod_frame_body(void) {
     if (GT.on || g_dbm_clip || (S.special == SP_DAMAGE && !is_free) || nox_win) drive_off();  // (goto hold: zero velocity) BotW's hit push / ragdoll / pick up moves him
     else linkpos_set_velocity(true, vx, vz), linkpos_set_velocity_y(vy_on, vy);  // (the y servo on for the glide too)
     if (!((S.special == SP_DAMAGE && !is_free) || nox_win)) link_face();  // (s87c link face: ground / air only; set linkface 0 = off)
-    kbf_set(g_kbfield && !g_bs_on && S.mot && (!S.special || S.special == SP_ROLL) && (S.mot->slot & 3) == 2);  // (kbfield: the no-weapon field variant, out of battle; the dodge roll A180 = slot 838 too)
+    kbf_set(g_kbfield && !g_bs_on && !g_kb_drawn && S.mot && (!S.special || S.special == SP_ROLL) && (S.mot->slot & 3) == 2);  // (kbfield: the no-weapon field variant, out of battle; the dodge roll A180 = slot 838 too)
     if (SKT.rider_on) {  // (s110 skate: KH2's skate rider + board, one actor, in place of the body)
         skt_rider_draw(kh, to_u);
         g_lb_prev = g_lb_from = -1, g_lb_prev_sp = false;
