@@ -6,7 +6,7 @@
 //                         comparison) with the slot's own KH2 SE / voice triggers. Fires when the value CHANGES (set chestprev 0 to re-arm
 //                         the same slot). Refused with a "[chestprev] refused" log line in the air, in a form / Limit, during an event,
 //                         dead / loading, or while another motion owns Sora.
-//   set chestanim 0..3    bit 0 (1) = SLICE 2 PLAYBACK on a chest open, bit 1 (2) = the recon log ("[chestanim]" lines). 0 off (default),
+//   set chestanim 0..3    bit 0 (1) = SLICE 2 PLAYBACK on a chest open, bit 1 (2) = the recon log ("[chestanim]" lines). 0 off, 1 (default)
 //                         1 play, 2 log only, 3 both (the log keeps running with the playback). See the slice 2 block at the end.
 //
 // Recon log (chestanim 2): change-only lines with ms since the key was set (QueryPerformanceCounter): Link state word, g_event, screens
@@ -16,7 +16,7 @@
 // a flag edge is logged with the sweep number, the frame it was read on and the sweep's start time (the edge happened between the two reads).
 #pragma once
 
-static int g_chestprev_last = 0, g_chestanim = 0;
+static int g_chestprev_last = 0, g_chestanim = 1;  // (chestkh2: playback ON by default, user tested; live / SAVAGEWIND_SORA_CHEST_ANIM 0 = off)
 static int g_cxp_kb = 1;  // (chestkb) the Keyblade is drawn while the chest-open motion plays (live "set chestkb 0|1")
 // (chestkh2) user: none of A130 / A140 / A141 (nor any other P_EX100 field / attack motion) is KH2's chest open, where Sora
 // swings the Keyblade at the lid. KH2 keeps that motion in the chest objects: F_EX030.mset (small chest) / F_EX040.mset (big)

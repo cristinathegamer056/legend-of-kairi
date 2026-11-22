@@ -3,6 +3,7 @@
 Everything is rebuilt from the player's KH2 extract (ctx.kh2). Tools live in tools/sorabuild/cs/<tool>/ (built by step cs_build into
 work/cs/<tool>/), python helpers in tools/sorabuild/bakes/, our own Keyblade alt lists in tools/sorabuild/ours/kb/.
 Merge order (strict, each merge appends slots to the previous result): base bake -> s133 limits -> s149 knock -> s150 duck.
+Sora also gets the chest bake (chestkh2: KH2's chest-open motions, slots 1600 / 1604) after s149.
 """
 import os
 import shutil
@@ -152,6 +153,16 @@ def _duck150(ctx):   # s150: Duck Flare (donald2.bar) slots 1500.. (Donald)
     limit_set(ctx, d, "donald2", 1500, [("donald", "0020", "0021", "P_EX020", "W_EX020", "131", "17")])
 
 
+def _chest(ctx):  # (chestkh2) Sora's KH2 chest-open motions (F_EX030 / F_EX040 .mset AZ10 / AZ50 '0010') at slots 1600 / 1604
+    d = wd(ctx, "chest")
+    ms, mw = os.path.join(d, "chest_sora.mset"), os.path.join(d, "chest_sora_w.mset")
+    ctx.py(os.path.join(BK, "chestmset.py"), "1600", ms, mw, env={"SORABAKE_KH2": ctx.kh2})
+    env = {"PARTYBAKE_MODEL": "P_EX100", "PARTYBAKE_WEAPON": "W_EX010", "PARTYBAKE_WJOINT": "178", "PARTYBAKE_PRTY": "1",
+           "PARTYBAKE_MSET": ms, "PARTYBAKE_KBMSET": mw}
+    run_tool(ctx, "partybake", "bake", [os.path.join(d, "sora_motion.bin"), os.path.join(d, "sora_params.h")], env)
+    run_tool(ctx, "partybake", "pose", [os.path.join(d, "sora_pose.bin")], env)
+
+
 def merge_chain(ctx, kind, base, adds, out):
     """base + each add in order -> out (intermediate results in work)"""
     cur = base
@@ -164,7 +175,8 @@ def merge_chain(ctx, kind, base, adds, out):
 def _sora_mp(ctx):
     for kind, nm in (("motion", "sora_motion.bin"), ("pose", "sora_pose.bin")):
         merge_chain(ctx, kind, os.path.join(wd(ctx, "sora_base"), nm.split("_")[1]),
-                    [os.path.join(wd(ctx, "s133"), "sora_%s.bin" % kind), os.path.join(wd(ctx, "s149"), "sora_%s.bin" % kind)],
+                    [os.path.join(wd(ctx, "s133"), "sora_%s.bin" % kind), os.path.join(wd(ctx, "s149"), "sora_%s.bin" % kind),
+                     os.path.join(wd(ctx, "chest"), "sora_%s.bin" % kind)],
                     ctx.outp(nm))
     # the temp merge files are 80 MB each: drop them
     shutil.rmtree(os.path.join(ctx.work, "bakes", "merge_tmp", ctx.step), ignore_errors=True)   # (s168) per step: steps run in parallel
@@ -479,7 +491,8 @@ STEPS = [
     Step("knock149", _knock149, work_outputs=["bakes/s149/%s_%s.bin" % (n, k) for n in ("sora", "goofy") for k in ("motion", "pose")],
          deps=["cs_build", "lim133"]),
     Step("duck150", _duck150, work_outputs=["bakes/s150/donald_motion.bin", "bakes/s150/donald_pose.bin"], deps=["cs_build", "knock149"]),
-    Step("sora_mp", _sora_mp, outputs=["sora_motion.bin", "sora_pose.bin"], deps=["sora_base", "lim133", "knock149"]),
+    Step("chest", _chest, work_outputs=["bakes/chest/sora_motion.bin", "bakes/chest/sora_pose.bin"], deps=["cs_build"]),
+    Step("sora_mp", _sora_mp, outputs=["sora_motion.bin", "sora_pose.bin"], deps=["sora_base", "lim133", "knock149", "chest"]),
     Step("party_donald", _party("donald", ["s133", "s150"]),
          outputs=["party/donald_%s.bin" % k for k in ("model", "hits", "motion", "pose")], deps=["cs_build", "lim133", "duck150"]),
     Step("party_goofy", _party("goofy", ["s133", "s149"]),
