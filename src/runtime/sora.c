@@ -483,6 +483,7 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
+static int g_evstick;  // (evstick, sora_chestev.h: a right-stick camera turn is no chest event)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -688,6 +689,8 @@ static void hits_load(void) {
     g_cure_pct = env_f("SAVAGEWIND_SORA_CURE_PCT", g_cure_pct);
     g_hit_r = env_f("SAVAGEWIND_SORA_HIT_R", g_hit_r), g_hit_h = env_f("SAVAGEWIND_SORA_HIT_H", g_hit_h);
     g_hit_pad = env_f("SAVAGEWIND_SORA_HIT_PAD", g_hit_pad);
+    g_evstick = env_f("SAVAGEWIND_SORA_EV_STICK", (float)g_evstick) != 0;  // (evstick, sora_chestev.h)
+    if (g_evstick) LOG("[sora] chestev: evstick on: a camera turned by the right stick is no chest event\n");
     const char *fin = getenv("SAVAGEWIND_SORA_FIN_F54");
     if (fin && *fin) g_fin_f54 = (int)strtol(fin, NULL, 0);
     LOG("[sora] hit bake %s: %d slots (damage base %.1f, finisher f54 %#x, enemy cylinder r %.2f h %.2f pad %.2f)\n",
@@ -5382,6 +5385,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "evzero")) g_ev_zero = v;
             else if (!strcmp(key, "evfreeze")) g_evfreeze = v != 0, LOG("[sora] chestev: live evfreeze %d\n", g_evfreeze);
             else if (!strcmp(key, "evrec")) g_evrec = v != 0, LOG("[sora] chestev: live evrec %d\n", g_evrec);
+            else if (!strcmp(key, "evstick")) g_evstick = v != 0, LOG("[sora] chestev: live evstick %d (%s)\n", g_evstick, g_evstick ? "the player's own camera turn is no event" : "any camera off Link");  // (evstick)
             else if (!strcmp(key, "evcam")) g_evcam = v;
             else if (!strcmp(key, "evang")) g_evang = v;
             else if (!strcmp(key, "evon")) g_evon = v;
