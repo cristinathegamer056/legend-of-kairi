@@ -200,6 +200,25 @@ static int sfx_play_at_g(int id, float gain, const float pos[3]) { int h = sora_
 static inline bool fx_mine(int h, uint32_t gen) { return h >= 0 && h < 32 && g_fx_gen[h] == gen; }
 void sora_draw_shadow(float floor_y, float strength);  // (sora_draw.c: the blob shadow, helper S)
 void sora_draw_ghost(float alpha);  // (sora_draw.c, s48: his body where the scene hides it, e.g. under water)
+void sora_draw_actor_weapon(int id, bool shown);  // (sora_draw.c: the weapon groups, KH2 group attr 0x100, shown / skipped)
+int sora_draw_body(void);
+// (kbfield) user: "the keyblade to physically disappear from Sora's hands when he is not in battle, similar to how it behaves in
+// kh2 when there are no enemies around". KH2's field motions are the no-weapon variants (slot id * 4 + 2 / 3; the party's
+// weapon rule, S35_HELPER_P_PARTY.md 1.2 / sora_party.h party_weapon_field_hidden): while Sora's drawn motion is one of them
+// (bstance off: field idle / walk / run, and any other motion baked with a field variant) and no special plays, his Keyblade
+// groups are skipped. Swings / spells / Guard have battle slots only, so the Keyblade is back for them. The puppet path (Link has
+// the pad: climb, chest playback with chestkb) always shows it (its own keyblade_hide rule). No KH2 appear / vanish effect yet.
+// SAVAGEWIND_SORA_KB_FIELD=1 / live "set kbfield 1"; default 0 = always in his hand.
+static int g_kbfield;
+static void kbf_set(bool hide) {
+    static int last_body = -1, last_hide = -1;
+    int body = sora_draw_body();
+    if (body == last_body && (int)hide == last_hide) return;
+    if (last_body >= 0 && last_body != body && last_hide == 1) sora_draw_actor_weapon(last_body, true);  // (a body switch: the old one shows again)
+    sora_draw_actor_weapon(body, !hide);
+    if (last_hide != (int)hide) LOG("[sora] kbfield: Keyblade %s\n", hide ? "hidden (field motion)" : "shown");
+    last_body = body, last_hide = hide;
+}
 #include "sora_dream.h"   // (s54 dream: KH2's Dream Weapon picker = dream_weapon / dream_giveup; S54_HELPER_DREAM.md)
 static int g_kbpop = 1;  // (s92 b6-formfx) live "set kbpop": the "Keyblade obtained" panel (sora_unlock.h)
 static void skt_slot_load(int slot);   // (s110 skate, runtime/sora_skate.h: the skateboard's place per save slot)
@@ -5548,6 +5567,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 1500.0f;  // (an enemy within this = a fight)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "kbfield")) g_kbfield = v != 0, LOG("[sora] kbfield %d (%s)\n", g_kbfield, g_kbfield ? "no Keyblade in the field motions" : "Keyblade always in his hand");  // (kbfield)
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
             else if (!strcmp(key, "slopemax")) g_slope_max = (float)v;
@@ -6875,6 +6895,8 @@ static void sora_mod_frame_body(void) {
         int lv = (int)env_f("SAVAGEWIND_SORA_GLIDE_LV", (float)g_glide_lv);
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
+        g_kbfield = env_f("SAVAGEWIND_SORA_KB_FIELD", (float)g_kbfield) != 0;  // (kbfield)
+        if (g_kbfield) LOG("[sora] kbfield on: no Keyblade in his hand in the field motions (no enemy near)\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
         slog_open();
@@ -7318,6 +7340,7 @@ static void sora_mod_frame_body(void) {
     light_tick();  // (s121 a1 light)
     blob_tick();   // (s126: KH2 blob keep / off / auto)
     g_dg_playing = (st == LINK_GROUND || st == LINK_AIR) && !dead && !g_loading;  // (s183 kairi-diag)
+    if (st != LINK_GROUND && st != LINK_AIR) kbf_set(false);  // (kbfield: the puppet keeps its own Keyblade rule)
     if (st != LINK_GROUND && st != LINK_AIR) {  // climbing, swimming, a cutscene...: Link's (the servo can't drive)
         rox_tick();  // (s110: the body switch also runs while Link has the pad: the new game's wake-up / walk-out cutscenes kept Sora until the first save)
         static uint64_t said;
@@ -8195,6 +8218,7 @@ static void sora_mod_frame_body(void) {
     if (GT.on || g_dbm_clip || (S.special == SP_DAMAGE && !is_free) || nox_win) drive_off();  // (goto hold: zero velocity) BotW's hit push / ragdoll / pick up moves him
     else linkpos_set_velocity(true, vx, vz), linkpos_set_velocity_y(vy_on, vy);  // (the y servo on for the glide too)
     if (!((S.special == SP_DAMAGE && !is_free) || nox_win)) link_face();  // (s87c link face: ground / air only; set linkface 0 = off)
+    kbf_set(g_kbfield && S.mot && !S.special && (S.mot->slot & 3) >= 2);  // (kbfield: a field variant = no Keyblade, as KH2)
     if (SKT.rider_on) {  // (s110 skate: KH2's skate rider + board, one actor, in place of the body)
         skt_rider_draw(kh, to_u);
         g_lb_prev = g_lb_from = -1, g_lb_prev_sp = false;
