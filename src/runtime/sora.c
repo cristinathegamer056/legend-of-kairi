@@ -484,6 +484,23 @@ static const Mot *mot_of(int id) {
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
 static int g_bstance = 1;  // live "set bstance 0 / 1"
+// (malnoflinch) user: "Whenever Sora steps on Ganon's black goop, or malice, Sora gets stuck on the hurt animation ... until
+// he dies". Each malice tick (2 quarter hearts every ~130 frames) played KH2's flinch, which owns him (no move) until its
+// free frames; the next tick came first, so he never got out. With this on, a hit whose BotW call was malice's (exe
+// linkpos_player_dmg_last: a2 6, f54 0 = no reaction size; within MALNF_AGE frames of the life drop) takes the life but
+// plays no flinch. SAVAGEWIND_SORA_MALICE_NOFLINCH=1 / live "set malnoflinch 0/1"; default 0. Log '[sora] malice: ...'.
+static int g_malnoflinch;
+#define MALNF_AGE 20
+static bool malice_hit(void) {  // (the hit just seen was a malice tick)
+    static int (*fn)(int *);
+    static bool tried;
+    if (!tried) {
+        tried = true, fn = (int (*)(int *))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_player_dmg_last");
+        if (!fn) LOG("[sora] malnoflinch: this exe has no linkpos_player_dmg_last (NEEDS EXE RELINK): malice still flinches\n");
+    }
+    int a[4], age = fn ? fn(a) : -1;
+    return age >= 0 && age <= MALNF_AGE && a[0] == 6 && a[2] == 0;
+}
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
 static int g_bs_log = 1;
@@ -688,6 +705,8 @@ static void hits_load(void) {
     g_cure_pct = env_f("SAVAGEWIND_SORA_CURE_PCT", g_cure_pct);
     g_hit_r = env_f("SAVAGEWIND_SORA_HIT_R", g_hit_r), g_hit_h = env_f("SAVAGEWIND_SORA_HIT_H", g_hit_h);
     g_hit_pad = env_f("SAVAGEWIND_SORA_HIT_PAD", g_hit_pad);
+    g_malnoflinch = env_f("SAVAGEWIND_SORA_MALICE_NOFLINCH", (float)g_malnoflinch) != 0;  // (malnoflinch)
+    if (g_malnoflinch) LOG("[sora] malnoflinch: malice takes life with no flinch\n");
     const char *fin = getenv("SAVAGEWIND_SORA_FIN_F54");
     if (fin && *fin) g_fin_f54 = (int)strtol(fin, NULL, 0);
     LOG("[sora] hit bake %s: %d slots (damage base %.1f, finisher f54 %#x, enemy cylinder r %.2f h %.2f pad %.2f)\n",
@@ -5548,6 +5567,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 1500.0f;  // (an enemy within this = a fight)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "malnoflinch")) g_malnoflinch = v != 0, LOG("[sora] malnoflinch %d (%s)\n", g_malnoflinch, g_malnoflinch ? "malice takes life, no flinch" : "malice flinches like a hit");  // (malnoflinch)
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
             else if (!strcmp(key, "slopemax")) g_slope_max = (float)v;
@@ -7681,6 +7701,10 @@ static void sora_mod_frame_body(void) {
     int mk_blocks = g_mkflinch && IN_MICKEY && MK.active && MK.guard_blocks ? MK.guard_blocks() : -1;
     bool mk_hit = mk_blocks >= 0 && mk_blocks_seen >= 0 && mk_blocks != mk_blocks_seen && !fresh && MK.phase != 2;
     mk_blocks_seen = mk_blocks;
+    if (g_malnoflinch && link_hits != hits_seen && !guarded && !mk_hit && rag <= 0 && malice_hit()) {
+        hits_seen = link_hits;  // (malnoflinch: the life is gone, no reaction)
+        LOG("[sora] malice: hit taken, no flinch (state word %#x) at %.3f %.3f %.3f\n", linkpos_link_state_word(), p[0], p[1], p[2]);
+    }
     if ((link_hits != hits_seen && !guarded) || mk_hit) {
         hits_seen = link_hits;
         float e[2];

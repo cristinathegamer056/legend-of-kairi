@@ -2788,7 +2788,23 @@ static void hurt_scale(Cpu *c) {
     if ((int32_t)c->x[4] > d) c->x[4] = (uint32_t)d;
     LOG("[linkpos] khdef: hit %d -> %d (x%d%%) f50 %#x f54 %#x\n", dmg, d, pct, f50, f54);
 }
+// (malnoflinch) the last nonzero player addDamage as BotW called it (before Guard / Defense / Second Chance change it):
+// a2, f50, f54, damage and the frame. Malice (Ganon's goop) = a2 6, f50 0x11, f54 0 (user log: 2 quarter hearts every
+// ~130 frames, no enemy near), f54 0 = no reaction size, unlike an enemy's hit. linkpos_player_dmg_last: out[4] = a2,
+// f50, f54, damage; -> frames since that call, -1 = none yet. Any thread (plain ints; a torn read = one wrong hit kind).
+static volatile int g_pdl_a2, g_pdl_f50, g_pdl_f54, g_pdl_dmg;
+static volatile uint64_t g_pdl_frame;
+static volatile int g_pdl_ok;
+int linkpos_player_dmg_last(int out[4]) {
+    if (!g_pdl_ok) return -1;
+    if (out) out[0] = g_pdl_a2, out[1] = g_pdl_f50, out[2] = g_pdl_f54, out[3] = g_pdl_dmg;
+    uint64_t d = g_vel_frame_id - g_pdl_frame;
+    return d > 0x7fffffff ? 0x7fffffff : (int)d;
+}
 static void dmg_add_player_hook(Cpu *c) {
+    if ((int32_t)c->x[2] > 0)
+        g_pdl_a2 = (int)c->x[1], g_pdl_f50 = (int32_t)c->x[5], g_pdl_f54 = (int32_t)c->x[6], g_pdl_dmg = (int32_t)c->x[2],
+        g_pdl_frame = g_vel_frame_id, g_pdl_ok = 1;
     int drop = fall_drop();
     int32_t dmg = (int32_t)c->x[2], f50 = (int32_t)c->x[5], f54 = (int32_t)c->x[6];
     if (g_guard_set && g_vel_frame_id - g_guard_frame <= 3 && dmg > 0 &&
