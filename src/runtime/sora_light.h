@@ -148,8 +148,8 @@ static int g_light = 1;  // (s121 user: style 1 picked -> light on by default; s
 static int g_lightstyle = 1, g_lightamt = 70, g_lightfloor = 65, g_lighthour = -1, g_lighthm = -1;
 // (lightsat) the bodies' saturation after the light, percent (100 = unchanged): the exe's L3.w = (lightsat - 100) / 100.
 // User: the KH2 models look greyed out next to the KH2 menu (unlit). Live "set lightsat <pct>" / SAVAGEWIND_SORA_LIGHT_SAT;
-// default 100.
-static int g_lightsat = 100;
+// default 130 (user tested: "the colors look much better now").
+static int g_lightsat = 130;
 static int g_lightyaw = 0, g_lightlog = 0;
 // (s123 a2) lightsrc 1 = BotW's real sun words when fresh, else a1 (default); 0 = a1 only. lsunk: sun rgb = HDR word * pct/100
 // (GUESS 18: BotW 6.0 intensity -> ~1.1, a1's noon 1.05); lambk: ambient top = word * pct/100 (GUESS 140: dawn word ~0.55 -> ~0.77, a1 ambient ~0.8).
