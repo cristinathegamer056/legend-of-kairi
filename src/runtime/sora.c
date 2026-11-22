@@ -215,9 +215,9 @@ static int g_kbfield = 1;
 // g_kb_drawn. (user, test 1: "he has the keyblade out but not in his battle stance") On, out of battle: the FIELD stance with the
 // Keyblade = KH2's variant 3 (field + weapon: walk 7, run 11; idle has none, so the field idle 2 with the Keyblade shown); off = the
 // field no-weapon variant 2, Keyblade hidden (kbfield). The battle stance stays enemies / hits only, and shows the Keyblade anyway. While Sora drives (not in a menu, not in Link's own states) L3 does
-// not reach BotW (it was BotW's crouch under him). SAVAGEWIND_SORA_KB_TOGGLE=1 / live "set kbtoggle 1"; default 0 = L3 is BotW's.
+// not reach BotW (it was BotW's crouch under him). SAVAGEWIND_SORA_KB_TOGGLE=0 / live "set kbtoggle 0" = L3 is BotW's; default 1 (user tested, user's choice).
 #define BTN_L3 (1ull << 4)  // Switch LSTICK (script_parse names[] order)
-static int g_kbtoggle;
+static int g_kbtoggle = 1;
 static bool g_kb_drawn;
 static void kbf_set(bool hide) {
     static int last_body = -1, last_hide = -1;
@@ -6909,7 +6909,7 @@ static void sora_mod_frame_body(void) {
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
         g_kbfield = env_f("SAVAGEWIND_SORA_KB_FIELD", (float)g_kbfield) != 0;  // (kbfield)
         g_kbtoggle = env_f("SAVAGEWIND_SORA_KB_TOGGLE", (float)g_kbtoggle) != 0;  // (kbtoggle)
-        if (g_kbtoggle) LOG("[sora] kbtoggle on: L3 draws / puts away the Keyblade\n");
+        if (!g_kbtoggle) LOG("[sora] kbtoggle off: L3 is BotW's crouch again\n");
         if (!g_kbfield) LOG("[sora] kbfield off: the Keyblade stays in his hand out of battle (the old look)\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
