@@ -44,6 +44,12 @@ int sora_sfx_voice(int vtbl);
 // The Keyblade hit SE for an attack's atkp row (HitWin.atkp of sora_hits.bin -> KH2's hit table): plays it at pos.
 int sora_sfx_hit(int atkp_row, float gain, const float pos[3]);
 
+// (kh2steps) BotW surface steps: while set (bank = "Grass", "StoneLight", "WaterShallow" ... = the pack's "bs/<bank>/.."
+// rows from tools/sorabuild/fx/botwsteps.py), sora_sfx_motion plays the bank's step instead of KH2's se705 footstep cues
+// (#16..19 run -> its run steps, #20..23 walk -> walk, #25 jump push-off, #26 landing) at `gain`; a missing bank / class
+// keeps KH2's sound. NULL / "" = off. The mod DLL sets it around Sora's own motion triggers only.
+void sora_sfx_step_surface(const char *bank, float gain);
+
 void sora_sfx_stop_all(void);  // e.g. Sora mode off / game paused
 bool sora_sfx_ready(void);     // the pack is loaded and the device opened
 

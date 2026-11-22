@@ -386,6 +386,9 @@ static void mk_ball_tick(float kh, float to_u);  // (s117 pearl: Mickey's Pearl 
 static void mk_hit(int atkp, uint64_t actor);  // a hit of his: Drive gauge
 static void mk_dchg_loop(void);  // (s110m review: the held D-Charge's loop, before the motion end check)
 #include "sora_wisdom_lv.h" // (s75: Wisdom EXP per kill + form levels; needs IN_WISDOM)
+static int g_botwsteps;           // (kh2steps, see g_stepdiag) BotW surface footsteps on
+static int g_stepgain = 100;      // their gain x100
+static const char *g_step_bank;   // this frame's surface bank (NULL = none / KH2)
 #include "sora_kbfx.h"      // (s89 kbfx: each Keyblade's own swing ribbon + hit sparks; S89_HELPER_KBFX.md)
 #include "sora_kbspan.h"    // (s247 kbspan: each KH2 Keyblade's ribbon reaches its own tip; tools/kbspan_gen.py)
 #include "sora_wpn.h"       // (s128 wpn: Link's equipped BotW melee weapon in Sora's hand; recon/S128_PLAN.md)
@@ -488,6 +491,12 @@ static const Mot *mot_of(int id) {
 // depth, so the material numbers can be matched to grass / stone / sand / snow / wood / water by walking on them.
 // SAVAGEWIND_SORA_STEP_DIAG=1 / live "set stepdiag 0/1"; default 0.
 static int g_stepdiag;
+// (kh2steps stage 2) Sora's KH2 footsteps (same frames as KH2) play BotW's own step sound for the floor under him: the ground
+// ray's material (raw & 63, sub (raw >> 6) & 15, BotW's PhysicsSubMaterialTable order) -> a pack bank "bs/<bank>"; wading
+// (water depth > 0.02 m) -> WaterShallow (< 0.25) / WaterMdlDepth (< 0.5) / WaterDeep. Needs the exe's sora_sfx_step_surface
+// + linkpos_raycast_mat and an sfx.bin with the steps (sorabuild sfx_botwsteps); anything missing = KH2's steps.
+// SAVAGEWIND_SORA_BOTW_STEPS=1 / live "set botwsteps 0/1", "set stepgain <x100>" (default 100); default 0.
+// (declared above sora_kbfx.h: g_botwsteps, g_stepgain, g_step_bank)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -694,6 +703,7 @@ static void hits_load(void) {
     g_hit_r = env_f("SAVAGEWIND_SORA_HIT_R", g_hit_r), g_hit_h = env_f("SAVAGEWIND_SORA_HIT_H", g_hit_h);
     g_hit_pad = env_f("SAVAGEWIND_SORA_HIT_PAD", g_hit_pad);
     g_stepdiag = env_f("SAVAGEWIND_SORA_STEP_DIAG", (float)g_stepdiag) != 0;  // (kh2steps diag)
+    g_botwsteps = env_f("SAVAGEWIND_SORA_BOTW_STEPS", (float)g_botwsteps) != 0;  // (kh2steps)
     const char *fin = getenv("SAVAGEWIND_SORA_FIN_F54");
     if (fin && *fin) g_fin_f54 = (int)strtol(fin, NULL, 0);
     LOG("[sora] hit bake %s: %d slots (damage base %.1f, finisher f54 %#x, enemy cylinder r %.2f h %.2f pad %.2f)\n",
@@ -5555,6 +5565,8 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
             else if (!strcmp(key, "stepdiag")) g_stepdiag = v != 0, LOG("[steps] stepdiag %d\n", g_stepdiag);  // (kh2steps diag)
+            else if (!strcmp(key, "botwsteps")) g_botwsteps = v != 0, LOG("[steps] botwsteps %d\n", g_botwsteps);  // (kh2steps)
+            else if (!strcmp(key, "stepgain")) g_stepgain = v < 0 ? 0 : v > 400 ? 400 : v, LOG("[steps] stepgain %d\n", g_stepgain);
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
             else if (!strcmp(key, "slopemax")) g_slope_max = (float)v;
@@ -7323,6 +7335,52 @@ static void sora_mod_frame_body(void) {
     NET.wet = wet;  // (mp: SNAP flag NF_GHOST)
     warp_tint(0);  // (s54: only the 0x1 puppet below glows)
     light_tick();  // (s121 a1 light)
+    if (g_botwsteps) {  // (kh2steps) the surface bank under Sora's feet, for kbsw_motion's step swap
+        typedef bool (*RayMat)(const float *, const float *, float *, float *, uint32_t *);
+        static RayMat rm;
+        static int tried;
+        if (!tried) tried = 1, rm = (RayMat)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_raycast_mat");
+        g_step_bank = NULL;
+        float lp[3], wd = link_water_depth();
+        if (wd > 0.02f) g_step_bank = wd < 0.25f ? "WaterShallow" : wd < 0.5f ? "WaterMdlDepth" : "WaterDeep";
+        else if (rm && linkpos_link_pos(lp)) {
+            float a[3] = {lp[0], lp[1] + 0.3f, lp[2]}, b[3] = {lp[0], lp[1] - 1.5f, lp[2]}, h[3], n[3];
+            uint32_t m = 0;
+            if (rm(a, b, h, n, &m)) {
+                static const char *const SOIL[] = {"Soil", "SoilSoft", "SoilHard"};
+                static const char *const STONE[] = {"Stone", "StoneLight", "StoneHeavy", "StoneMarble", "StoneDgnLight", "StoneDgnHeavy"};
+                static const char *const SAND[] = {"Sand", "SandShallow", "HeavySand"};
+                static const char *const METAL[] = {"Metal", "MetalLight", "Metal"};
+                static const char *const GRASS[] = {"Grass", "GrassMoss", "Grass", "GrassWithMud", "GrassLeaf", "GrassStraw", "GrassThatch"};
+                static const char *const WOOD[] = {"Wood", "WoodThin", "Wood"};
+                static const char *const SNOW[] = {"Snow", "SnowShallow", "HeavySnow"};
+                static const char *const CLOTH[] = {"Cloth", "ClothCarpet", "ClothLeather"};
+                static const char *const BONE[] = {"Bone", "BonePile"};
+#define SUBPICK(t) (sub < (int)(sizeof t / sizeof *t) ? t[sub] : t[0])
+                int mat = (int)(m & 63u), sub = (int)((m >> 6) & 15u);
+                switch (mat) {
+                case 1: g_step_bank = SUBPICK(SOIL); break;
+                case 2: g_step_bank = SUBPICK(STONE); break;
+                case 3: g_step_bank = SUBPICK(SAND); break;
+                case 4: g_step_bank = SUBPICK(METAL); break;
+                case 5: g_step_bank = "MetalLight"; break;     // WireNet
+                case 6: g_step_bank = SUBPICK(GRASS); break;
+                case 7: g_step_bank = SUBPICK(WOOD); break;
+                case 9: g_step_bank = SUBPICK(SNOW); break;
+                case 10: g_step_bank = "IceHard"; break;
+                case 12: g_step_bank = "GrassWithMud"; break;  // Bog
+                case 13: g_step_bank = "HeavySand"; break;
+                case 14: g_step_bank = SUBPICK(CLOTH); break;
+                case 15: g_step_bank = "IceHard"; break;       // Glass
+                case 16: g_step_bank = SUBPICK(BONE); break;
+                case 21: g_step_bank = "Metal"; break;         // GuardianFoot
+                case 22: g_step_bank = "HeavySnow"; break;
+                default: break;                                // Undefined / others: KH2's step
+                }
+#undef SUBPICK
+            }
+        }
+    }
     if (g_stepdiag) {  // (kh2steps diag) the floor material under Sora's feet, logged on change
         typedef bool (*RayMat)(const float *, const float *, float *, float *, uint32_t *);
         static RayMat rm;

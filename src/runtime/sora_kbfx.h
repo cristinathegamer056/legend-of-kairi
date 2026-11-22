@@ -341,7 +341,21 @@ static int kbsw_hand_slot(int blade, int slot, bool botw, int *row_out) {
 }
 // = sora_sfx_motion(slot, ...) for Sora's own motions (sora.c set_motion / play / the motion clock); botw = Sora holds a BotW
 // weapon in the main hand (s128 wpn: its whooshes stay the Kingdom Key's)
+static int kbsw_motion0(int slot, float prev, float clock, const float pos[3], bool botw);
+// (kh2steps) Sora's own motion triggers: his KH2 footsteps play the surface's BotW step (sora.c g_step_bank) while armed
 static int kbsw_motion(int slot, float prev, float clock, const float pos[3], bool botw) {
+    typedef void (*StepSurf)(const char *, float);
+    static StepSurf ss;
+    static int tried;
+    if (!tried) tried = 1, ss = (StepSurf)(void *)GetProcAddress(GetModuleHandleA(NULL), "sora_sfx_step_surface");
+    const char *bank = g_botwsteps && !IN_MICKEY ? g_step_bank : NULL;
+    if (!ss || !bank) return kbsw_motion0(slot, prev, clock, pos, botw);
+    ss(bank, (float)g_stepgain / 100.0f);
+    int n = kbsw_motion0(slot, prev, clock, pos, botw);
+    ss(NULL, 1.0f);
+    return n;
+}
+static int kbsw_motion0(int slot, float prev, float clock, const float pos[3], bool botw) {
     g_kbsw_last[0] = g_kbsw_last[1] = -1;
     if (!g_kbswingse || !g_kbfx || IN_ANTI || IN_MICKEY || slot < 0 || slot >= 0x10000) return sora_sfx_motion(slot, prev, clock, pos);
     if (g_kbsw_pack < 0) {
