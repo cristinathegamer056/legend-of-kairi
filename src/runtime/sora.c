@@ -7733,6 +7733,10 @@ static void sora_mod_frame_body(void) {
             if (!ad_hold()) LOG("[sora] adblock: held in the air right after the Aerial Dodge (BotW's parry): the dodge goes on\n");
             g_ad_hold_ms = GetTickCount64() + AD_HOLD_MS;
         }
+        // (adblock test 4, user: "When sora reflected the arrows, he went to his falling animation") Log: the hold was seen, then
+        // "blend: motion 202 -> 4" at once: a held RISE reads as a ceiling (got / req < KH_CEILING_STOP) and the ceiling stop
+        // starts the fall. While the deflect holds him it is no ceiling: the dodge goes on.
+        if (ad_hold()) S.ceiling = false;
         bool stopped = !updraft && S.req < -LAND_MIN_REQ && got > S.req * LAND_GOT;  // landed: the fall was stopped
         if (!stopped) FR.veto = 0;
         else if (land_veto(z_up, p)) stopped = false;  // (s54: no floor under him - BotW holds him on a wall / edge)
