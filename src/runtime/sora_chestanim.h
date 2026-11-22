@@ -18,6 +18,14 @@
 
 static int g_chestprev_last = 0, g_chestanim = 0;
 static int g_cxp_kb = 1;  // (chestkb) the Keyblade is drawn while the chest-open motion plays (live "set chestkb 0|1")
+// (chestkh2) user: none of A130 / A140 / A141 (nor any other P_EX100 field / attack motion) is KH2's chest open, where Sora
+// swings the Keyblade at the lid. KH2 keeps that motion in the chest objects: F_EX030.mset (small chest) / F_EX040.mset (big)
+// entry AZ10 / AZ50 = a nested mset whose '0010' is Sora's (228 bones). tools/sorabuild bakes/chestmset.py + partybake put them
+// at slots CXP_KH2_SMALL / CXP_KH2_BIG of the motion bake. When they are there, a BotW shrine chest (TBox_Dungeon_*) plays
+// the big chest's, every other chest the small one's; else the old cycle. Live "set chestkh2 0" = the old cycle.
+#define CXP_KH2_SMALL 1600
+#define CXP_KH2_BIG 1604
+static int g_cxp_kh2 = 1;
 static bool g_loading;  // (tentative: defined with the load latch below)
 static int g_cxp_cycle = 1, g_cxp_slot = 550, g_cxp_lead = 0, g_cxp_hold = 6000, g_cxp_drop = 8, g_cxp_fall = 900, g_cxp_n;
 static int g_cxp_reach = 300;  // (s108: chestreach <cm>, a TBox_* actor this near Link during the event = the start)
@@ -56,6 +64,7 @@ static bool cx_live_set(const char *key, int v) {
     else if (!strcmp(key, "chestdrop")) g_cxp_drop = v < 1 ? 1 : v > 60 ? 60 : v, LOG("[chestanim] live chestdrop %d cm\n", g_cxp_drop);
     else if (!strcmp(key, "chestreach")) g_cxp_reach = v < 50 ? 50 : v > 600 ? 600 : v, LOG("[chestanim] live chestreach %d cm\n", g_cxp_reach);
     else if (!strcmp(key, "chestkb")) g_cxp_kb = v != 0, LOG("[chestanim] live chestkb %d (Keyblade %s during the chest motion)\n", g_cxp_kb, g_cxp_kb ? "shown" : "hidden");
+    else if (!strcmp(key, "chestkh2")) g_cxp_kh2 = v != 0, LOG("[chestanim] live chestkh2 %d (%s)\n", g_cxp_kh2, g_cxp_kh2 ? "KH2's own chest motions when baked" : "the A130 / A140 / A141 cycle");
     else if (!strcmp(key, "chestfall")) g_cxp_fall = v < 0 ? 0 : v, LOG("[chestanim] live chestfall %d ms (0 = no fallback)\n", g_cxp_fall);
     else return false;
     return true;
@@ -253,6 +262,8 @@ static void cxp_tick(uint64_t present, int st, uint32_t sw, bool excluded, const
     if (!why) return;
     static const int slots[3] = {550, 554, 522};
     int slot = g_cxp_cycle ? slots[g_cxp_n % 3] : g_cxp_slot;
+    if (g_cxp_cycle && g_cxp_kh2 && mot_slot(CXP_KH2_SMALL) && mot_slot(CXP_KH2_BIG))  // (chestkh2) KH2's own, by the chest's kind
+        slot = strstr(tn, "Dungeon") ? CXP_KH2_BIG : CXP_KH2_SMALL;
     const Mot *m = mot_slot(slot);
     if (!m) { LOG("[chestanim] start via %s but slot %d is not in the motion bake: nothing played\n", why, slot), g_cxp_armed = false; return; }
     g_cxp_n++;
