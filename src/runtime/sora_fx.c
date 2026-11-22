@@ -216,6 +216,8 @@ typedef struct {
     float frame, alpha, fade, rate, scale;
     uint32_t serial;
     float ring[FX_RING][4];  // owner pose per frame: x y z yaw; ring[head] = this frame's
+    bool orient;  // (kbdrawfx) sora_fx_orient: rot turns the element in model space before the yaw
+    float rot[9];
     int head, filled;
 } Inst;
 static Inst g_inst[FX_SLOTS];
@@ -253,6 +255,13 @@ int sora_fx_spawn(int id, const float pos[3], float yaw, float scale) {
 int sora_fx_event(const char *name, const float pos[3], float yaw, float scale) { return sora_fx_spawn(sora_fx_id(name), pos, yaw, scale); }
 
 bool sora_fx_alive(int h) { return h >= 0 && h < FX_SLOTS && g_inst[h].on; }
+
+void sora_fx_orient(int h, const float m[9]) {
+    if (!sora_fx_alive(h)) return;
+    Inst *in = &g_inst[h];
+    in->orient = m != NULL;
+    if (m) memcpy(in->rot, m, sizeof in->rot);
+}
 
 void sora_fx_move(int h, const float pos[3], float yaw) {
     if (!sora_fx_alive(h) || !pos) return;
@@ -382,6 +391,11 @@ static void emit_inst(DList *l, const Inst *in, const float view[12]) {
             // KH2 effect space -> sorabake model space (x left, y up, z fwd), bound elements turned by pi
             float mx = -p->p[0], my = -p->p[1], mz = g_flipz ? -p->p[2] : p->p[2];
             if (bound) mx = -mx, mz = -mz;
+            if (in->orient) {  // (kbdrawfx: rows of rot, model space -> model space)
+                const float *r = in->rot;
+                float ax = r[0] * mx + r[1] * my + r[2] * mz, ay = r[3] * mx + r[4] * my + r[5] * mz, az = r[6] * mx + r[7] * my + r[8] * mz;
+                mx = ax, my = ay, mz = az;
+            }
             float wx = o[0] + (c * mx + s * mz) * in->scale, wy = o[1] + my * in->scale, wz = o[2] + (-s * mx + c * mz) * in->scale;
             if (bt->flags & 1) {  // camera-space offset (flags 4 / 8: approximated as camera space, see the report)
                 float ox = p->off[0] * in->scale, oy = -p->off[1] * in->scale, oz = -p->off[2] * in->scale;

@@ -219,7 +219,7 @@ static int g_kbfield = 1;
 #define BTN_L3 (1ull << 4)  // Switch LSTICK (script_parse names[] order)
 static int g_kbtoggle = 1;
 static bool g_kb_drawn;
-static int g_kbdfx_bone = -1, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side;  // (kbdrawfx placement knobs; see kbdfx_blade_mid)
+static int g_kbdfx_bone = -3, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side, g_kbdfx_orient = 1;  // (kbdrawfx placement knobs; see kbdfx_blade_mid)
 static int g_kbdrawfx, g_kbdfx_last = -1;  // (kbdrawfx: the option, the last drive-path Keyblade hidden state; see kbdfx_tick)
 static void kbf_set(bool hide) {
     static int last_body = -1, last_hide = -1;
@@ -5580,7 +5580,8 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 3400.0f;  // (an enemy within this = a fight; user: 34 m, was 15, then 20, 30)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
-            else if (!strcmp(key, "kbdfxbone")) g_kbdfx_bone = v, LOG("[sora] kbdrawfx anchor %d (-1 blade middle, -2 tip, else that bone)\n", v);
+            else if (!strcmp(key, "kbdfxbone")) g_kbdfx_bone = v, LOG("[sora] kbdrawfx anchor %d (-3 grip + turn, -1 blade middle, -2 tip, else that bone)\n", v);
+            else if (!strcmp(key, "kbdfxorient")) g_kbdfx_orient = v != 0, LOG("[sora] kbdrawfx turn %d (%s)\n", g_kbdfx_orient, g_kbdfx_orient ? "along the blade" : "his facing only");
             else if (!strcmp(key, "kbdfxfwd")) g_kbdfx_fwd = v, LOG("[sora] kbdrawfx fwd %d cm\n", v);
             else if (!strcmp(key, "kbdfxup")) g_kbdfx_up = v, LOG("[sora] kbdrawfx up %d cm\n", v);
             else if (!strcmp(key, "kbdfxside")) g_kbdfx_side = v, LOG("[sora] kbdrawfx side %d cm\n", v);
@@ -6267,9 +6268,17 @@ static void glide_pose_draw(int from_motion, float from_clock, float face, float
 // default 0. Log '[sora] kbdrawfx: ...' with the flash's height above his feet (checks the bone space).
 static int g_kbdfx_h = -1, g_kbdfx_left;  // (g_kbdrawfx, g_kbdfx_last: next to g_kbtoggle)
 // (kbdrawfx tune, user test 1: "the flash does show on the keyblade, but the placement needs to be adjusted") live knobs:
-// kbdfxbone = the anchor (-1 = middle of the Keyblade bones, -2 = its farthest bone from the grip = the tip, else that bone,
-// 228 = grip, 178 = right palm); kbdfxfwd / kbdfxup / kbdfxside = cm added in Sora's facing frame (+fwd ahead, +up, +side = his right).
+// kbdfxbone = the anchor (-3 = the grip 228 with the turn below, else the blade middle; -1 = middle of the Keyblade bones,
+// -2 = its farthest bone from the grip = the tip, else that bone, 228 = grip, 178 = right palm); kbdfxfwd / kbdfxup /
+// kbdfxside = cm added in Sora's facing frame (+fwd ahead, +up, +side = his right).
+// (user test 2, F5 marks 062042 / 062045: the sparkle starts beside the blade and runs off sideways.) The recording
+// (fxrec kh2_fx.bin w_ex010.0: bound to W_EX010 bone 2, pax 0x441) is a sparkle that runs ~180 cm along the weapon's own
+// x (model -x after the bound flip) = grip -> tip, so KH2 turns it with the Keyblade. sora_fx_orient (exe) turns it so model
+// -x = the blade's grip -> tip; kbdfxorient 0 = yaw only (test 1). GUESS: bone 2's x = the blade axis; its roll is free here.
 // (kbdfx knobs: g_kbdfx_bone / _fwd / _up / _side, declared next to g_kbdrawfx)
+static float g_kbdfx_rot[9];
+static bool g_kbdfx_rot_ok;
+static float g_kbdfx_len;  // (the blade's grip -> tip, cm, for the log)
 static bool kbdfx_blade_mid(float to_u, float out[3], float *h_cm) {
     static float b[POSE_BUF_BONES * 12];
     float lm[12];
@@ -6277,7 +6286,31 @@ static bool kbdfx_blade_mid(float to_u, float out[3], float *h_cm) {
     if (!S.mot || IN_GUEST || g_fmots_on || nb < SORA_RAG_BONES || nb > POSE_BUF_BONES || !linkpos_link_mtx(lm) ||
         !sora_draw_slot_pose(S.mot->slot, S.clock, b)) return false;
     float q[3] = {0, 0, 0};
-    if (g_kbdfx_bone >= 0 && g_kbdfx_bone < nb) memcpy(q, b + g_kbdfx_bone * 12 + 9, sizeof q);
+    {  // (the turn: model -x -> grip 228 -> tip (farthest Keyblade bone), model y -> the nearest to up across it)
+        const float *g = b + SORA_RAG_SORA_BONES * 12 + 9, *tp = g;
+        float best = -1;
+        for (int k = SORA_RAG_SORA_BONES; k < SORA_RAG_BONES; k++) {
+            const float *t = b + k * 12 + 9;
+            float d = (t[0] - g[0]) * (t[0] - g[0]) + (t[1] - g[1]) * (t[1] - g[1]) + (t[2] - g[2]) * (t[2] - g[2]);
+            if (d > best) best = d, tp = t;
+        }
+        g_kbdfx_len = sqrtf(best > 0 ? best : 0), g_kbdfx_rot_ok = false;
+        if (g_kbdfx_len > 1) {
+            float x[3] = {-(tp[0] - g[0]) / g_kbdfx_len, -(tp[1] - g[1]) / g_kbdfx_len, -(tp[2] - g[2]) / g_kbdfx_len};  // (model +x maps here)
+            float ref[3] = {0, 1, 0};
+            if (fabsf(x[1]) > 0.9f) ref[1] = 0, ref[2] = 1;  // (a blade near vertical: his forward is the reference)
+            float dt = ref[0] * x[0] + ref[1] * x[1] + ref[2] * x[2], y[3] = {ref[0] - dt * x[0], ref[1] - dt * x[1], ref[2] - dt * x[2]};
+            float yl = sqrtf(y[0] * y[0] + y[1] * y[1] + y[2] * y[2]);
+            if (yl > 1e-4f) {
+                y[0] /= yl, y[1] /= yl, y[2] /= yl;
+                float z[3] = {x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]};
+                for (int r = 0; r < 3; r++) g_kbdfx_rot[r * 3 + 0] = x[r], g_kbdfx_rot[r * 3 + 1] = y[r], g_kbdfx_rot[r * 3 + 2] = z[r];
+                g_kbdfx_rot_ok = true;
+            }
+        }
+    }
+    if (g_kbdfx_bone == -3 && g_kbdfx_orient) memcpy(q, b + SORA_RAG_SORA_BONES * 12 + 9, sizeof q);  // (with the turn: the grip)
+    else if (g_kbdfx_bone >= 0 && g_kbdfx_bone < nb) memcpy(q, b + g_kbdfx_bone * 12 + 9, sizeof q);
     else if (g_kbdfx_bone == -2) {  // (the tip: the Keyblade bone farthest from the grip 228)
         const float *g = b + SORA_RAG_SORA_BONES * 12 + 9;
         float best = -1;
@@ -6296,16 +6329,27 @@ static bool kbdfx_blade_mid(float to_u, float out[3], float *h_cm) {
     if (h_cm) *h_cm = q[1];
     return true;
 }
+static void kbdfx_orient(int h) {  // (the exe's sora_fx_orient, when it has one)
+    static void (*fn)(int, const float *);
+    static bool tried;
+    if (!tried) {
+        tried = true, fn = (void (*)(int, const float *))(void *)GetProcAddress(GetModuleHandleA(NULL), "sora_fx_orient");
+        if (!fn) LOG("[sora] kbdrawfx: this exe has no sora_fx_orient (NEEDS EXE RELINK): the flash turns with his facing only\n");
+    }
+    if (fn && h >= 0) fn(h, g_kbdfx_orient && g_kbdfx_rot_ok ? g_kbdfx_rot : NULL);
+}
 static void kbdfx_tick(bool hidden, float to_u) {
     float m[3], h = 0;
     if (g_kbdfx_h >= 0) {
-        if (g_kbdfx_left-- > 0 && sora_fx_alive(g_kbdfx_h)) { if (kbdfx_blade_mid(to_u, m, NULL)) sora_fx_move(g_kbdfx_h, m, S.face); }
+        if (g_kbdfx_left-- > 0 && sora_fx_alive(g_kbdfx_h)) { if (kbdfx_blade_mid(to_u, m, NULL)) sora_fx_move(g_kbdfx_h, m, S.face), kbdfx_orient(g_kbdfx_h); }
         else g_kbdfx_h = -1;
     }
     if (g_kbdfx_last >= 0 && (int)hidden != g_kbdfx_last && (g_kbdrawfx == 1 || (g_kbdrawfx == 2 && !hidden)) && kbdfx_blade_mid(to_u, m, &h)) {
         g_kbdfx_h = sora_fx_event("keyblade_appear", m, S.face, to_u), g_kbdfx_left = 90;
-        LOG("[sora] kbdrawfx: %s flash (handle %d, slot %d, %.0f cm above his feet; anchor %d, fwd %d up %d side %d)\n", hidden ? "sheathe" : "draw",
-            g_kbdfx_h, S.mot->slot, h, g_kbdfx_bone, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side);
+        kbdfx_orient(g_kbdfx_h);
+        LOG("[sora] kbdrawfx: %s flash (handle %d, slot %d, %.0f cm above his feet; anchor %d, fwd %d up %d side %d; blade %.0f cm, turn %s)\n", hidden ? "sheathe" : "draw",
+            g_kbdfx_h, S.mot->slot, h, g_kbdfx_bone, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side, g_kbdfx_len,
+            !g_kbdfx_orient ? "off" : g_kbdfx_rot_ok ? "along the blade" : "none (no blade)");
     }
     g_kbdfx_last = hidden;
 }
