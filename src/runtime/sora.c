@@ -396,6 +396,7 @@ static int g_watersplash;
 static int g_botwsteps = 1;       // (kh2steps, see g_stepdiag) BotW surface footsteps on (tested in game: on by default)
 static int g_stepgain = 100;      // their gain x100
 static const char *g_step_bank;   // this frame's surface bank (NULL = none / KH2)
+static bool g_floor_wet;          // (watersplash) the floor itself is material Water (a wet platform, no wading depth)
 #include "sora_kbfx.h"      // (s89 kbfx: each Keyblade's own swing ribbon + hit sparks; S89_HELPER_KBFX.md)
 #include "sora_kbspan.h"    // (s247 kbspan: each KH2 Keyblade's ribbon reaches its own tip; tools/kbspan_gen.py)
 #include "sora_wpn.h"       // (s128 wpn: Link's equipped BotW melee weapon in Sora's hand; recon/S128_PLAN.md)
@@ -7350,7 +7351,7 @@ static void sora_mod_frame_body(void) {
         static RayMat rm;
         static int tried;
         if (!tried) tried = 1, rm = (RayMat)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_raycast_mat");
-        g_step_bank = NULL;
+        g_step_bank = NULL, g_floor_wet = false;
         float lp[3], wd = link_water_depth();
         if (wd > 0.02f) g_step_bank = wd < 0.25f ? "WaterShallow" : wd < 0.5f ? "WaterMdlDepth" : "WaterDeep";
         else if (rm && linkpos_link_pos(lp)) {
@@ -7376,6 +7377,7 @@ static void sora_mod_frame_body(void) {
                 case 5: g_step_bank = "MetalLight"; break;     // WireNet
                 case 6: g_step_bank = SUBPICK(GRASS); break;
                 case 7: g_step_bank = SUBPICK(WOOD); break;
+                case 8: g_step_bank = "WaterShallow", g_floor_wet = true; break;  // (Water as the floor: wet platforms, Zora's Domain)
                 case 9: g_step_bank = SUBPICK(SNOW); break;
                 case 10: g_step_bank = "IceHard"; break;
                 case 12: g_step_bank = "GrassWithMud"; break;  // Bog
@@ -7413,9 +7415,11 @@ static void sora_mod_frame_body(void) {
             bool step = now != seen;
             seen = now;
             float lp[3], wd = link_water_depth();
-            if (step && wd > 0.02f && linkpos_link_pos(lp)) {
+            bool wet = g_floor_wet && g_botwsteps;  // (a wet floor: splash at the feet, a thin film of water)
+            if (step && (wd > 0.02f || wet) && linkpos_link_pos(lp)) {
                 uint32_t m = 8;  // (material Water, sub 0: the floor ray sees the riverbed)
-                float at[3] = {lp[0], lp[1] + wd, lp[2]};  // (on the water surface)
+                if (wd <= 0.02f) wd = 0.05f;  // (a wet floor: a thin film)
+                float at[3] = {lp[0], lp[1] + (wet && wd <= 0.05f ? 0.0f : wd), lp[2]};  // (on the water surface)
                 float speed = lr && lr() ? 5.0f : 2.5f;  // (a run step = a stronger contact)
                 bool ok = ff(at, speed, m, wd);
                 if (logged < 6) logged++, LOG("[splash] step in water (depth %.2f, floor %#x): %s\n", wd, m,
