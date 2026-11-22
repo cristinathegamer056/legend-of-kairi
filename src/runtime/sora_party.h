@@ -1971,6 +1971,17 @@ static struct { int nb, frames; const float *m; } g_pwf[PARTY_N];
 static bool g_pw_on[PARTY_N];  // (the exe has a detached weapon from us for this member)
 static bool g_pw_hid[PARTY_N];  // (s218) we hid this member's weapon (field slot rule)
 static bool g_pwfield;          // (s218) live "set pwfield 1": a stand-in's weapon stays shown on field slots too
+// (pnoanimal) user: "they should be only attacking enemies": linkpos's enemy list holds BotW's animals too (log: Animal_Ptarmigan_B,
+// Animal_Cassowary_A). The party's list skips every actor named Animal_* except Animal_Wolf_* / Animal_Bear_* (they attack Link;
+// user's choice). Their battle stance reads the same list, so a bird no longer starts it either. Sora's own targets are untouched.
+// SAVAGEWIND_PARTY_NOANIMAL=1 / live "set pnoanimal 1"; default 0 = every listed actor, as before.
+static int g_pnoanimal;
+int linkpos_enemy_name(uint64_t actor, char *buf, int n);
+static bool party_animal_skip(uint64_t actor) {
+    char nm[64];
+    if (!g_pnoanimal || !linkpos_enemy_name(actor, nm, sizeof nm) || strncmp(nm, "Animal_", 7)) return false;
+    return strncmp(nm + 7, "Wolf_", 5) && strncmp(nm + 7, "Bear_", 5);
+}
 static void pwf_load(int i, const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) { LOG("[party] %s: no weapon flight bake %s\n", PARTY[i].name, path); return; }
@@ -2299,6 +2310,8 @@ static void party_load(void) {
     }
     P.rnd = (uint32_t)GetTickCount();
     P.combat = env_f("SAVAGEWIND_PARTY_COMBAT", 1) != 0;
+    g_pnoanimal = env_f("SAVAGEWIND_PARTY_NOANIMAL", (float)g_pnoanimal) != 0;  // (pnoanimal)
+    if (g_pnoanimal) LOG("[party] pnoanimal on: Donald / Goofy skip animals (wolves / bears kept)\n");
     party_pick_restore();  // (s217 riku: a hot reload keeps this session's pick)
 }
 
@@ -2535,6 +2548,7 @@ static bool party_set(const char *key, int v) {  // (live keys; sora.c's "set" c
     else if (!strcmp(key, "psfxlog")) PS.log = v != 0;
     else if (!strcmp(key, "pfx")) g_pfx = v != 0, LOG("[party] pfx %d (the stand-ins' own KH2 sparks + ribbon: %s)\n", g_pfx, g_pfx ? "on" : "off, as before s223");  // (s223 rikufx)
     else if (!strcmp(key, "hudparty")) g_party_hud = v != 0;  // (s57: KH2's party gauges on / off)
+    else if (!strcmp(key, "pnoanimal")) g_pnoanimal = v != 0, LOG("[party] pnoanimal %d (%s)\n", g_pnoanimal, g_pnoanimal ? "animals skipped, wolves / bears kept" : "every listed actor");  // (pnoanimal)
     else if (!strcmp(key, "pwfield")) g_pwfield = v != 0, LOG("[party] pwfield %d (a stand-in's weapon on field slots: %s)\n", g_pwfield, g_pwfield ? "shown" : "hidden");  // (s218)
     else if (!strcmp(key, "ppick")) party_swap(0, pchar_of_pick(v), "live set ppick");  // (s217 riku: 0 Donald, 1 Riku in Donald's place)
     else if (!strcmp(key, "pchar1")) party_swap(0, v, "live set pchar1");  // (s220: character id, sora_pchar.h PCH_*, in Donald's place)
@@ -2801,8 +2815,12 @@ static void party_tick(float kh, float to_u, int st) {
         uint64_t a[PC_ENEMY_MAX];
         float p[PC_ENEMY_MAX][3];
         int32_t l[PC_ENEMY_MAX];
-        int n = P.combat ? linkpos_enemies(a, p, l, PC_ENEMY_MAX) : 0;
-        for (int k = 0; k < n; k++) en[k].actor = a[k], memcpy(en[k].pos, p[k], sizeof en[k].pos), en[k].life = l[k];
+        int n = P.combat ? linkpos_enemies(a, p, l, PC_ENEMY_MAX) : 0, m = 0;
+        for (int k = 0; k < n; k++) {
+            if (party_animal_skip(a[k])) continue;  // (pnoanimal)
+            en[m].actor = a[k], memcpy(en[m].pos, p[k], sizeof en[m].pos), en[m].life = l[k], m++;
+        }
+        n = n < 0 ? n : m;
         in.en = en, in.nen = n < 0 ? 0 : n, in.hit_r = g_hit_r, in.hit_h = g_hit_h;
         in.sora_hp = (float)linkpos_link_life(), in.sora_hp_max = (float)g_hud_life_max, in.hk = &PARTY_HOOKS;
     }
