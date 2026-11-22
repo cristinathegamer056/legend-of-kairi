@@ -483,6 +483,7 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
+static int g_footik, g_footik_log;  // (footik: see fik_apply)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -688,6 +689,8 @@ static void hits_load(void) {
     g_cure_pct = env_f("SAVAGEWIND_SORA_CURE_PCT", g_cure_pct);
     g_hit_r = env_f("SAVAGEWIND_SORA_HIT_R", g_hit_r), g_hit_h = env_f("SAVAGEWIND_SORA_HIT_H", g_hit_h);
     g_hit_pad = env_f("SAVAGEWIND_SORA_HIT_PAD", g_hit_pad);
+    g_footik = env_f("SAVAGEWIND_SORA_FOOT_IK", (float)g_footik) != 0;  // (footik)
+    g_footik_log = env_f("SAVAGEWIND_SORA_FOOT_IK_LOG", (float)g_footik_log) != 0;
     const char *fin = getenv("SAVAGEWIND_SORA_FIN_F54");
     if (fin && *fin) g_fin_f54 = (int)strtol(fin, NULL, 0);
     LOG("[sora] hit bake %s: %d slots (damage base %.1f, finisher f54 %#x, enemy cylinder r %.2f h %.2f pad %.2f)\n",
@@ -3941,8 +3944,10 @@ void sora_draw_world(const float *bones, float face, float scale);
 // (s183 kairi-diag, sora_diag.h) every pose handed to the draw pass says "the body should be on screen"; set by these wrappers, read and
 // cleared once a frame by dg_tick (sora_mod_frame). playing / nolink are set by sora_mod_frame_body.
 static bool g_dg_posed, g_dg_playing, g_dg_nolink;
-#define sora_draw_pose(...) (g_dg_posed = true, sora_draw_pose(__VA_ARGS__))
-#define sora_draw_world(...) (g_dg_posed = true, sora_draw_world(__VA_ARGS__))
+static void fik_draw_pose(int slot, float clock, float face, float scale);  // (footik: below, after the rig helpers)
+static void fik_draw_world(const float *bones, float face, float scale);
+#define sora_draw_pose(...) (g_dg_posed = true, fik_draw_pose(__VA_ARGS__))
+#define sora_draw_world(...) (g_dg_posed = true, fik_draw_world(__VA_ARGS__))
 // (s261 kbthrow) base Sora's body has no pose for Limit's Raid slots 924 - 939: while kbthrow is on they come from the Limit draw
 // actor's pose bake (the same 240 bones) and are drawn on the body shown through sora_draw_world. Every pose read / draw below
 // goes through these two.
@@ -4263,6 +4268,139 @@ static void keyblade2_hide(float *bones) {
 }
 
 // (s110 roxpup) the same for the rig in use: the Keyblade's bones past the body collapse onto its parent bone (Roxas: 229.. on 178)
+// (footik) user: "Is it possible to give Sora's legs reaction to the collision of the game's environment? For example, If I'm
+// standing on a stair, and Sora's left foot is on the stairs, his leg would raise in accordance to the stairs." Foot IK on
+// the poses the drive path draws (g_fik_now: on the ground, no special move, base Sora; the puppet's are Link's, which BotW
+// already plants). Per leg: rays down at the heel and the toe (world, FIK_UP above .. FIK_DOWN below his feet; floors only)
+// give the ground's height under that foot in model cm (the pose's y 0 = Link's feet). The lower foot's offset (< 0) drops
+// the whole body (no leg stretches); each leg is then lifted by its offset minus that drop: a two-bone IK (hip -> knee ->
+// ankle, the knee kept in its animated plane) through the rig's subtree masks, the foot turned back to its animated angle.
+// Offsets / drop are smoothed (FIK_TAU s) and the whole effect ramps in over FIK_RAMP s. SAVAGEWIND_SORA_FOOT_IK=1 /
+// live "set footik 0/1", "set footiklog 0/1"; default 0. Log '[footik] ...'.
+static bool g_fik_now;  // (the drive path's draw block: the poses drawn now get foot IK)
+#define FIK_UP 45.0f     // cm: highest step a foot is lifted onto
+#define FIK_DOWN 40.0f   // cm: lowest ground a foot reaches (the body drops for it)
+#define FIK_TAU 0.07f    // s: smoothing of the offsets
+#define FIK_RAMP 0.15f   // s: fade in after it was off
+#define FIK_FLOOR_NY 0.6f
+static double fik_ms(void) {
+    static LARGE_INTEGER f;
+    LARGE_INTEGER n;
+    if (!f.QuadPart) QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&n);
+    return (double)n.QuadPart * 1000.0 / (double)f.QuadPart;
+}
+static int fik_entry(const RagRig *rg, int bone) {
+    for (int i = 0; i < rg->nmap; i++) if (rg->map[i].sora == bone) return i;
+    return -1;
+}
+// the ground under model point m (cm) -> its height in model cm; false = no floor in range
+static bool fik_ground(const float m[3], const float feet[3], float face, float scale, float *gy) {
+    float sn = sinf(face), c = cosf(face);
+    float wx = feet[0] + (c * m[0] + sn * m[2]) * scale, wz = feet[2] + (-sn * m[0] + c * m[2]) * scale;
+    float a[3] = {wx, feet[1] + FIK_UP * scale, wz}, b[3] = {wx, feet[1] - FIK_DOWN * scale, wz}, h[3], n[3];
+    if (!linkpos_raycast(a, b, h, n) || n[1] < FIK_FLOOR_NY) return false;
+    *gy = (h[1] - feet[1]) / scale;
+    return true;
+}
+static void m3mul(const float A[3][3], const float B[3][3], float O[3][3]) {
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) O[i][j] = A[i][0] * B[0][j] + A[i][1] * B[1][j] + A[i][2] * B[2][j];
+}
+// lift the ankle of the leg (hip, knee, ankle bones; thigh / shin / foot map entries) by `up` cm
+static void fik_leg(float *pose, const RagRig *rg, int hip, int knee, int ankle, int e_th, int e_sh, int e_ft, float up) {
+    float H[3], K[3], A[3], T[3];
+    memcpy(H, rpos(pose, hip), 12), memcpy(K, rpos(pose, knee), 12), memcpy(A, rpos(pose, ankle), 12);
+    T[0] = A[0], T[1] = A[1] + up, T[2] = A[2];
+    float hk[3] = {K[0] - H[0], K[1] - H[1], K[2] - H[2]}, ka[3] = {A[0] - K[0], A[1] - K[1], A[2] - K[2]};
+    float la = sqrtf(v3dot(hk, hk)), lb = sqrtf(v3dot(ka, ka));
+    float d[3] = {T[0] - H[0], T[1] - H[1], T[2] - H[2]}, lc = sqrtf(v3dot(d, d));
+    if (la < 1 || lb < 1 || lc < 1e-3f) return;
+    float lo = fabsf(la - lb) + 0.5f, hi = la + lb - 0.5f;
+    lc = lc < lo ? lo : lc > hi ? hi : lc;
+    v3norm(d);
+    float pole[3] = {hk[0] - v3dot(hk, d) * d[0], hk[1] - v3dot(hk, d) * d[1], hk[2] - v3dot(hk, d) * d[2]};
+    if (!v3norm(pole)) pole[0] = 0, pole[1] = 0, pole[2] = 1;  // (a straight leg: the knee bends forward, model +z)
+    float ca = (la * la + lc * lc - lb * lb) / (2 * la * lc);
+    ca = ca > 1 ? 1 : ca < -1 ? -1 : ca;
+    float sa = sqrtf(1 - ca * ca), K2[3];
+    for (int j = 0; j < 3; j++) K2[j] = H[j] + d[j] * la * ca + pole[j] * la * sa;
+    float u0[3] = {hk[0], hk[1], hk[2]}, u1[3] = {K2[0] - H[0], K2[1] - H[1], K2[2] - H[2]}, R1[3][3], R2[3][3];
+    if (!v3norm(u0) || !v3norm(u1)) return;
+    aim_rot(u0, u1, R1);
+    rot_subtree(pose, rg->mask[e_th], R1, H, rg->nbones);
+    const float *A1 = rpos(pose, ankle), *K1 = rpos(pose, knee);
+    float v0[3] = {A1[0] - K1[0], A1[1] - K1[1], A1[2] - K1[2]}, v1[3] = {T[0] - K1[0], T[1] - K1[1], T[2] - K1[2]}, kp[3];
+    memcpy(kp, K1, 12);
+    if (!v3norm(v0) || !v3norm(v1)) return;
+    aim_rot(v0, v1, R2);
+    rot_subtree(pose, rg->mask[e_sh], R2, kp, rg->nbones);
+    float R12[3][3], Ri[3][3], ap[3];  // (the foot back to its animated angle: the inverse = the transpose)
+    m3mul(R1, R2, R12);
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) Ri[i][j] = R12[j][i];
+    memcpy(ap, rpos(pose, ankle), 12);
+    rot_subtree(pose, rg->mask[e_ft], Ri, ap, rg->nbones);
+}
+static void fik_apply(float *pose, int nb, float face, float scale) {
+    static float off[2], drop, w;
+    static double last_ms, log_ms;
+    const RagRig *rg = &g_rig_sora;
+    float lm[12];
+    if (!rg->ok || nb != rg->nbones || !linkpos_link_mtx(lm) || !(scale > 0)) return;
+    rmask_init((RagRig *)rg);
+    static int e[6] = {-2};
+    if (e[0] == -2) {
+        const int bones[6] = {SORA_J_HIP_L, SORA_J_KNEE_L, SORA_J_ANKLE_L, SORA_J_HIP_R, SORA_J_KNEE_R, SORA_J_ANKLE_R};
+        for (int i = 0; i < 6; i++) e[i] = fik_entry(rg, bones[i]);
+        LOG("[footik] rig entries thigh/shin/foot L %d %d %d R %d %d %d\n", e[0], e[1], e[2], e[3], e[4], e[5]);
+    }
+    for (int i = 0; i < 6; i++) if (e[i] < 0) return;
+    float feet[3] = {lm[3], lm[7], lm[11]};
+    double now = fik_ms();
+    float dt = last_ms > 0 && now - last_ms < 250 ? (float)(now - last_ms) / 1000.0f : 0;
+    if (dt == 0) off[0] = off[1] = drop = 0, w = 0;  // (after a gap: start from the animation)
+    last_ms = now;
+    float k = dt > 0 ? 1.0f - expf(-dt / FIK_TAU) : 1.0f;
+    w += dt / FIK_RAMP, w = w > 1 ? 1 : w;
+    const int heel[2] = {SORA_J_HEEL_L, SORA_J_HEEL_R}, toe[2] = {SORA_J_TOE_L, SORA_J_TOE_R};
+    float want[2];
+    for (int l = 0; l < 2; l++) {  // (the higher ground of the heel / toe: a foot half over a step stands on it)
+        float g1 = 0, g2 = 0;
+        bool h1 = fik_ground(rpos(pose, heel[l]), feet, face, scale, &g1), h2 = fik_ground(rpos(pose, toe[l]), feet, face, scale, &g2);
+        float g = h1 && h2 ? (g1 > g2 ? g1 : g2) : h1 ? g1 : h2 ? g2 : 0;
+        want[l] = g > FIK_UP ? FIK_UP : g < -FIK_DOWN ? -FIK_DOWN : g;
+        off[l] += (want[l] - off[l]) * k;
+    }
+    float dwant = off[0] < off[1] ? off[0] : off[1];
+    dwant = dwant < 0 ? dwant : 0;
+    drop += (dwant - drop) * k;
+    float dy = drop * w;
+    if (fabsf(dy) > 0.05f)
+        for (int b = 0; b < nb; b++) pose[b * 12 + 10] += dy;
+    float up[2] = {(off[0] - drop) * w, (off[1] - drop) * w};
+    if (up[0] > 0.3f) fik_leg(pose, rg, SORA_J_HIP_L, SORA_J_KNEE_L, SORA_J_ANKLE_L, e[0], e[1], e[2], up[0]);
+    if (up[1] > 0.3f) fik_leg(pose, rg, SORA_J_HIP_R, SORA_J_KNEE_R, SORA_J_ANKLE_R, e[3], e[4], e[5], up[1]);
+    if (g_footik_log && now - log_ms > 500 && (fabsf(want[0]) > 1 || fabsf(want[1]) > 1))
+        log_ms = now, LOG("[footik] ground L %+.0f R %+.0f cm -> body %+.0f, lift L %.0f R %.0f cm (weight %.2f)\n",
+                          want[0], want[1], dy, up[0], up[1], w);
+}
+static float g_fik_buf[POSE_BUF_BONES * 12];
+static void fik_draw_world(const float *bones, float face, float scale) {
+    int nb = sora_draw_bone_count();
+    if (!g_fik_now || !g_footik || nb <= 0 || nb > POSE_BUF_BONES) { (sora_draw_world)(bones, face, scale); return; }
+    if (bones != g_fik_buf) memcpy(g_fik_buf, bones, (size_t)nb * 12 * sizeof(float));
+    fik_apply(g_fik_buf, nb, face, scale);
+    (sora_draw_world)(g_fik_buf, face, scale);
+}
+static void fik_draw_pose(int slot, float clock, float face, float scale) {
+    int nb = sora_draw_bone_count();
+    if (!g_fik_now || !g_footik || nb <= 0 || nb > POSE_BUF_BONES || !sora_draw_slot_pose(slot, clock, g_fik_buf)) {
+        (sora_draw_pose)(slot, clock, face, scale);
+        return;
+    }
+    fik_apply(g_fik_buf, nb, face, scale);
+    (sora_draw_world)(g_fik_buf, face, scale);
+}
 static void keyblade_hide_rig(float *bones, const RagRig *rg) {
     const float *palm = bones + rg->kb_parent * 12 + 9;
     for (int b = rg->nbody; b < rg->nbones; b++) {
@@ -5548,6 +5686,8 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 1500.0f;  // (an enemy within this = a fight)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "footik")) g_footik = v != 0, LOG("[footik] footik %d (%s)\n", g_footik, g_footik ? "legs follow the ground" : "off");  // (footik)
+            else if (!strcmp(key, "footiklog")) g_footik_log = v != 0;  // (footik)
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
             else if (!strcmp(key, "slopemax")) g_slope_max = (float)v;
@@ -8200,7 +8340,8 @@ static void sora_mod_frame_body(void) {
         g_lb_prev = g_lb_from = -1, g_lb_prev_sp = false;
     } else if (sm_call_draw(kh, to_u)) {  // (s136 summon: Sora's call motion on its own actor, in place of the body)
         g_lb_prev = g_lb_from = -1, g_lb_prev_sp = false;
-    } else if (!rag_draw(rag, kh, to_u)) {  // (step 4: at Link's feet)
+    } else if ((g_fik_now = false, !rag_draw(rag, kh, to_u))) {  // (step 4: at Link's feet)
+        g_fik_now = g_footik && st == LINK_GROUND && !ACT_AIR(S.act) && !S.special && !IN_GUEST && !g_fmots_on;  // (footik)
         if (S.mot && (S.act == ACT_GLIDE || S.act == ACT_GLIDE_HOVER)) {  // the glide motions blend (glide_pose_draw)
             if (gl_from_motion < 0) gl_from_motion = MOT_FALL, gl_from_clock = clock_old;
             glide_pose_draw(gl_from_motion, gl_from_clock, S.face, to_u, kh, GLIDE_BLEND);
@@ -8229,6 +8370,7 @@ static void sora_mod_frame_body(void) {
             g_gl_tail = false, gl_from_motion = -1, g_fb_from = -1, g_lb_from = -1;
             pose_draw_sm(S.mot->slot, S.clock, S.face + rootyaw_at(S.clock), to_u);  // (s93 fsmooth: slerped between the baked frames; s247 rootyaw)
         }
+        g_fik_now = false;  // (footik: only the block above)
         g_lb_prev = S.mot ? S.motion : -1, g_lb_prev_clock = S.clock;
         g_lb_prev_sp = (S.special == SP_ATTACK || S.special == SP_ROLL) && !ACT_AIR(S.act);
     } else {
