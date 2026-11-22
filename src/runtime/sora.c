@@ -483,6 +483,7 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
+static int g_trimenu;  // (trimenu: see g_tri_pickup)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -688,6 +689,7 @@ static void hits_load(void) {
     g_cure_pct = env_f("SAVAGEWIND_SORA_CURE_PCT", g_cure_pct);
     g_hit_r = env_f("SAVAGEWIND_SORA_HIT_R", g_hit_r), g_hit_h = env_f("SAVAGEWIND_SORA_HIT_H", g_hit_h);
     g_hit_pad = env_f("SAVAGEWIND_SORA_HIT_PAD", g_hit_pad);
+    g_trimenu = env_f("SAVAGEWIND_SORA_TRI_MENU", (float)g_trimenu) != 0;  // (trimenu)
     const char *fin = getenv("SAVAGEWIND_SORA_FIN_F54");
     if (fin && *fin) g_fin_f54 = (int)strtol(fin, NULL, 0);
     LOG("[sora] hit bake %s: %d slots (damage base %.1f, finisher f54 %#x, enemy cylinder r %.2f h %.2f pad %.2f)\n",
@@ -1783,6 +1785,11 @@ static volatile uint64_t g_glide_cancel = 1ull << 1;  // live "set gcancel <mask
 #define BTN_GLIDE (1ull << 2)  // Switch X: BotW's jump, the paraglider in the air
 
 static int g_tri_pickup = 1;  // live "set tri 0/1": the pad's own X (PS5 triangle) reaches BotW as A (pick up / talk)
+// (trimenu) user: "when I open the sheikah slate map for the shrine, triangle usually lets you leave the area, but pressing it
+// simulates a O button press". The tri rule above had no pause test (its neighbours do), so in BotW's map / pause menus
+// Triangle still reached BotW as A. With this on, a BotW menu (PAUSE_STATE != 0) gets the pad's own X there.
+// SAVAGEWIND_SORA_TRI_MENU=1 / live "set trimenu 0/1"; default 0.
+// (g_trimenu: declared above the env reader, next to g_bstance)
 static volatile int g_link_owns;  // Link's own state (swim, climb...): X stays BotW's X (swim dash, wall jump: s49)
 #include "sora_prompt.h"  // (s194: BotW's A prompt drawn as Switch X's binding while Sora drives; live "set promptx")
 #include "items.h"  // (s260: the exe's item list + item get, the one Savage Wind's Cheats tab uses)
@@ -1892,7 +1899,7 @@ static void pad_tap(uint64_t *b, int32_t *lx, int32_t *ly, int32_t *rx, int32_t 
     // (s251 user: with bowmimic "when i press triangle+r1 he does a little hop before": the mimic hands the pad to Link, so his
     // Triangle = Switch X reached BotW as Link's jump [last60.log: state 0x18000002 right after held 0x204]. While the mimic is on
     // Triangle keeps the rule it has while Sora drives, as before s250)
-    else if (g_tri_pickup && raw_x && (!g_link_owns || g_bow_on) && !CLIMB_X(now)) *b = (*b & ~BTN_CLIMB) | BTN_ATTACK;
+    else if (g_tri_pickup && raw_x && (!g_link_owns || g_bow_on) && !CLIMB_X(now) && !(g_trimenu && *(volatile uint32_t *)(uintptr_t)PAUSE_STATE)) *b = (*b & ~BTN_CLIMB) | BTN_ATTACK;  // (trimenu: not in a BotW menu)
     bool gcl_menu = *(volatile uint32_t *)(uintptr_t)PAUSE_STATE != 0;  // (s88 review: no stick / X / B into a menu)
     if (g_climb_air && now < g_climb_until) {
         *b &= ~(BTN_JUMP | BTN_CLIMB);  // (the glide's try: no B, no X)
@@ -5613,6 +5620,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "dodgeempty")) g_dodgeempty = v != 0, LOG("[sora] Aerial Dodge with no stamina: %s\n", g_dodgeempty ? "refused" : "allowed");
             else if (!strcmp(key, "stam")) glidestam_set(v);
             else if (!strcmp(key, "tri")) g_tri_pickup = v != 0;
+            else if (!strcmp(key, "trimenu")) g_trimenu = v != 0, LOG("[sora] trimenu %d (%s)\n", g_trimenu, g_trimenu ? "Triangle is BotW's own X in its menus / map" : "Triangle = A in menus too");  // (trimenu)
             else if (!strcmp(key, "promptx")) {  // (s194, sora_prompt.h; pad_tap sends the change)
                 if ((v != 0) != g_promptx) LOG("[sora] promptx %d: BotW's A prompt %s\n", v != 0, v ? "shows Switch X's button while Sora drives" : "stock (Switch A's button)");
                 g_promptx = v != 0;
