@@ -483,6 +483,9 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
+static int g_hflip, g_hflip_tail = 200;  // (hflip: see the riding block)
+static bool g_hflip_fall;
+#define HFLIP_MAX_MS 900
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -688,6 +691,7 @@ static void hits_load(void) {
     g_cure_pct = env_f("SAVAGEWIND_SORA_CURE_PCT", g_cure_pct);
     g_hit_r = env_f("SAVAGEWIND_SORA_HIT_R", g_hit_r), g_hit_h = env_f("SAVAGEWIND_SORA_HIT_H", g_hit_h);
     g_hit_pad = env_f("SAVAGEWIND_SORA_HIT_PAD", g_hit_pad);
+    g_hflip = env_f("SAVAGEWIND_SORA_HORSE_FLIP", (float)g_hflip) != 0;  // (hflip)
     const char *fin = getenv("SAVAGEWIND_SORA_FIN_F54");
     if (fin && *fin) g_fin_f54 = (int)strtol(fin, NULL, 0);
     LOG("[sora] hit bake %s: %d slots (damage base %.1f, finisher f54 %#x, enemy cylinder r %.2f h %.2f pad %.2f)\n",
@@ -5557,6 +5561,8 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 1500.0f;  // (an enemy within this = a fight)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "hflip")) g_hflip = v != 0, LOG("[sora] hflip %d (%s)\n", g_hflip, g_hflip ? "Link's flip off the horse, then Sora's Fall" : "off");  // (hflip)
+            else if (!strcmp(key, "hfliptail")) g_hflip_tail = v < 0 ? 0 : v > 900 ? 900 : v, LOG("[sora] hflip tail %d ms\n", g_hflip_tail);
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
             else if (!strcmp(key, "slopemax")) g_slope_max = (float)v;
@@ -7311,6 +7317,38 @@ static void sora_mod_frame_body(void) {
         if (r != g_riding) LOG("[sora] ridel: %s (Link state %#x)\n", r ? "Link rides: L1 goes to BotW (soothe)" : "not riding: L1 is the KH2 shortcut again", sw_now);
         g_riding = r;
     }
+    {   // (hflip) user: "When Sora jumps off of a horse, instead of flipping in the air, he has his standing animation. Are we able
+        // to use the flip from when link jumps, and then after revert it to Sora's falling animation?" Link riding (bit 0x100000)
+        // -> not riding while off the ground = the jump off the horse: Sora takes Link's pose (puppet, st LINK_OTHER) for the flip,
+        // until HFLIP_TAIL_MS after Link starts coming down (3 frames lower), HFLIP_MAX_MS at most, or the ground; then he drives
+        // again straight into KH2's Fall (g_hflip_fall, the drive step). GUESS timings. SAVAGEWIND_SORA_HORSE_FLIP=1 / live
+        // "set hflip 0/1", "set hfliptail <ms>"; default 0. Log '[sora] hflip: ...'.
+        static int was_ride;
+        static uint64_t dm_end;
+        static float py;
+        static int down;
+        int ride_raw = !dead && !g_loading && (sw_now & LINK_SW_RIDING) != 0;
+        float lp[3];
+        bool hp = linkpos_link_pos(lp);
+        uint64_t nowms = GetTickCount64();
+        if (g_hflip && was_ride && !ride_raw && st != LINK_GROUND && hp)
+            dm_end = nowms + HFLIP_MAX_MS, down = 0, py = lp[1],
+            LOG("[sora] hflip: jumped off the horse (Link state %#x): Sora takes Link's flip\n", sw_now);
+        was_ride = ride_raw;
+        if (dm_end) {
+            bool over = !g_hflip || dead || g_loading || nowms >= dm_end || st == LINK_GROUND || ride_raw;
+            if (!over && hp) {
+                down = lp[1] < py - 0.002f ? down + 1 : 0, py = lp[1];
+                if (down == 3 && dm_end > nowms + (uint64_t)g_hflip_tail) dm_end = nowms + (uint64_t)g_hflip_tail;  // (coming down: the flip's tail)
+            }
+            if (over) {
+                g_hflip_fall = st != LINK_GROUND && !dead;
+                LOG("[sora] hflip: flip over (%s, Link state %#x)%s\n", st == LINK_GROUND ? "landed" : nowms >= dm_end ? "time" : "other", sw_now,
+                    g_hflip_fall ? ": Sora's Fall" : "");
+                dm_end = 0;
+            } else st = LINK_OTHER;  // (the puppet: Link's flip)
+        }
+    }
     sh_tick(present);  // (s94 b8-slatehip)
     bh_tick();  // (s102 bombhand)
     bb_tick(g_loading, p);  // (s217 world: explosive barrels: the hook on / off by barrelboom, nothing while it is 0)
@@ -7487,6 +7525,10 @@ static void sora_mod_frame_body(void) {
     float ratio = kh_ratio();
     const float kh = KH_PHYS_STEP * ratio, to_u = 0.01f * g_k;
     float z_up = p[1] * 100 / g_k;
+    if (g_hflip_fall) {  // (hflip) the flip off the horse is over: KH2's Fall from here
+        g_hflip_fall = false;
+        if (!ACT_AIR(S.act)) fall_start(0, z_up), S.special = SP_NONE, fall_motion(8), LOG("[sora] hflip: Fall at %.3f %.3f %.3f\n", p[0], p[1], p[2]);
+    }
     floor_ray_tick(p, present, ACT_AIR(S.act));  // (s54: the floor under him in the air; last frame's ACTION decides)
     // the blob's floor = the last grounded height (S35_HELPER_S_SHADOW.md); (s54) in the air the ray's floor when it hit
     float shadow_y = S.ground_z * g_k / 100, fcm;
