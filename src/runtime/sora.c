@@ -3362,8 +3362,8 @@ static void hurt_log(int life) {
 // g_event (Link's state word 0 held = talks / pickups / scripted stretches, state 0x1 = warps / story events, the chest
 // camera), the message window (screen 0x4a, g_msg_screen) or a freeze screen (g_frz_id, item popups) is up. GUESS that this
 // covers every case: signs / cutscenes may use other screens ('screen diff' log lines show them; add them here).
-// SAVAGEWIND_SORA_HUD_EV=1 / live "set hudev 1"; default 0 = the HUD stays up (the old behaviour).
-static int g_hudev;
+// SAVAGEWIND_SORA_HUD_EV=0 / live "set hudev 0" = the HUD stays up (the old behaviour); default 1 (user tested, user's choice).
+static int g_hudev = 1;
 static bool hud_ev_hidden(void) {
     static int last = -1;
     const char *why = !g_hudev ? NULL : g_event ? "event" : g_msg_screen ? "message window 0x4a" : g_frz_id >= 0 ? "freeze screen" : NULL;
@@ -6895,7 +6895,7 @@ static void sora_mod_frame_body(void) {
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
         g_hudev = env_f("SAVAGEWIND_SORA_HUD_EV", (float)g_hudev) != 0;  // (hudev)
-        if (g_hudev) LOG("[sora] hudev on: no KH2 HUD in talks / cutscenes / message windows\n");
+        if (!g_hudev) LOG("[sora] hudev off: the KH2 HUD stays up in talks / cutscenes / message windows\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
         slog_open();
