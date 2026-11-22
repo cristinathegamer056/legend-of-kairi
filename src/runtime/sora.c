@@ -390,9 +390,9 @@ static void mk_dchg_loop(void);  // (s110m review: the held D-Charge's loop, bef
 // walk / run steps (exe sora_sfx_steps_fired) while wading (water depth > 2 cm), the exe plays BotW's own foot contact effect
 // on the water surface above his feet (linkpos_foot_effect: a type-0xf contact record, material Water, no stepping actor:
 // the game's contact effect manager plays its own FootEffect for water). (Test 2: "FootEffect" etc. are not in Link's own xlink
-// table, the game emits them on its contact system actor.) SAVAGEWIND_SORA_WATER_SPLASH=1 / live "set watersplash 0/1";
-// default 0.
-static int g_watersplash;
+// table, the game emits them on its contact system actor.) SAVAGEWIND_SORA_WATER_SPLASH=0/1 / live "set watersplash 0/1";
+// default 1.
+static int g_watersplash = 1;  // (tested in game: "almost every step makes a splash" -> on by default)
 static int g_splash_walk = 45, g_splash_run = 60;  // (contact speed x10)
 static int g_splashmode = 1;  // (v8) 1 = our own emit with the handle checked (linkpos_foot_effect2), 0 = the game's contact path
 static int g_botwsteps = 1;       // (kh2steps, see g_stepdiag) BotW surface footsteps on (tested in game: on by default)
