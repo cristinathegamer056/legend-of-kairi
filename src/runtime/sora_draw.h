@@ -18,6 +18,9 @@ void sora_draw_off(void);
 // ones (sora_draw.c "the pose in the mod's hands" has the spaces and layouts).
 int sora_draw_bone_count(void);
 bool sora_draw_slot_pose(int slot, float clock, float *out);
+// (flamefront) up to two burning fires whose flames go back over the bodies where they are nearer the camera: p = {fire 0
+// x, y, z, radius, fire 1 x, y, z, radius, strength (0 off), threshold}; radius 0 = no fire. n >= 10.
+void sora_draw_flame_front(const float *p, int n);
 void sora_draw_world(const float *bones, float face, float scale);
 
 // The blob shadow: a soft dark disc flat on the floor under Sora (KH2 style; KH2 itself projects a low-poly shadow

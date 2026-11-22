@@ -483,6 +483,7 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
+static int g_flamefront;  // (flamefront: see flamefront_tick)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -688,6 +689,7 @@ static void hits_load(void) {
     g_cure_pct = env_f("SAVAGEWIND_SORA_CURE_PCT", g_cure_pct);
     g_hit_r = env_f("SAVAGEWIND_SORA_HIT_R", g_hit_r), g_hit_h = env_f("SAVAGEWIND_SORA_HIT_H", g_hit_h);
     g_hit_pad = env_f("SAVAGEWIND_SORA_HIT_PAD", g_hit_pad);
+    g_flamefront = env_f("SAVAGEWIND_SORA_FLAME_FRONT", (float)g_flamefront) != 0;  // (flamefront)
     const char *fin = getenv("SAVAGEWIND_SORA_FIN_F54");
     if (fin && *fin) g_fin_f54 = (int)strtol(fin, NULL, 0);
     LOG("[sora] hit bake %s: %d slots (damage base %.1f, finisher f54 %#x, enemy cylinder r %.2f h %.2f pad %.2f)\n",
@@ -937,6 +939,58 @@ static bool fire_fns(void) {
         LOG("[sora] fire world: %s\n", FW.objs && FW.ignite && FW.spark && FW.burst ? "on" : "not in this exe (off until the next exe link)");
     }
     return FW.objs && FW.ignite && FW.spark && FW.burst;
+}
+// (flamefront) user: "sora will stand behind a fire, a campfire for example, but despite being behind the flames, sora model
+// still overlaps the flames". (Option 1, the bodies drawn inside BotW's scene, was tried and scrapped: BotW's HDR / depth
+// copies / reduced effect buffers.) Each frame the two burning fire objects nearest Link (fire-world list +
+// linkpos_fire_burning, within FF_SCAN u) go to the exe as flame discs (centre + radius by the object's kind, GUESSES), plus a
+// burning weapon in Link's hand when the exe reports one (linkpos_held_fire, from the fire-light work); the body shader puts
+// those flames' own pixels back over him where they are nearer the camera (sora_draw_flame_front). SAVAGEWIND_SORA_FLAME_FRONT=1
+// / live "set flamefront 0/1", "set flamefrontk <%>" (strength, 100), "set flamefrontt <x100>" (how bright a flame pixel is,
+// 60); default 0.
+#define FF_SCAN 14.0f
+static int g_ff_k = 100, g_ff_t = 60;
+static void ff_shape(const char *n, float *up, float *r) {  // (the flame's centre above the object's feet, its radius; u)
+    if (strstr(n, "FireWood")) *up = 0.5f, *r = 0.7f;
+    else if (strstr(n, "CookSet")) *up = 0.4f, *r = 0.6f;
+    else if (strstr(n, "Candle")) *up = 0.15f, *r = 0.15f;
+    else *up = 0.6f, *r = 0.35f;  // (torches, lamps, burning ivy)
+}
+static void flamefront_tick(void) {
+    static void (*send)(const float *, int);
+    static int (*burning)(uint64_t), (*held)(float *);
+    static int tried;
+    if (!tried) {
+        HMODULE exe = GetModuleHandleA(NULL);
+        tried = 1, send = (void (*)(const float *, int))(void *)GetProcAddress(exe, "sora_draw_flame_front");
+        burning = (int (*)(uint64_t))(void *)GetProcAddress(exe, "linkpos_fire_burning");
+        held = (int (*)(float *))(void *)GetProcAddress(exe, "linkpos_held_fire");
+        LOG("[flamefront] %s%s\n", send ? "ready" : "this exe has no sora_draw_flame_front (NEEDS EXE RELINK)",
+            send && !held ? " (no held-fire export: a torch in hand is not covered)" : "");
+    }
+    if (!send) return;
+    float out[10] = {0}, lp[3], bd[2] = {1e30f, 1e30f};
+    static int last_n = -1;
+    int nf = 0;
+    if (g_flamefront && burning && fire_fns() && linkpos_link_pos(lp)) {
+        LinkposFireObj fo[48];
+        int n = FW.objs(fo, 48);
+        for (int i = 0; i < n; i++) {
+            float dx = fo[i].pos[0] - lp[0], dy = fo[i].pos[1] - lp[1], dz = fo[i].pos[2] - lp[2], d = dx * dx + dy * dy + dz * dz;
+            if (d > FF_SCAN * FF_SCAN || (d >= bd[0] && d >= bd[1]) || burning(fo[i].actor) != 1) continue;
+            int k = d < bd[0] ? 0 : 1;
+            if (k == 0) bd[1] = bd[0], memcpy(out + 4, out, 4 * sizeof(float));
+            float up, r;
+            ff_shape(fo[i].name, &up, &r);
+            bd[k] = d, out[k * 4] = fo[i].pos[0], out[k * 4 + 1] = fo[i].pos[1] + up, out[k * 4 + 2] = fo[i].pos[2], out[k * 4 + 3] = r;
+        }
+        float hp[3];
+        if (held && held(hp) == 1) out[4] = hp[0], out[5] = hp[1] + 0.35f, out[6] = hp[2], out[7] = 0.3f;  // (the torch in hand: slot 1)
+        nf = (out[3] > 0) + (out[7] > 0);
+    }
+    if (nf != last_n) LOG("[flamefront] %d flame(s) sent%s\n", nf, nf ? " (they go back over the bodies where nearer the camera)" : ""), last_n = nf;
+    out[8] = g_flamefront ? (float)g_ff_k / 100.0f : 0.0f, out[9] = (float)g_ff_t / 100.0f;
+    send(out, 10);
 }
 // c = the caster's feet; r, h = the Fire cylinder (u); who = "sora" / "donald" (the log)
 // (s176 fire sync) remote = 1: the Fire was cast on ANOTHER game (NET_FIRE): the world only - fire objects ignite, sparks at every
@@ -5548,6 +5602,9 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 1500.0f;  // (an enemy within this = a fight)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "flamefront")) g_flamefront = v != 0, LOG("[flamefront] flamefront %d\n", g_flamefront);  // (flamefront)
+            else if (!strcmp(key, "flamefrontk")) g_ff_k = v < 0 ? 0 : v > 300 ? 300 : v, LOG("[flamefront] strength %d%%\n", g_ff_k);
+            else if (!strcmp(key, "flamefrontt")) g_ff_t = v < 0 ? 0 : v > 100 ? 100 : v, LOG("[flamefront] threshold %.2f\n", g_ff_t / 100.0f);
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
             else if (!strcmp(key, "slopemax")) g_slope_max = (float)v;
@@ -7316,6 +7373,7 @@ static void sora_mod_frame_body(void) {
     NET.wet = wet;  // (mp: SNAP flag NF_GHOST)
     warp_tint(0);  // (s54: only the 0x1 puppet below glows)
     light_tick();  // (s121 a1 light)
+    flamefront_tick();  // (flamefront: burning fires' flames back over the bodies where nearer the camera)
     blob_tick();   // (s126: KH2 blob keep / off / auto)
     g_dg_playing = (st == LINK_GROUND || st == LINK_AIR) && !dead && !g_loading;  // (s183 kairi-diag)
     if (st != LINK_GROUND && st != LINK_AIR) {  // climbing, swimming, a cutscene...: Link's (the servo can't drive)
