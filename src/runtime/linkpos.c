@@ -3857,7 +3857,9 @@ bool linkpos_raycast(const float from[3], const float to[3], float hit[3], float
     return ok;
 }
 
-// (watersplash) BotW's effect trigger on Link: 1.9.0 FUN_7101100bd0(x0 Handle* out (16 B), x1 Actor*, x2 const char* key)
+// (watersplash) BotW's effect trigger on Link: 1.9.0 FUN_7101100bd0: Handle (16 B) returned by value = the AArch64 indirect
+// result register x8 (Ghidra shows it as param_1), x0 Actor*, x1 const char* key. (First version passed the handle in x0:
+// the game took it for the actor, found no xlink holder and wrote its empty handle through x8 = 0: crash, user test 1.)
 // = if actor+0x568 (its xlink holder) and holder+0x48 (the ELink user instance): FUN_7100f3fc10 -> xlink2 searchAndEmit(key,
 // handle) ("searchAndEmit(%s)", 0x7100f50e80); the handle stays 0 when the user has no such key. 59 game callers. The effect
 // plays at Link (his bones / position = Sora's, Link is only hidden) and picks its variant (water, mud ...) from his state.
@@ -3874,8 +3876,8 @@ bool linkpos_elink_emit(const char *key) {
     memset((void *)(uintptr_t)sp, 0, 0x80);
     strcpy((char *)(uintptr_t)(sp + 0x10), key);
     c->sp = sp;
-    c->x[0] = sp, c->x[1] = actor, c->x[2] = sp + 0x10;
-    for (int i = 3; i < 9; i++) c->x[i] = 0;
+    for (int i = 2; i < 8; i++) c->x[i] = 0;
+    c->x[0] = actor, c->x[1] = sp + 0x10, c->x[8] = sp;  // (x8 = the returned Handle)
     guest_call(c, SS->elink_emit);
     bool ok = *(const uint64_t *)(uintptr_t)sp != 0;
     *c = save;
