@@ -1974,8 +1974,8 @@ static bool g_pwfield;          // (s218) live "set pwfield 1": a stand-in's wea
 // (pnoanimal) user: "they should be only attacking enemies": linkpos's enemy list holds BotW's animals too (log: Animal_Ptarmigan_B,
 // Animal_Cassowary_A). The party's list skips every actor named Animal_* except Animal_Wolf_* / Animal_Bear_* (they attack Link;
 // user's choice). Their battle stance reads the same list, so a bird no longer starts it either. Sora's own targets are untouched.
-// SAVAGEWIND_PARTY_NOANIMAL=1 / live "set pnoanimal 1"; default 0 = every listed actor, as before.
-static int g_pnoanimal;
+// SAVAGEWIND_PARTY_NOANIMAL=0 / live "set pnoanimal 0" = every listed actor, as before; default 1 (user tested, user's choice).
+static int g_pnoanimal = 1;
 int linkpos_enemy_name(uint64_t actor, char *buf, int n);
 static bool party_animal_skip(uint64_t actor) {
     char nm[64];
@@ -2311,7 +2311,7 @@ static void party_load(void) {
     P.rnd = (uint32_t)GetTickCount();
     P.combat = env_f("SAVAGEWIND_PARTY_COMBAT", 1) != 0;
     g_pnoanimal = env_f("SAVAGEWIND_PARTY_NOANIMAL", (float)g_pnoanimal) != 0;  // (pnoanimal)
-    if (g_pnoanimal) LOG("[party] pnoanimal on: Donald / Goofy skip animals (wolves / bears kept)\n");
+    if (!g_pnoanimal) LOG("[party] pnoanimal off: Donald / Goofy fight every listed actor, animals too\n");
     party_pick_restore();  // (s217 riku: a hot reload keeps this session's pick)
 }
 
