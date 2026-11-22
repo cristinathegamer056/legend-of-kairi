@@ -1774,6 +1774,32 @@ static int g_wheel = 1;   // live "set wheel 0/1": BotW's stamina wheel with Lin
 static volatile int g_glide;
 static volatile uint64_t g_glide_until, g_glide_cancel_until;
 static int g_glide_on = 1;                   // live "set glide 0/1"
+// (updraft) user: "Sora's glide cannot increase height in a stream of air that a paraglider would normally react to". BotW
+// lifts only its paraglider in an updraft; Sora's glide is the mod's own (KH2 physics), so it never rose. The columns of the
+// main map (actors AscendingCurrent*, map + DLC) are a table made from the game files by tools/gen_updrafts.py: a box of
+// size 2 * Scale standing on its position, pushing along its up axis at WindSpeed * 30 u/s (BotW 1.9.0 0x71005f0d80).
+// While Sora glides (ACT_GLIDE / ACT_GLIDE_HOVER) inside one he is pushed by g_updraft_k % of that (GUESS 50: BotW's
+// paraglider does not take the wind area's whole speed). Shrine / Divine Beast interiors and fire updrafts are not in it.
+// Live "set updraft 0/1", "set updraftk <%>".
+typedef struct { float pos[3], r[9], half[3], push; } Updraft;
+static const Updraft UPDRAFTS[] = {
+#include "sora_updraft_data.inc"
+};
+static int g_updraft = 1, g_updraft_k = 50;
+// the push (u/s, world) of the column p (u, world) is in, else -1
+static int updraft_at(const float p[3], float push[3]) {
+    for (int i = 0; i < (int)(sizeof UPDRAFTS / sizeof UPDRAFTS[0]); i++) {
+        const Updraft *u = &UPDRAFTS[i];
+        float d[3] = {p[0] - u->pos[0], p[1] - u->pos[1], p[2] - u->pos[2]};
+        if (fabsf(d[0]) > u->half[0] + u->half[1] * 2 || fabsf(d[2]) > u->half[2] + u->half[1] * 2) continue;  // (cheap reject)
+        float l[3];  // local = R^T * d (R rows: world = R * local)
+        for (int k = 0; k < 3; k++) l[k] = u->r[0 + k] * d[0] + u->r[3 + k] * d[1] + u->r[6 + k] * d[2];
+        if (fabsf(l[0]) > u->half[0] || fabsf(l[2]) > u->half[2] || l[1] < 0 || l[1] > 2 * u->half[1]) continue;
+        for (int k = 0; k < 3; k++) push[k] = u->r[k * 3 + 1] * u->push;  // (R's y column = the column's up)
+        return i;
+    }
+    return -1;
+}
 // (s58) live "set glidestam 0/1/2": the KH2 glide pays BotW's paraglider stamina (glidestam_tick). 1 = through Link's
 // own stamina delta (BotW's accounting), 2 = a direct PlayerInfo write (fallback), 0 = off (the s32 port: free)
 static int g_glidestam = 1;
@@ -5573,6 +5599,8 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "kb")) g_puppet_kb = v != 0;
             else if (!strcmp(key, "ride") || !strcmp(key, "wind")) ride_wind_set(key[0] == 'r', v != 0);  // s88: platform carry / wind push
             else if (!strcmp(key, "glide")) g_glide_on = v != 0;
+            else if (!strcmp(key, "updraft")) g_updraft = v != 0, LOG("[sora] updraft %d\n", g_updraft);  // (updraft)
+            else if (!strcmp(key, "updraftk")) g_updraft_k = v < 0 ? 0 : v > 300 ? 300 : v, LOG("[sora] updraftk %d%%\n", g_updraft_k);
             else if (!strcmp(key, "glidestam")) g_glidestam = v < 0 ? 0 : v > 2 ? 2 : v;
             else if (!strcmp(key, "dodgestam")) g_dodgestam = v < 0 ? 0 : v > 1000 ? 1000 : v, LOG("[sora] Aerial Dodge stamina cost %d (1000 a wheel, 0 = free)\n", g_dodgestam);
             else if (!strcmp(key, "trailsmooth")) {  // (s97 b11-trail: the exe's ribbon smoothing; 0 old, 1 adaptive, 2..8 fixed)
@@ -8160,6 +8188,18 @@ static void sora_mod_frame_body(void) {
         }
         move[0] = S.vel[0] * kh, move[1] = S.vel[1] * kh;
         dz = -sink * kh;
+        {   // (updraft) inside a BotW updraft column: its push (u/s -> cm per KH frame) on top of the glide
+            static int in_col = -1;
+            float push[3];
+            int col = g_updraft ? updraft_at(p, push) : -1;
+            if (col != in_col)
+                LOG("[sora] updraft: %s column %d at %.1f %.1f %.1f\n", col >= 0 ? "in" : "out of", col >= 0 ? col : in_col, p[0], p[1], p[2]), in_col = col;
+            if (col >= 0) {
+                float k = (float)g_updraft_k / 100.0f / to_u / 60.0f;  // (u/s -> cm per KH frame)
+                move[0] += push[0] * k * kh, move[1] += push[2] * k * kh;
+                dz += push[1] * k * kh;
+            }
+        }
         S.req = dz, S.req_set = false, S.prev_z = z_up;  // (no landing check while gliding; glide_end's fall gets one)
         if (z_up > S.peak) S.peak = z_up;
     } else {
