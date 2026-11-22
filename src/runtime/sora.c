@@ -211,6 +211,14 @@ int sora_draw_body(void);
 // the pad: climb, chest playback with chestkb) always shows it (its own keyblade_hide rule). No KH2 appear / vanish effect yet.
 // SAVAGEWIND_SORA_KB_FIELD=0 / live "set kbfield 0" = always in his hand (the old look); default 1 (user tested, user's choice).
 static int g_kbfield = 1;
+// (kbtoggle) user: "a toggle to have sora's keyblade appear and disappear ... the left stick button". L3 (Switch LSTICK) flips
+// g_kb_drawn: on = the battle stance is forced (bs_tick: a fight frame), so the battle idle / walk / run hold the Keyblade with no
+// enemy near; off = the automatic rule again (enemies / hits; the hold is cut so he relaxes at once when none is near). KH2 never
+// sheathes in a fight, so with an enemy near it stays out. While Sora drives (not in a menu, not in Link's own states) L3 does
+// not reach BotW (it was BotW's crouch under him). SAVAGEWIND_SORA_KB_TOGGLE=1 / live "set kbtoggle 1"; default 0 = L3 is BotW's.
+#define BTN_L3 (1ull << 4)  // Switch LSTICK (script_parse names[] order)
+static int g_kbtoggle;
+static bool g_kb_drawn;
 static void kbf_set(bool hide) {
     static int last_body = -1, last_hide = -1;
     int body = sora_draw_body();
@@ -1904,6 +1912,7 @@ static void pad_tap(uint64_t *b, int32_t *lx, int32_t *ly, int32_t *rx, int32_t 
     if (!bmenu && !g_slate_pass && !SLATE_LIVE(now)) *b &= ~BTN_MENU;  // (Sora's only: the game never sees them - the d-pad and L are KH2's menu; s93: unless the Slate)
     if (SLATE_LIVE(now) && now >= g_slate_l_from && now < g_slate_l_until) *b |= BTN_SHORTCUT;  // (s93: the L tap that uses the rune)
     if (!g_zl_pass && !bmenu) *b &= ~BTN_LOCK;  // (ZL is KH2's lock-on)
+    if (g_kbtoggle && !g_link_owns && !*(volatile uint32_t *)(uintptr_t)PAUSE_STATE) *b &= ~BTN_L3;  // (kbtoggle: L3 is Sora's, after g_seen kept it)
     // (KH2's triangle = the reaction command: BotW gets A instead of the jump; Sora still saw the raw pad above, and
     // the climb try's own X pulse is kept)
     // (s110m review: while Mickey is out the held Triangle is his D-Charge: neither BotW's A (pick up / talk / open) nor its X jump)
@@ -5569,6 +5578,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 3400.0f;  // (an enemy within this = a fight; user: 34 m, was 15, then 20, 30)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "kbtoggle")) g_kbtoggle = v != 0, g_kb_drawn = g_kb_drawn && g_kbtoggle, LOG("[sora] kbtoggle %d (%s)\n", g_kbtoggle, g_kbtoggle ? "L3 draws / puts away the Keyblade" : "L3 is BotW's");  // (kbtoggle)
             else if (!strcmp(key, "kbfield")) g_kbfield = v != 0, LOG("[sora] kbfield %d (%s)\n", g_kbfield, g_kbfield ? "no Keyblade in the field motions" : "Keyblade always in his hand");  // (kbfield)
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
@@ -6250,7 +6260,7 @@ static void bs_tick(const Target *tg, int ntg, float kh) {
             if (nd < 0 || d < nd) nd = d;
         }
         hit = S.special == SP_DAMAGE;
-        fight = hit || (nd >= 0 && nd < g_bs_cm);
+        fight = hit || g_kb_drawn || (nd >= 0 && nd < g_bs_cm);  // (kbtoggle: L3 holds it)
     }
     if (fight) g_bs_left = g_bs_hold * KH_FPS;
     else if (g_bs_left > 0) g_bs_left -= kh;
@@ -6281,7 +6291,7 @@ static void bs_tick(const Target *tg, int ntg, float kh) {
     }
     if (g_bs_log)
         LOG("[sora] bstance: battle %s (%s, nearest enemy %.0f cm of %d, range %.0f, hold %.1f s), motion %d %s\n", on ? "ON" : "off",
-            !g_bstance ? "key off" : hit ? "Sora was hit" : on ? "enemy in range" : "hold over", nd, ntg, g_bs_cm, g_bs_hold, S.motion,
+            !g_bstance ? "key off" : hit ? "Sora was hit" : g_kb_drawn ? "L3 toggle" : on ? "enemy in range" : "hold over", nd, ntg, g_bs_cm, g_bs_hold, S.motion,
             !sw ? "kept (next idle / walk / run takes the variant)" : blend ? "-> the other variant, blended" : "-> the other variant, cut");
     if (sw && g_bs_log) LOG("[sora] bstance: slot %d at clock %.1f\n", S.mot->slot, S.clock);
 }
@@ -6898,6 +6908,8 @@ static void sora_mod_frame_body(void) {
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
         g_kbfield = env_f("SAVAGEWIND_SORA_KB_FIELD", (float)g_kbfield) != 0;  // (kbfield)
+        g_kbtoggle = env_f("SAVAGEWIND_SORA_KB_TOGGLE", (float)g_kbtoggle) != 0;  // (kbtoggle)
+        if (g_kbtoggle) LOG("[sora] kbtoggle on: L3 draws / puts away the Keyblade\n");
         if (!g_kbfield) LOG("[sora] kbfield off: the Keyblade stays in his hand out of battle (the old look)\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
@@ -7888,6 +7900,11 @@ static void sora_mod_frame_body(void) {
     if (is_free) S.wish = sspeed > 0 ? atan2f(sdir[0], sdir[1]) : S.face;  // (TSR 7.4: kept through the swing)
     Target tg[64];  // the enemies as KH2 targets; the lock-on block ticks in the player's pre-tick (re:0x3DD280)
     int ntg = targets_build(p, to_u, tg, 64);
+    if (g_kbtoggle && (press & BTN_L3)) {  // (kbtoggle)
+        g_kb_drawn = !g_kb_drawn;
+        if (!g_kb_drawn) g_bs_left = 0;  // (no 3 s hold after a manual put-away)
+        LOG("[sora] kbtoggle: L3 -> Keyblade %s\n", g_kb_drawn ? "drawn (battle stance held)" : "automatic (enemies / hits)");
+    }
     bs_tick(tg, ntg, kh);  // (s259 bstance: battle stance on / off, before this frame's idle / walk / run pick)
     lock_tick(tg, ntg, kh, bits, S.face, r1 && g_targets_on && !sm_fps_busy());  // (s137 review S2: no R1 lock in FPS Mode, its R1 cycles targets)
     if (!sm_fps_busy()) lockcam_tick(tg, ntg, p, to_u, held);
