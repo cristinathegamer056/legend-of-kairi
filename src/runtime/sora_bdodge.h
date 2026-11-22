@@ -30,7 +30,7 @@ static bool bd_press(void) {
 static void bd_tick(uint64_t held, float kh, const float sdir[2], float sspeed, float z_up, const float p[3]) {
     if (!BD.pend) return;
     if (S.act != ACT_JUMP || S.special || fm_in_form()) { BD.pend = false; return; }  // (something else took over)
-    if (held & BTN_JUMP) {
+    if ((held & BTN_JUMP) && !g_glide_btn) {  // (glidebtn 1: Cross never glides - a held press is the dodge too)
         if ((BD.frames += kh) < (float)g_bd_tap) return;
         BD.pend = false;
         S.glide_armed = true;  // a hold: the Glide, as before

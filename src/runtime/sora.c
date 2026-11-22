@@ -1774,6 +1774,12 @@ static int g_wheel = 1;   // live "set wheel 0/1": BotW's stamina wheel with Lin
 static volatile int g_glide;
 static volatile uint64_t g_glide_until, g_glide_cancel_until;
 static int g_glide_on = 1;                   // live "set glide 0/1"
+// (glidebtn) user: "Sora's glide ability is set to X (PS Cross = Switch B), originally it was the square button": KH2's
+// Glide is held Square in the air. With glidebtn 1, Square (Switch Y, the roll's button; the roll and the guard are ground
+// only) pressed in a jump arms the glide and its hold keeps it; Cross in the air is the Aerial Dodge only, at once (no
+// tap / hold wait). 0 = Cross (as before). Off by default until tested: SAVAGEWIND_SORA_GLIDE_BTN=1 / live "set glidebtn 1".
+static int g_glide_btn = 0;
+#define GLIDE_BTN (g_glide_btn ? BTN_ROLL : BTN_JUMP)
 // (s58) live "set glidestam 0/1/2": the KH2 glide pays BotW's paraglider stamina (glidestam_tick). 1 = through Link's
 // own stamina delta (BotW's accounting), 2 = a direct PlayerInfo write (fallback), 0 = off (the s32 port: free)
 static int g_glidestam = 1;
@@ -5573,6 +5579,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "kb")) g_puppet_kb = v != 0;
             else if (!strcmp(key, "ride") || !strcmp(key, "wind")) ride_wind_set(key[0] == 'r', v != 0);  // s88: platform carry / wind push
             else if (!strcmp(key, "glide")) g_glide_on = v != 0;
+            else if (!strcmp(key, "glidebtn")) g_glide_btn = v != 0, LOG("[sora] glidebtn %d (%s)\n", g_glide_btn, g_glide_btn ? "Square glides" : "Cross glides");  // (glidebtn)
             else if (!strcmp(key, "glidestam")) g_glidestam = v < 0 ? 0 : v > 2 ? 2 : v;
             else if (!strcmp(key, "dodgestam")) g_dodgestam = v < 0 ? 0 : v > 1000 ? 1000 : v, LOG("[sora] Aerial Dodge stamina cost %d (1000 a wheel, 0 = free)\n", g_dodgestam);
             else if (!strcmp(key, "trailsmooth")) {  // (s97 b11-trail: the exe's ribbon smoothing; 0 old, 1 adaptive, 2..8 fixed)
@@ -6875,6 +6882,8 @@ static void sora_mod_frame_body(void) {
         int lv = (int)env_f("SAVAGEWIND_SORA_GLIDE_LV", (float)g_glide_lv);
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
+        g_glide_btn = env_f("SAVAGEWIND_SORA_GLIDE_BTN", (float)g_glide_btn) != 0;  // (glidebtn)
+        if (g_glide_btn) LOG("[sora] glidebtn on: Square (Switch Y) glides, Cross in the air = Aerial Dodge\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
         slog_open();
@@ -7920,9 +7929,14 @@ static void sora_mod_frame_body(void) {
     // glide (KH2 re:0x3A81F0, the user's button: B again in the air, held). KH2 starts at the press; here the press
     // arms it and the glide starts the frame he is past the apex (the user's feel from session 31). Held B keeps it
     // (+0x124 bit 2), the release ends it (glide_end in the tick). (S32 port: no paraglider hand-off any more.)
-    if ((press & BTN_JUMP) && S.act == ACT_JUMP && g_glide_on && !S.special && fm_glide_ok() && !bd_press()) S.glide_armed = true;  // (s89: Final glides; s91: base Sora judges tap / hold first)
+    if (!g_glide_btn) {
+        if ((press & BTN_JUMP) && S.act == ACT_JUMP && g_glide_on && !S.special && fm_glide_ok() && !bd_press()) S.glide_armed = true;  // (s89: Final glides; s91: base Sora judges tap / hold first)
+    } else {  // (glidebtn) Square arms the glide; Cross in the air is the Aerial Dodge only (bd_tick fires it at once)
+        if ((press & BTN_ROLL) && S.act == ACT_JUMP && g_glide_on && !S.special && fm_glide_ok()) S.glide_armed = true;
+        if ((press & BTN_JUMP) && S.act == ACT_JUMP && !S.special) bd_press();
+    }
     bd_tick(held, kh, sdir, sspeed, z_up, p);  // (s91 b5-dodge)
-    if (!(held & BTN_JUMP) || S.act != ACT_JUMP) S.glide_armed = false;
+    if (!(held & GLIDE_BTN) || S.act != ACT_JUMP) S.glide_armed = false;  // (glidebtn)
     if (S.glide_armed && S.air >= S.apex) glide_start(p, z_up, sspeed);
     ma_air_dodge(press, sdir, sspeed, z_up, p);  // (s89 b4-master: B again in the air in Master = KH2's Aerial Dodge)
     bool guard_took = guard_press(press, sspeed, is_free, p);  // (s88: Square with the stick neutral = Guard)
@@ -8045,7 +8059,7 @@ static void sora_mod_frame_body(void) {
         if ((S.motion == MOT_JUMP || S.motion == MOT_AIR_DODGE) && S.air >= S.apex - KH_APEX_EARLY) fall_motion(8);  // (s89: + the Aerial Dodge)
     } else if (S.act == ACT_GLIDE_HOVER && sspeed <= 0) {  // re:0x423840
         set_motion(MOT_GLIDE_HOVER);  // (16-frame blend: glide_pose_draw)
-        glide_end(p, z_up, (held & BTN_JUMP) != 0 && !gs_out);
+        glide_end(p, z_up, (held & GLIDE_BTN) != 0 && !gs_out);  // (glidebtn)
     } else if (S.act == ACT_GLIDE_HOVER || S.act == ACT_GLIDE) {  // re:0x423A70: move, banking left / right while the
         S.act = ACT_GLIDE;  // (hover with a stick intent -> glide; PHH runs the glide branch next frame)
         int want = MOT_GLIDE_MOVE;  //  stick is > acos 0.98 off his facing
@@ -8055,7 +8069,7 @@ static void sora_mod_frame_body(void) {
                 want = fz * sdir[0] - fx * sdir[1] > 0 ? MOT_GLIDE_LEFT : MOT_GLIDE_RIGHT;
         }
         set_motion(want);
-        glide_end(p, z_up, (held & BTN_JUMP) != 0 && !gs_out);
+        glide_end(p, z_up, (held & GLIDE_BTN) != 0 && !gs_out);  // (glidebtn)
     } else if (!S.special && S.takeoff <= 0) {
         // J 4.3, re:0x422520: idle / walk / run only in a grounded range, or in blend_to_idle with a stick; A005 has
         // keep_momentum 0-25, blend_to_idle 12-25 and no grounded range, so without a stick Land plays out (26
