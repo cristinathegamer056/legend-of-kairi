@@ -7728,6 +7728,11 @@ static void sora_mod_frame_body(void) {
         float got = z_up - S.prev_z, ray_ground = z_up;
         S.ceiling = false;  // J 4.5: +0x120 bit 22 is re-tested every collision step (kh2ctl.py:1592)
         if (S.req > 0 && got / S.req < KH_CEILING_STOP) S.ceiling = true;
+        // (adblock 2) a parry's hold in the air right after an Aerial Dodge: the step barely moved while the arc asked for a clear move
+        if (g_adblock == 2 && g_ad_start_ms && GetTickCount64() - g_ad_start_ms < AD_PIN_MS && fabsf(S.req) > 0.5f && fabsf(got) < fabsf(S.req) * 0.15f) {
+            if (!ad_hold()) LOG("[sora] adblock: held in the air right after the Aerial Dodge (BotW's parry): the dodge goes on\n");
+            g_ad_hold_ms = GetTickCount64() + AD_HOLD_MS;
+        }
         bool stopped = !updraft && S.req < -LAND_MIN_REQ && got > S.req * LAND_GOT;  // landed: the fall was stopped
         if (!stopped) FR.veto = 0;
         else if (land_veto(z_up, p)) stopped = false;  // (s54: no floor under him - BotW holds him on a wall / edge)
@@ -8047,7 +8052,7 @@ static void sora_mod_frame_body(void) {
             fall_motion(8);
         } else if (S.apex <= S.air + KH_APEX_EARLY) S.jump_held = S.jump_released = false;  // kh2ctl.py:1511
         if (S.ceiling && KH_HOP_MIN < S.air && S.air < S.apex) fall_start(0, z_up), fall_motion(8);
-        if ((S.motion == MOT_JUMP || S.motion == MOT_AIR_DODGE) && S.air >= S.apex - KH_APEX_EARLY) fall_motion(8);  // (s89: + the Aerial Dodge)
+        if ((S.motion == MOT_JUMP || (S.motion == MOT_AIR_DODGE && !ad_hold())) && S.air >= S.apex - KH_APEX_EARLY) fall_motion(8);  // (s89: + the Aerial Dodge; adblock: not while a deflect holds him)
     } else if (S.act == ACT_GLIDE_HOVER && sspeed <= 0) {  // re:0x423840
         set_motion(MOT_GLIDE_HOVER);  // (16-frame blend: glide_pose_draw)
         glide_end(p, z_up, (held & BTN_JUMP) != 0 && !gs_out);

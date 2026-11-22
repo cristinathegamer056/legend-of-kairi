@@ -189,6 +189,14 @@ static bool g_ad_prev;  // (last frame's dodge window: the exe's drop runs the g
 #define AD_HOLD_MS 500
 static uint64_t g_ad_hold_ms;
 static bool ad_hold(void) { return g_ad_hold_ms && GetTickCount64() < g_ad_hold_ms; }
+// (adblock test 3, user: a reflected PROJECTILE, still in the air, left Sora in a standing pose: "Are we able to have it to
+// even where Sora reflects the attack, it doesn't cancel out the aerial dodge animation?") A projectile goes through BotW's
+// own shield parry (Link's guard bits), not the exe drop, so ad_block never ran (no log line); BotW's parry reaction held
+// Link in the air while the short dodge motion ran out into the fall pose. sora.c: in adblock 2, within AD_PIN_MS of the
+// dodge's start, a jump step that barely moves while the arc asks for a clear move = that hold -> ad_hold too; while
+// ad_hold the dodge motion is not handed to the fall (its loop keeps playing).
+#define AD_PIN_MS 700
+static uint64_t g_ad_start_ms;  // (the last Aerial Dodge's start, guard_frame's rising edge of adw)
 static void ad_block(const float p[3], float to_u, int dmg) {
     g_ad_hold_ms = GetTickCount64() + AD_HOLD_MS;  // (no stopped-fall landing / climb try right after it)
     if (vk_frame_counter() <= G.block_at + 2) return;  // (one block per hit, as guard_block)
@@ -252,6 +260,7 @@ static bool guard_frame(const float p[3], float to_u, float kh, int *hits_seen, 
         }
     }
     G.life_prev = refunded ? G.life_prev : life, G.life_at = vk_frame_counter();
+    if (adw && !g_ad_prev) g_ad_start_ms = GetTickCount64();  // (adblock: the dodge started)
     g_ad_prev = adw;
     return refunded;
 }
