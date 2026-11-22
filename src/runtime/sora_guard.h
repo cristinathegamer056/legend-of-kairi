@@ -174,6 +174,11 @@ static void guard_release(const char *why) {
 // (base Sora's sora_bdodge.h or Master's sora_master.h, both MOT_AIR_DODGE) the exe's hit drop is on from every side, as the
 // guard window's; a dropped hit = the guard's Keyblade spark + clang (ad_block), but the dodge goes on: no reflect motion, no
 // 80 invulnerable frames. SAVAGEWIND_SORA_AIR_DODGE_BLOCK=1 / live "set adblock 0/1" (sora.c); default 0.
+// (adblock 2, user: "Instead of it blocking, are we able to have it like how link deflects with his shield. So that potential
+// attacks or projectiles get reflected back.") Mode 2 = deflect: during the dodge Link's own guard + just-guard bits are raised
+// (parry_link_frame, the guard's s92 option A) and the beam reflect is on from every side (as Reflect's barrier), so BotW's
+// vanilla shield parry sends what it can back (a Guardian beam: REFLECT x0.3 speed at the enemies); melee hits are still
+// dropped with the spark + clang, and the dodge goes on (a reflect while dodging = ad_block, not the guard's reflect motion).
 static int g_adblock;
 static bool g_ad_prev;  // (last frame's dodge window: the exe's drop runs the game frame after the set, like set_win_prev)
 static void ad_block(const float p[3], float to_u, int dmg) {
@@ -201,19 +206,21 @@ static bool guard_frame(const float p[3], float to_u, float kh, int *hits_seen, 
     bool rf = mg_reflect_up();  // (s133 magic) Reflect's barrier is up: every hit is blocked like the guard window's, the Guardian beam is reflected
     bool win = g_guard && guard_window() && guard_front(p), want = win || inv || rf || pl_invuln();  // (s133 limits: a party Limit runs = invulnerable)
     bool adw = g_adblock && S.motion == MOT_AIR_DODGE && ACT_AIR(S.act) && !S.special;  // (adblock: the Aerial Dodge blocks)
+    bool adp = adw && g_adblock == 2;  // (adblock 2: it deflects like Link's shield parry)
     want = want || adw;
     bool refunded = false;
     int life = linkpos_link_life();
     G.set_win_prev = G.set_win, G.set_win = win;
-    parry_link_frame((g_guard && g_parry && guard_window() && (g_parry_front != 2 || guard_front(p))) || (rf && g_parry));  // (s92 option A; s133: and Reflect's barrier)
+    parry_link_frame((g_guard && g_parry && guard_window() && (g_parry_front != 2 || guard_front(p))) || (rf && g_parry) || adp);  // (s92 option A; s133: and Reflect's barrier; adblock 2)
     if (p_refl_n) {  // (s90b) the beam reflect: the guard window only (no reflect off the 80 invulnerable frames)
-        bool gwin = g_guard && g_parry && guard_window() && (g_parry_front != 2 || guard_front(p)), rwin = gwin || (rf && g_parry);
-        p_refl_set(rwin ? 1 : 0, p, rf && !gwin ? NAN : g_parry_front == 1 ? S.face : NAN, g_parry_rad / 100.0f);  // (s133: Reflect = all around, no direction test)
+        bool gwin = g_guard && g_parry && guard_window() && (g_parry_front != 2 || guard_front(p)), rwin = gwin || (rf && g_parry) || adp;
+        p_refl_set(rwin ? 1 : 0, p, (rf || adp) && !gwin ? NAN : g_parry_front == 1 ? S.face : NAN, g_parry_rad / 100.0f);  // (s133: Reflect = all around, no direction test; adblock 2 too)
         int r = p_refl_n();
         if (r != G.refl_seen) {
             LOG("[sora] GUARD reflected a beam (#%d, %d since last frame)\n", r, r - G.refl_seen);
             G.refl_seen = r;
-            guard_block(p, to_u, 0, "beam reflect", gwin || !rf);  // (skipped if its dropped damage already played one; s133: Reflect's barrier alone = its own block)
+            if (adp && !gwin && !rf) ad_block(p, to_u, 0);  // (adblock 2: reflected while dodging, the dodge goes on)
+            else guard_block(p, to_u, 0, "beam reflect", gwin || !rf);  // (skipped if its dropped damage already played one; s133: Reflect's barrier alone = its own block)
         }
     }
     if (G.exe_ok) {
