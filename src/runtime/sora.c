@@ -483,7 +483,7 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
-static int g_firelight;  // (firelight: see firelight_tick)
+static int g_firelight = 1;  // (firelight: see firelight_tick; on by default, user tested)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -946,7 +946,7 @@ static bool fire_fns(void) {
 // above its feet), warm FL_RGB, reach g_fl_reach / 10 u, strength g_fl_k % with a soft flicker; fades in / out over FL_FADE s
 // (a new fire = fade out, then in). Link's own held torch is his gear, not on that list (not lit here: GUESS for later).
 // SAVAGEWIND_SORA_FIRE_LIGHT=1 / live "set firelight 0/1", "set firelightk <%>" (100), "set firelightr <tenths of u>" (60);
-// default 0. Log '[firelight] ...'.
+// default 1 (user tested: campfires + the held torch). Log '[firelight] ...'.
 #define FL_SCAN 9.0f
 #define FL_FLAME_Y 0.6f
 #define FL_FADE 0.35f
