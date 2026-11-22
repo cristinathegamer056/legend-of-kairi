@@ -219,6 +219,7 @@ static int g_kbfield = 1;
 #define BTN_L3 (1ull << 4)  // Switch LSTICK (script_parse names[] order)
 static int g_kbtoggle = 1;
 static bool g_kb_drawn;
+static int g_kbdfx_bone = -1, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side;  // (kbdrawfx placement knobs; see kbdfx_blade_mid)
 static int g_kbdrawfx, g_kbdfx_last = -1;  // (kbdrawfx: the option, the last drive-path Keyblade hidden state; see kbdfx_tick)
 static void kbf_set(bool hide) {
     static int last_body = -1, last_hide = -1;
@@ -5579,6 +5580,10 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 3400.0f;  // (an enemy within this = a fight; user: 34 m, was 15, then 20, 30)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "kbdfxbone")) g_kbdfx_bone = v, LOG("[sora] kbdrawfx anchor %d (-1 blade middle, -2 tip, else that bone)\n", v);
+            else if (!strcmp(key, "kbdfxfwd")) g_kbdfx_fwd = v, LOG("[sora] kbdrawfx fwd %d cm\n", v);
+            else if (!strcmp(key, "kbdfxup")) g_kbdfx_up = v, LOG("[sora] kbdrawfx up %d cm\n", v);
+            else if (!strcmp(key, "kbdfxside")) g_kbdfx_side = v, LOG("[sora] kbdrawfx side %d cm\n", v);
             else if (!strcmp(key, "kbdrawfx")) g_kbdrawfx = v < 0 ? 0 : v > 2 ? 2 : v, LOG("[sora] kbdrawfx %d (%s)\n", g_kbdrawfx, g_kbdrawfx == 1 ? "flash on draw + sheathe" : g_kbdrawfx == 2 ? "flash on draw only" : "off");  // (kbdrawfx)
             else if (!strcmp(key, "kbtoggle")) g_kbtoggle = v != 0, g_kb_drawn = g_kb_drawn && g_kbtoggle, LOG("[sora] kbtoggle %d (%s)\n", g_kbtoggle, g_kbtoggle ? "L3 draws / puts away the Keyblade" : "L3 is BotW's");  // (kbtoggle)
             else if (!strcmp(key, "kbfield")) g_kbfield = v != 0, LOG("[sora] kbfield %d (%s)\n", g_kbfield, g_kbfield ? "no Keyblade in the field motions" : "Keyblade always in his hand");  // (kbfield)
@@ -6261,6 +6266,10 @@ static void glide_pose_draw(int from_motion, float from_clock, float face, float
 // No sound: no KH2 draw sound is in the extracted tables. SAVAGEWIND_SORA_KB_DRAWFX=1 / live "set kbdrawfx 0/1/2" (2 = draw only);
 // default 0. Log '[sora] kbdrawfx: ...' with the flash's height above his feet (checks the bone space).
 static int g_kbdfx_h = -1, g_kbdfx_left;  // (g_kbdrawfx, g_kbdfx_last: next to g_kbtoggle)
+// (kbdrawfx tune, user test 1: "the flash does show on the keyblade, but the placement needs to be adjusted") live knobs:
+// kbdfxbone = the anchor (-1 = middle of the Keyblade bones, -2 = its farthest bone from the grip = the tip, else that bone,
+// 228 = grip, 178 = right palm); kbdfxfwd / kbdfxup / kbdfxside = cm added in Sora's facing frame (+fwd ahead, +up, +side = his right).
+// (kbdfx knobs: g_kbdfx_bone / _fwd / _up / _side, declared next to g_kbdrawfx)
 static bool kbdfx_blade_mid(float to_u, float out[3], float *h_cm) {
     static float b[POSE_BUF_BONES * 12];
     float lm[12];
@@ -6268,8 +6277,20 @@ static bool kbdfx_blade_mid(float to_u, float out[3], float *h_cm) {
     if (!S.mot || IN_GUEST || g_fmots_on || nb < SORA_RAG_BONES || nb > POSE_BUF_BONES || !linkpos_link_mtx(lm) ||
         !sora_draw_slot_pose(S.mot->slot, S.clock, b)) return false;
     float q[3] = {0, 0, 0};
-    for (int k = SORA_RAG_SORA_BONES; k < SORA_RAG_BONES; k++)
-        for (int j = 0; j < 3; j++) q[j] += b[k * 12 + 9 + j] / (float)(SORA_RAG_BONES - SORA_RAG_SORA_BONES);
+    if (g_kbdfx_bone >= 0 && g_kbdfx_bone < nb) memcpy(q, b + g_kbdfx_bone * 12 + 9, sizeof q);
+    else if (g_kbdfx_bone == -2) {  // (the tip: the Keyblade bone farthest from the grip 228)
+        const float *g = b + SORA_RAG_SORA_BONES * 12 + 9;
+        float best = -1;
+        for (int k = SORA_RAG_SORA_BONES; k < SORA_RAG_BONES; k++) {
+            const float *t = b + k * 12 + 9;
+            float d = (t[0] - g[0]) * (t[0] - g[0]) + (t[1] - g[1]) * (t[1] - g[1]) + (t[2] - g[2]) * (t[2] - g[2]);
+            if (d > best) best = d, memcpy(q, t, sizeof q);
+        }
+    } else
+        for (int k = SORA_RAG_SORA_BONES; k < SORA_RAG_BONES; k++)
+            for (int j = 0; j < 3; j++) q[j] += b[k * 12 + 9 + j] / (float)(SORA_RAG_BONES - SORA_RAG_SORA_BONES);
+    // (the knobs, model space: +z = ahead of him, -x = his right, as KH2's model faces +z; GUESS on the side sign)
+    q[0] -= (float)g_kbdfx_side, q[1] += (float)g_kbdfx_up, q[2] += (float)g_kbdfx_fwd;
     float face = S.face + rootyaw_at(S.clock), sn = sinf(face), c = cosf(face);  // (blade_world's model -> world)
     out[0] = lm[3] + (c * q[0] + sn * q[2]) * to_u, out[1] = lm[7] + q[1] * to_u, out[2] = lm[11] + (-sn * q[0] + c * q[2]) * to_u;
     if (h_cm) *h_cm = q[1];
@@ -6283,7 +6304,8 @@ static void kbdfx_tick(bool hidden, float to_u) {
     }
     if (g_kbdfx_last >= 0 && (int)hidden != g_kbdfx_last && (g_kbdrawfx == 1 || (g_kbdrawfx == 2 && !hidden)) && kbdfx_blade_mid(to_u, m, &h)) {
         g_kbdfx_h = sora_fx_event("keyblade_appear", m, S.face, to_u), g_kbdfx_left = 90;
-        LOG("[sora] kbdrawfx: %s flash (handle %d, slot %d, %.0f cm above his feet)\n", hidden ? "sheathe" : "draw", g_kbdfx_h, S.mot->slot, h);
+        LOG("[sora] kbdrawfx: %s flash (handle %d, slot %d, %.0f cm above his feet; anchor %d, fwd %d up %d side %d)\n", hidden ? "sheathe" : "draw",
+            g_kbdfx_h, S.mot->slot, h, g_kbdfx_bone, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side);
     }
     g_kbdfx_last = hidden;
 }
