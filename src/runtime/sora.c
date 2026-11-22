@@ -3371,6 +3371,13 @@ static int g_hudev = 1;
 // a talk / sign / chest keeps him still. Held HSLIDE_HOLD_MS after the last such frame (airborne bumps). Only the "event"
 // reason is lifted (a message window / freeze screen still hides it). SAVAGEWIND_SORA_HUD_SLIDE=1 / live "set hudslide 0/1"; default 1 (user tested, on by default).
 static int g_hudslide = 1;
+// (hudclimb) user: "when Sora was finishing his climbing ladder animation the kh2 hud disappeared". Log: Link state 0x10
+// (climbing) -> a state-0 stretch (the pull-up at the top, ~0.5 s) -> 0x18000000; state 0 = g_event, which hid the HUD. Now a
+// state-0 stretch that STARTS within HCLIMB_GAP_MS of a climbing frame is the climb-up: the HUD stays up for it (at most
+// HCLIMB_MAX_MS, then a real event hides it as before). SAVAGEWIND_SORA_HUD_CLIMB=1 / live "set hudclimb 0/1"; default 0.
+static int g_hudclimb;
+#define HCLIMB_GAP_MS 600
+#define HCLIMB_MAX_MS 3000
 #define HSLIDE_SPEED 2.5f
 #define HSLIDE_NY 0.92f
 #define HSLIDE_DOWN 1.5f
@@ -3421,10 +3428,24 @@ static bool hud_sliding(void) {  // (inside a state-0 stretch: a slide, not an e
     if (g_hsl_at && now - g_hsl_at <= HSLIDE_HOLD_MS) return true;
     return g_event && g_hsl_steep && now - ev_at <= HSLIDE_START_MS;  // (a stretch starting on steep ground, before the speed shows)
 }
+static bool hud_climbup(void) {  // (hudclimb: this state-0 stretch began right after Link climbed)
+    static double climb_at, ev_at;
+    static bool was_ev, from_climb;
+    double now = hsl_ms();
+    if (linkpos_link_state_word() == 0x10) climb_at = now;
+    if (g_event && !was_ev) {
+        ev_at = now;
+        from_climb = climb_at && now - climb_at <= HCLIMB_GAP_MS;
+        if (from_climb && g_hudclimb) LOG("[sora] hudclimb: climb-up at the top (state 0 %.0f ms after climbing): KH2 HUD stays up\n", now - climb_at);
+    }
+    was_ev = g_event;
+    return g_hudclimb && g_event && from_climb && now - ev_at <= HCLIMB_MAX_MS;
+}
 static bool hud_ev_hidden(void) {
     static int last = -1;
     hud_slide_sample();
     bool sliding = g_hudslide && hud_sliding();  // (every frame: it tracks the stretch starts)
+    if (hud_climbup()) sliding = true;  // (hudclimb: the pull-up at the top of a climb is not an event either)
     const char *why = !g_hudev ? NULL : g_event && !sliding ? "event" : g_msg_screen ? "message window 0x4a" : g_frz_id >= 0 ? "freeze screen" : NULL;
     if ((why != NULL) != last) {
         if (why || last == 1) LOG("[sora] hudev: KH2 HUD %s%s (Link state %#x, freeze screen %d)\n", why ? "hidden: " : "shown again", why ? why : "",
@@ -5625,6 +5646,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 1500.0f;  // (an enemy within this = a fight)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "hudclimb")) g_hudclimb = v != 0, LOG("[sora] hudclimb %d\n", g_hudclimb);  // (hudclimb)
             else if (!strcmp(key, "hudslide")) g_hudslide = v != 0, LOG("[sora] hudslide %d (%s)\n", g_hudslide, g_hudslide ? "KH2 HUD stays up on a slope slide" : "a state-0 slide hides it like an event");  // (hudslide)
             else if (!strcmp(key, "hudev")) g_hudev = v != 0, LOG("[sora] hudev %d (%s)\n", g_hudev, g_hudev ? "no KH2 HUD in talks / cutscenes / message windows" : "KH2 HUD always up");  // (hudev)
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
@@ -6956,6 +6978,7 @@ static void sora_mod_frame_body(void) {
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
         g_hudev = env_f("SAVAGEWIND_SORA_HUD_EV", (float)g_hudev) != 0;  // (hudev)
         g_hudslide = env_f("SAVAGEWIND_SORA_HUD_SLIDE", (float)g_hudslide) != 0;  // (hudslide)
+        g_hudclimb = env_f("SAVAGEWIND_SORA_HUD_CLIMB", (float)g_hudclimb) != 0;  // (hudclimb)
         if (!g_hudev) LOG("[sora] hudev off: the KH2 HUD stays up in talks / cutscenes / message windows\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
