@@ -738,6 +738,16 @@ static void mtx43_inv(const float m[12], float out[12]) {
 // the render thread hands it to the shaders as a per-instance vertex attribute (binding 1). The DLL (runtime/sora_light.h)
 // calls sora_draw_light each frame; n < 16 is ignored.
 static float g_light[16];  // (style 0 until the DLL sends one)
+// (firelight) one point light for the bodies (Sora + the party), from the DLL each frame: p = {world x, y, z, reach u, r, g, b,
+// strength}; strength 0 = none. Read by the render thread when it fills block D (a torn read = one frame's light, harmless).
+static volatile float g_plight[8];
+void sora_draw_point_light(const float *p, int n) {
+    static int said;
+    if (!p || n < 8) return;
+    for (int i = 0; i < 8; i++) if (!isfinite(p[i])) return;
+    if (!said++) LOG("[sora-draw] point light (firelight): first call, strength %.2f reach %.1f u\n", p[7], p[3]);
+    for (int i = 0; i < 8; i++) g_plight[i] = p[i];
+}
 static unsigned g_light_calls;
 void sora_draw_light(const float *p, int n) {
     if (!p || n < 16) return;
@@ -1396,16 +1406,17 @@ void sora_draw_world(const float *bones, float face, float scale) { sora_draw_ac
 // terms of ~2000 to a clip z of ~3: with BotW's near 0.1 (shrines) our depth was off by up to ~1 cm at 2.5 m and inner
 // layers (Roxas' jacket lining, 0.3-10 mm behind) won the depth test. The same projection, only without that rounding.
 #define PC_DECL "layout(push_constant) uniform P { mat4 mvp; vec4 k; vec4 vp; vec4 duv; vec4 z; } pc;\n" \
-                "layout(set = 2, binding = 0) uniform D { vec4 s0; vec4 s1; vec4 s2; vec4 t; vec4 oa; vec4 ob; vec4 oc; vec4 org; vec4 c3; } pd;\n"
+                "layout(set = 2, binding = 0) uniform D { vec4 s0; vec4 s1; vec4 s2; vec4 t; vec4 oa; vec4 ob; vec4 oc; vec4 org; vec4 c3; vec4 pl0; vec4 pl1; } pd;\n"
 typedef struct { float mvp[16], k[4], vp[4], duv[4], z[4]; } BodyPC;                   // = P (sora_fx_draw reads its 32 floats)
-typedef struct { float s0[4], s1[4], s2[4], t[4], oa[4], ob[4], oc[4], org[4], c3[4]; } BodyPD;  // = D (std140: 9 vec4, no padding)
+typedef struct { float s0[4], s1[4], s2[4], t[4], oa[4], ob[4], oc[4], org[4], c3[4], pl0[4], pl1[4]; } BodyPD;  // = D (std140: 11 vec4, no padding; firelight: + pl0 / pl1)
 #define PC_BYTES 128
-#define PD_BYTES 144
+#define PD_BYTES 176
 #define PC_BYTES_S182 240  // (the old all-push block, for the log line only)
 _Static_assert(sizeof(BodyPC) == PC_BYTES, "BodyPC must match the GLSL push block");
 _Static_assert(PC_BYTES <= 128, "Sora's body pass must fit Vulkan's minimum maxPushConstantsSize (128): AMD Windows / Intel");
 _Static_assert(sizeof(BodyPD) == PD_BYTES, "BodyPD must match the GLSL uniform block D");
-_Static_assert(offsetof(BodyPD, oc) == 96 && offsetof(BodyPD, org) == 112 && offsetof(BodyPD, c3) == 128,
+_Static_assert(offsetof(BodyPD, oc) == 96 && offsetof(BodyPD, org) == 112 && offsetof(BodyPD, c3) == 128 &&
+               offsetof(BodyPD, pl0) == 144 && offsetof(BodyPD, pl1) == 160,
                "BodyPD members must sit at the GLSL block D's std140 offsets (vec4 = 16 bytes each, in order)");
 static const char *VERT_SRC =
     "#version 450\n"
@@ -1655,6 +1666,15 @@ static const char *FRAG_SRC =
     "        int sm = int(v_sp.x + 0.5);\n"
     "        if (sm > 0) sv = mix(1.0, sun_vis((sm == 2 || sm == 4) ? v_sc : v_scc, se), clamp(v_sp.y, 0.0, 1.0));\n"
     "        rgb *= light_of(N, sv);\n"
+    // (firelight) user: "is there a way we can have sora react to lightning from lava and fire?" (first: fire). One point light from
+    // the DLL (sora_draw_point_light): pl0 = world position + reach (u), pl1 = rgb + strength; the texture colour times it is
+    // added, fading (1 - d / reach)^2 and with the facing (wrapped: 0.3 on the far side). pl1.w 0 = none (an older DLL).
+    "        if (pd.pl1.w > 0.0) {\n"
+    "            vec3 lp = pd.pl0.xyz - v_w;\n"
+    "            float dl = length(lp), at = clamp(1.0 - dl / max(pd.pl0.w, 1e-3), 0.0, 1.0);\n"
+    "            float nd = max(dot(N, lp / max(dl, 1e-4)), 0.0) * 0.7 + 0.3;\n"
+    "            rgb += c.rgb * pd.pl1.rgb * (pd.pl1.w * at * at * nd);\n"
+    "        }\n"
     "        if (sm >= 3) rgb = mix(rgb, se < 0.01 ? vec3(0.1, 0.2, 1.0) : vec3(1.0 - sv, sv, 0.0), 0.75);\n"  // red shade, green sun, blue outside
     "    }\n"
     "    if (pd.t.w > 0.0) rgb = mix(rgb, pd.t.rgb * (0.35 + 0.65 * dot(rgb, vec3(0.3, 0.59, 0.11))), pd.t.w * 0.85)\n"
@@ -2303,6 +2323,7 @@ static bool draw_pass(VkImageView cv, VkFormat fmt, VkImageLayout lay, VkExtent2
     BodyPC pc;  // (s183 amd: the push constants, 128 bytes)
     BodyPD pd;  // (s183 amd: the per-draw uniform block, pd_push)
     memset(&pd, 0, sizeof pd);  // (s0 s1 s2, s107 slateocc oa ob oc: 0)
+    if (!scr) for (int i = 0; i < 4; i++) pd.pl0[i] = g_plight[i], pd.pl1[i] = g_plight[4 + i];  // (firelight; not the Game Over camera)
     memcpy(pd.t, s[0].tint, sizeof pd.t);  // (set again per actor before each of its draws)
     build_mvp(cam.view, proj, pc.mvp);
     if (!scr && (cam.shift[0] != 0 || cam.shift[1] != 0))  // (s107 invsora 3: an off-centre camera, clip += shift * w; y flipped here)

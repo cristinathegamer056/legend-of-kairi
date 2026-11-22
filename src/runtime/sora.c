@@ -483,6 +483,7 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
+static int g_firelight;  // (firelight: see firelight_tick)
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -688,6 +689,7 @@ static void hits_load(void) {
     g_cure_pct = env_f("SAVAGEWIND_SORA_CURE_PCT", g_cure_pct);
     g_hit_r = env_f("SAVAGEWIND_SORA_HIT_R", g_hit_r), g_hit_h = env_f("SAVAGEWIND_SORA_HIT_H", g_hit_h);
     g_hit_pad = env_f("SAVAGEWIND_SORA_HIT_PAD", g_hit_pad);
+    g_firelight = env_f("SAVAGEWIND_SORA_FIRE_LIGHT", (float)g_firelight) != 0;  // (firelight)
     const char *fin = getenv("SAVAGEWIND_SORA_FIN_F54");
     if (fin && *fin) g_fin_f54 = (int)strtol(fin, NULL, 0);
     LOG("[sora] hit bake %s: %d slots (damage base %.1f, finisher f54 %#x, enemy cylinder r %.2f h %.2f pad %.2f)\n",
@@ -937,6 +939,71 @@ static bool fire_fns(void) {
         LOG("[sora] fire world: %s\n", FW.objs && FW.ignite && FW.spark && FW.burst ? "on" : "not in this exe (off until the next exe link)");
     }
     return FW.objs && FW.ignite && FW.spark && FW.burst;
+}
+// (firelight) user: "is there a way we can have sora react to lightning from lava and fire?" (fire first, lava later). Each frame
+// the nearest BURNING fire object (the fire-world list: campfires, cooking pots, torches, lamps, candles, burning ivy;
+// linkpos_fire_burning) within FL_SCAN u of Link lights the bodies: the exe's sora_draw_point_light at its flame (FL_FLAME_Y u
+// above its feet), warm FL_RGB, reach g_fl_reach / 10 u, strength g_fl_k % with a soft flicker; fades in / out over FL_FADE s
+// (a new fire = fade out, then in). Link's own held torch is his gear, not on that list (not lit here: GUESS for later).
+// SAVAGEWIND_SORA_FIRE_LIGHT=1 / live "set firelight 0/1", "set firelightk <%>" (100), "set firelightr <tenths of u>" (60);
+// default 0. Log '[firelight] ...'.
+#define FL_SCAN 9.0f
+#define FL_FLAME_Y 0.6f
+#define FL_FADE 0.35f
+static const float FL_RGB[3] = {1.0f, 0.55f, 0.22f};
+static int g_fl_k = 100, g_fl_reach = 60;
+static void firelight_tick(void) {
+    static int (*burning)(uint64_t);
+    static void (*send)(const float *, int);
+    static int tried;
+    static uint64_t cur;
+    static float cur_p[3], w;
+    static double last;
+    static bool sent_off = true;
+    if (!tried) {
+        HMODULE exe = GetModuleHandleA(NULL);
+        tried = 1, burning = (int (*)(uint64_t))(void *)GetProcAddress(exe, "linkpos_fire_burning");
+        send = (void (*)(const float *, int))(void *)GetProcAddress(exe, "sora_draw_point_light");
+        LOG("[firelight] %s\n", send && burning ? "ready" : !send ? "this exe has no sora_draw_point_light (NEEDS EXE RELINK)" : "no linkpos_fire_burning in this exe");
+    }
+    if (!send) return;
+    LARGE_INTEGER qf, qn;
+    QueryPerformanceFrequency(&qf), QueryPerformanceCounter(&qn);
+    double now = (double)qn.QuadPart / (double)qf.QuadPart;
+    float dt = last > 0 && now - last < 0.25 ? (float)(now - last) : 0;
+    last = now;
+    uint64_t best = 0;
+    float bp[3] = {0, 0, 0}, lp[3];
+    if (g_firelight && burning && fire_fns() && linkpos_link_pos(lp)) {  // (a load: the fire list is empty)
+        LinkposFireObj fo[48];
+        int n = FW.objs(fo, 48);
+        float bd = FL_SCAN * FL_SCAN;
+        for (int i = 0; i < n; i++) {
+            float dx = fo[i].pos[0] - lp[0], dy = fo[i].pos[1] - lp[1], dz = fo[i].pos[2] - lp[2], d = dx * dx + dy * dy + dz * dz;
+            if (d < bd && burning(fo[i].actor) == 1) bd = d, best = fo[i].actor, memcpy(bp, fo[i].pos, sizeof bp);
+        }
+    }
+    // (the weight goes to 0 before a different fire takes over, so the light never jumps across the scene)
+    float step = dt > 0 ? dt / FL_FADE : 1.0f;
+    if (best && (best == cur || w <= 0)) {
+        if (best != cur) LOG("[firelight] lit by a fire %.1f u away\n", sqrtf((bp[0] - lp[0]) * (bp[0] - lp[0]) + (bp[2] - lp[2]) * (bp[2] - lp[2])));
+        cur = best, memcpy(cur_p, bp, sizeof cur_p);
+        w = w + step > 1 ? 1 : w + step;
+    } else {
+        w = w - step < 0 ? 0 : w - step;
+        if (w <= 0 && cur) LOG("[firelight] off (no burning fire within %.0f u)\n", FL_SCAN), cur = 0;
+    }
+    if (w <= 0) {
+        if (!sent_off) {
+            float z[8] = {0};
+            send(z, 8), sent_off = true;
+        }
+        return;
+    }
+    float fl = 0.88f + 0.06f * sinf((float)now * 11.0f) + 0.04f * sinf((float)now * 23.7f + 1.3f) + 0.02f * sinf((float)now * 5.1f);
+    float k = (float)g_fl_k / 100.0f * w * fl;
+    float out[8] = {cur_p[0], cur_p[1] + FL_FLAME_Y, cur_p[2], (float)g_fl_reach / 10.0f, FL_RGB[0], FL_RGB[1], FL_RGB[2], k};
+    send(out, 8), sent_off = false;
 }
 // c = the caster's feet; r, h = the Fire cylinder (u); who = "sora" / "donald" (the log)
 // (s176 fire sync) remote = 1: the Fire was cast on ANOTHER game (NET_FIRE): the world only - fire objects ignite, sparks at every
@@ -5548,6 +5615,9 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 1500.0f;  // (an enemy within this = a fight)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "firelight")) g_firelight = v != 0, LOG("[firelight] firelight %d\n", g_firelight);  // (firelight)
+            else if (!strcmp(key, "firelightk")) g_fl_k = v < 0 ? 0 : v > 400 ? 400 : v, LOG("[firelight] strength %d%%\n", g_fl_k);
+            else if (!strcmp(key, "firelightr")) g_fl_reach = v < 5 ? 5 : v > 300 ? 300 : v, LOG("[firelight] reach %.1f u\n", g_fl_reach / 10.0f);
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
             else if (!strcmp(key, "slopemax")) g_slope_max = (float)v;
@@ -7316,6 +7386,7 @@ static void sora_mod_frame_body(void) {
     NET.wet = wet;  // (mp: SNAP flag NF_GHOST)
     warp_tint(0);  // (s54: only the 0x1 puppet below glows)
     light_tick();  // (s121 a1 light)
+    firelight_tick();  // (firelight: the nearest burning fire lights the bodies)
     blob_tick();   // (s126: KH2 blob keep / off / auto)
     g_dg_playing = (st == LINK_GROUND || st == LINK_AIR) && !dead && !g_loading;  // (s183 kairi-diag)
     if (st != LINK_GROUND && st != LINK_AIR) {  // climbing, swimming, a cutscene...: Link's (the servo can't drive)

@@ -18,6 +18,8 @@ void sora_draw_off(void);
 // ones (sora_draw.c "the pose in the mod's hands" has the spaces and layouts).
 int sora_draw_bone_count(void);
 bool sora_draw_slot_pose(int slot, float clock, float *out);
+// (firelight) one point light on the bodies: p = {world x, y, z, reach (u), r, g, b, strength}; strength 0 = none. n >= 8.
+void sora_draw_point_light(const float *p, int n);
 void sora_draw_world(const float *bones, float face, float scale);
 
 // The blob shadow: a soft dark disc flat on the floor under Sora (KH2 style; KH2 itself projects a low-poly shadow
