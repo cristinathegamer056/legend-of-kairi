@@ -4277,10 +4277,18 @@ static void keyblade2_hide(float *bones) {
 // ankle, the knee kept in its animated plane) through the rig's subtree masks, the foot turned back to its animated angle.
 // Offsets / drop are smoothed (FIK_TAU s) and the whole effect ramps in over FIK_RAMP s. SAVAGEWIND_SORA_FOOT_IK=1 /
 // live "set footik 0/1", "set footiklog 0/1"; default 0. Log '[footik] ...'.
-static bool g_fik_now;  // (the drive path's draw block: the poses drawn now get foot IK)
+static bool g_fik_now;  // (the drive path's draw block: the poses drawn now go through fik_apply)
+// (footik test 2, user: "some flickering running or walking up a slope") Log: the weight fell to 0 mid-run (the gate dropped:
+// the plain pose for a frame = the body / legs popped) and the ground values jumped frame to frame. Now: g_fik_gate (ground, no
+// special) only steers the weight, which fades in AND out over FIK_RAMP; slower smoothing (g_fik_tau ms for the legs, x FIK_DROP_X
+// for the body); a deadband of FIK_DEAD cm on each foot's ground; live "set footiktau <ms>", "set footikrun <%>" (the strength
+// while running, 100 = full).
+static bool g_fik_gate;
+static int g_fik_tau = 120, g_fik_run = 100;
+#define FIK_DROP_X 1.7f
+#define FIK_DEAD 1.5f
 #define FIK_UP 45.0f     // cm: highest step a foot is lifted onto
 #define FIK_DOWN 40.0f   // cm: lowest ground a foot reaches (the body drops for it)
-#define FIK_TAU 0.07f    // s: smoothing of the offsets
 #define FIK_RAMP 0.15f   // s: fade in after it was off
 #define FIK_FLOOR_NY 0.6f
 static double fik_ms(void) {
@@ -4342,7 +4350,7 @@ static void fik_leg(float *pose, const RagRig *rg, int hip, int knee, int ankle,
     rot_subtree(pose, rg->mask[e_ft], Ri, ap, rg->nbones);
 }
 static void fik_apply(float *pose, int nb, float face, float scale) {
-    static float off[2], drop, w;
+    static float off[2], drop, w, held[2];
     static double last_ms, log_ms;
     const RagRig *rg = &g_rig_sora;
     float lm[12];
@@ -4358,22 +4366,29 @@ static void fik_apply(float *pose, int nb, float face, float scale) {
     float feet[3] = {lm[3], lm[7], lm[11]};
     double now = fik_ms();
     float dt = last_ms > 0 && now - last_ms < 250 ? (float)(now - last_ms) / 1000.0f : 0;
-    if (dt == 0) off[0] = off[1] = drop = 0, w = 0;  // (after a gap: start from the animation)
+    if (dt == 0) off[0] = off[1] = drop = held[0] = held[1] = 0, w = 0;  // (after a gap: start from the animation)
     last_ms = now;
-    float k = dt > 0 ? 1.0f - expf(-dt / FIK_TAU) : 1.0f;
-    w += dt / FIK_RAMP, w = w > 1 ? 1 : w;
+    float tau = (float)(g_fik_tau < 10 ? 10 : g_fik_tau) / 1000.0f;
+    float k = dt > 0 ? 1.0f - expf(-dt / tau) : 1.0f, kd = dt > 0 ? 1.0f - expf(-dt / (tau * FIK_DROP_X)) : 1.0f;
+    float wt = !g_fik_gate ? 0 : S.motion == MOT_RUN ? (float)g_fik_run / 100.0f : 1.0f;
+    wt = wt < 0 ? 0 : wt > 1 ? 1 : wt;
+    float step = dt / FIK_RAMP;  // (toward wt, no overshoot)
+    w = wt > w ? (w + step > wt ? wt : w + step) : (w - step < wt ? wt : w - step);
+    if (w <= 0 && !g_fik_gate) return;  // (faded out: the plain pose, no rays)
     const int heel[2] = {SORA_J_HEEL_L, SORA_J_HEEL_R}, toe[2] = {SORA_J_TOE_L, SORA_J_TOE_R};
     float want[2];
     for (int l = 0; l < 2; l++) {  // (the higher ground of the heel / toe: a foot half over a step stands on it)
         float g1 = 0, g2 = 0;
         bool h1 = fik_ground(rpos(pose, heel[l]), feet, face, scale, &g1), h2 = fik_ground(rpos(pose, toe[l]), feet, face, scale, &g2);
         float g = h1 && h2 ? (g1 > g2 ? g1 : g2) : h1 ? g1 : h2 ? g2 : 0;
-        want[l] = g > FIK_UP ? FIK_UP : g < -FIK_DOWN ? -FIK_DOWN : g;
+        g = g > FIK_UP ? FIK_UP : g < -FIK_DOWN ? -FIK_DOWN : g;
+        if (fabsf(g - held[l]) > FIK_DEAD) held[l] = g;  // (deadband: a slope's small bumps are not followed)
+        want[l] = held[l];
         off[l] += (want[l] - off[l]) * k;
     }
     float dwant = off[0] < off[1] ? off[0] : off[1];
     dwant = dwant < 0 ? dwant : 0;
-    drop += (dwant - drop) * k;
+    drop += (dwant - drop) * kd;
     float dy = drop * w;
     if (fabsf(dy) > 0.05f)
         for (int b = 0; b < nb; b++) pose[b * 12 + 10] += dy;
@@ -5688,6 +5703,8 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
             else if (!strcmp(key, "footik")) g_footik = v != 0, LOG("[footik] footik %d (%s)\n", g_footik, g_footik ? "legs follow the ground" : "off");  // (footik)
             else if (!strcmp(key, "footiklog")) g_footik_log = v != 0;  // (footik)
+            else if (!strcmp(key, "footiktau")) g_fik_tau = v < 10 ? 10 : v > 1000 ? 1000 : v, LOG("[footik] smoothing %d ms (body x%.1f)\n", g_fik_tau, FIK_DROP_X);
+            else if (!strcmp(key, "footikrun")) g_fik_run = v < 0 ? 0 : v > 100 ? 100 : v, LOG("[footik] strength while running %d%%\n", g_fik_run);
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
             else if (!strcmp(key, "slopemax")) g_slope_max = (float)v;
@@ -8341,7 +8358,8 @@ static void sora_mod_frame_body(void) {
     } else if (sm_call_draw(kh, to_u)) {  // (s136 summon: Sora's call motion on its own actor, in place of the body)
         g_lb_prev = g_lb_from = -1, g_lb_prev_sp = false;
     } else if ((g_fik_now = false, !rag_draw(rag, kh, to_u))) {  // (step 4: at Link's feet)
-        g_fik_now = g_footik && st == LINK_GROUND && !ACT_AIR(S.act) && !S.special && !IN_GUEST && !g_fmots_on;  // (footik)
+        g_fik_now = g_footik && !IN_GUEST && !g_fmots_on;  // (footik: the draws of this block; the weight follows g_fik_gate)
+        g_fik_gate = st == LINK_GROUND && !ACT_AIR(S.act) && !S.special;
         if (S.mot && (S.act == ACT_GLIDE || S.act == ACT_GLIDE_HOVER)) {  // the glide motions blend (glide_pose_draw)
             if (gl_from_motion < 0) gl_from_motion = MOT_FALL, gl_from_clock = clock_old;
             glide_pose_draw(gl_from_motion, gl_from_clock, S.face, to_u, kh, GLIDE_BLEND);
