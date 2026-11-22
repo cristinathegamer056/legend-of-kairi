@@ -487,8 +487,8 @@ static const Mot *mot_of(int id) {
 // function?" At the roll's start Sora gets g_rollinv invulnerable KH frames (60 a second): the Reaction Command Dodge's own
 // counter g_rc_inv (sora_guard.h), so the exe drops every hit on Link meanwhile (no life lost, no flinch; a swallowed hit is
 // only logged: no guard spark / sound / motion). GUESS 20 (1/3 s from the start; KH2's exact window not traced).
-// SAVAGEWIND_SORA_ROLL_INV=<KH frames> / live "set rollinv <KH frames>"; default 0 = none.
-static int g_rollinv;
+// SAVAGEWIND_SORA_ROLL_INV=<KH frames> / live "set rollinv <KH frames>" (0 = none); default 20 (user tested).
+static int g_rollinv = 20;
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
