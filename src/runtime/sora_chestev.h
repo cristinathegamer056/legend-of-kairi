@@ -14,7 +14,7 @@ static bool g_chev_det;      // the camera is detached right now (the raw readin
 // chest (3.1..6.1 m, 41..81 deg): the player's own camera (tilted up / swung round) puts Link > g_evang off axis, so Sora
 // froze and the HUD hid (g_event). A demo camera moves with no camera input, so with this on a detach that starts within
 // EVSTICK_PRESENTS of right-stick input (or sees stick input while it lasts) is the player's: it never turns the event on
-// until the camera is back on Link. SAVAGEWIND_SORA_EV_STICK=1 / live "set evstick 0/1"; default 0. GUESS: a gyro / mouse
+// until the camera is back on Link. SAVAGEWIND_SORA_EV_STICK=1 / live "set evstick 0/1"; default 1 (user tested, on by default). GUESS: a gyro / mouse
 // camera is not seen here.
 // (g_evstick: declared in sora.c, before the env / live parsers)
 #define EVSTICK_PRESENTS 60
