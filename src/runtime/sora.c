@@ -1777,8 +1777,9 @@ static int g_glide_on = 1;                   // live "set glide 0/1"
 // (glidebtn) user: "Sora's glide ability is set to X (PS Cross = Switch B), originally it was the square button": KH2's
 // Glide is held Square in the air. With glidebtn 1, Square (Switch Y, the roll's button; the roll and the guard are ground
 // only) pressed in a jump arms the glide and its hold keeps it; Cross in the air is the Aerial Dodge only, at once (no
-// tap / hold wait). 0 = Cross (as before). Off by default until tested: SAVAGEWIND_SORA_GLIDE_BTN=1 / live "set glidebtn 1".
-static int g_glide_btn = 0;
+// tap / hold wait). 0 = Cross (as before). Default ON (user tested in game: Square glides, Cross = the dodge at once,
+// the roll / guard on the ground and the updraft lift unchanged); SAVAGEWIND_SORA_GLIDE_BTN=0 / live "set glidebtn 0" = Cross.
+static int g_glide_btn = 1;
 #define GLIDE_BTN (g_glide_btn ? BTN_ROLL : BTN_JUMP)
 // (s58) live "set glidestam 0/1/2": the KH2 glide pays BotW's paraglider stamina (glidestam_tick). 1 = through Link's
 // own stamina delta (BotW's accounting), 2 = a direct PlayerInfo write (fallback), 0 = off (the s32 port: free)
@@ -6883,7 +6884,7 @@ static void sora_mod_frame_body(void) {
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
         g_glide_btn = env_f("SAVAGEWIND_SORA_GLIDE_BTN", (float)g_glide_btn) != 0;  // (glidebtn)
-        if (g_glide_btn) LOG("[sora] glidebtn on: Square (Switch Y) glides, Cross in the air = Aerial Dodge\n");
+        if (!g_glide_btn) LOG("[sora] glidebtn off: Cross (Switch B) glides (hold), as before\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
         slog_open();
