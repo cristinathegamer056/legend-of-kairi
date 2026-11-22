@@ -8220,7 +8220,7 @@ static void sora_mod_frame_body(void) {
     if (GT.on || g_dbm_clip || (S.special == SP_DAMAGE && !is_free) || nox_win) drive_off();  // (goto hold: zero velocity) BotW's hit push / ragdoll / pick up moves him
     else linkpos_set_velocity(true, vx, vz), linkpos_set_velocity_y(vy_on, vy);  // (the y servo on for the glide too)
     if (!((S.special == SP_DAMAGE && !is_free) || nox_win)) link_face();  // (s87c link face: ground / air only; set linkface 0 = off)
-    kbf_set(g_kbfield && !g_bs_on && S.mot && !S.special && (S.mot->slot & 3) == 2);  // (kbfield: the no-weapon field variant, out of battle)
+    kbf_set(g_kbfield && !g_bs_on && S.mot && (!S.special || S.special == SP_ROLL) && (S.mot->slot & 3) == 2);  // (kbfield: the no-weapon field variant, out of battle; the dodge roll A180 = slot 838 too)
     if (SKT.rider_on) {  // (s110 skate: KH2's skate rider + board, one actor, in place of the body)
         skt_rider_draw(kh, to_u);
         g_lb_prev = g_lb_from = -1, g_lb_prev_sp = false;
