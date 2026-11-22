@@ -14,6 +14,10 @@ BARS = 'BARS', u32 count @0x0C, u32 CRC table, then (u32 amta, u32 audio) offset
 Packed (keys / names, the runtime looks them up by these strings):
   sounds  "bs/<bank>/<c>/<k>"   c: s = walk (BotW MoveSlow), n = run (MoveNormal), j = jump push-off, l = landing (LandWeak)
           walk / run = heel + toe mixed into one step (toe TOE_DELAY later), k in the order L00 R00 L01 R01 (cycling = feet alternate)
+          LEVEL: BotW's raw recordings are 2x (run) .. 6x (walk) louder than Sora's KH2 steps (user: "really loud"). Each class gets
+          ONE volume (Sound.volume) = the KH2 class's loudness (se705 #16-19 run, #20-23 walk, #25 jump, #26 land, as packed in
+          the input with their own volume) / the BotW class's mean over the land banks; so every surface sits at KH2's step level
+          and the surfaces keep BotW's differences between them (water louder than grass ...). Loudness = the loudest 50 ms RMS.
   names   "bs/<bank>/<c>" -> the class's first sound (its variants follow, consecutive);  "bs_mark" -> the first BotW step sound
   banks   the M_Mt_ name without "M_Mt_" (Grass, StoneDgnHeavy, ...); water: WaterShallow, WaterMdlDepth, WaterDeep (s / n only)
 
@@ -83,6 +87,19 @@ def mix(a, b, delay):
     return out
 
 
+def loud(s, rate=RATE, ch=1):
+    """the loudest 50 ms window's RMS of interleaved int16 samples"""
+    w = max(1, int(0.05 * rate) * ch)
+    best = 0.0
+    for a in range(0, max(1, len(s) - w + 1), max(1, w // 4)):
+        seg = s[a:a + w]
+        best = max(best, (sum(x * x for x in seg) / len(seg)) ** 0.5)
+    return best
+
+
+KH2_CLASS = {16: "n", 17: "n", 18: "n", 19: "n", 20: "s", 21: "s", 22: "s", 23: "s", 25: "j", 26: "l"}
+
+
 def main():
     src, dst, romfs, vgm, tmp = sys.argv[1:6]
     if os.path.abspath(src) == os.path.abspath(dst):
@@ -134,6 +151,25 @@ def main():
     if b"bs_mark" in haven:
         sys.exit("[botwsteps] the input already has the BotW steps")
     pcm = bytearray(d[data_off:data_off + data_bytes])
+    # the KH2 step level per class (from the input pack: se705's packed step sounds x their volume)
+    kh2 = {}
+    for i in range(ns):
+        key, rate, ch, vol, _, off, fr = struct.unpack_from("<48sIIfIII", sounds, 72 * i)
+        key = key.split(bytes(1))[0].decode()
+        if key.startswith("se/se705.win32.scd#") and int(key[19:]) in KH2_CLASS:
+            smp = struct.unpack_from("<%dh" % (fr * ch), pcm, off)
+            kh2.setdefault(KH2_CLASS[int(key[19:])], []).append(loud(smp, rate, ch) * vol)
+    botw = {}
+    for bank, c, v in classes:
+        if not bank.startswith("Water"):
+            botw.setdefault(c, []).extend(loud(x) for x in v)
+    gain = {}
+    for c in "snjl":
+        if kh2.get(c) and botw.get(c):
+            gain[c] = (sum(kh2[c]) / len(kh2[c])) / (sum(botw[c]) / len(botw[c]))
+        else:
+            gain[c] = 0.3  # (no KH2 reference in the input: a safe quiet level)
+    print("[botwsteps] class volumes (KH2 level / BotW level): " + ", ".join("%s %.3f" % (c, gain[c]) for c in "snjl"))
     new_s, new_n = bytearray(), bytearray()
     first = ns
     for bank, c, v in classes:
@@ -141,7 +177,7 @@ def main():
         for k, s in enumerate(v):
             while len(pcm) % 4:
                 pcm.append(0)
-            new_s += struct.pack("<48sIIfIII", ("bs/%s/%s/%d" % (bank, c, k)).encode()[:47], RATE, 1, 1.0, 0, len(pcm), len(s))
+            new_s += struct.pack("<48sIIfIII", ("bs/%s/%s/%d" % (bank, c, k)).encode()[:47], RATE, 1, gain[c], 0, len(pcm), len(s))
             pcm += struct.pack("<%dh" % len(s), *s)
     new_n += struct.pack("<32sI", b"bs_mark", first)
     ns2, nn2 = ns + len(new_s) // 72, nn + len(new_n) // 36
