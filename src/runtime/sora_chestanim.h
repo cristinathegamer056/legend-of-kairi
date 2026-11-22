@@ -35,8 +35,8 @@ static int g_cxp_reach = 300;  // (s108: chestreach <cm>, a TBox_* actor this ne
 // out his chest opening animation". With the torch out Link is in his own states (st LINK_OTHER, word 0x18000001 /
 // 0x18000000), so walking within chestreach of ANY chest (open ones too: no chest flag is read) started it. Every real
 // opening in the user's logs started with the word exactly 0 (BotW holds Link for the chest demo). With this on, the
-// "chest" start needs word 0. SAVAGEWIND_SORA_CHEST_SW=1 / live "set chestsw 0/1"; default 0. Log '[chestanim] skip: ...'.
-static int g_cxp_sw;
+// "chest" start needs word 0. SAVAGEWIND_SORA_CHEST_SW=1 / live "set chestsw 0/1"; default 1 (user tested, on by default). Log '[chestanim] skip: ...'.
+static int g_cxp_sw = 1;
 static bool g_cxp_zero;  // (slice 2) set in sora.c: the state-0 event stretch (Link's word 0 held g_ev_zero presents) is on
 static int g_cprev_req = -1;  // slot asked for by the key, taken by cprev_tick on the next driven frame
 #define CX_PER_FRAME 40
