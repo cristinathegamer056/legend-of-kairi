@@ -219,7 +219,7 @@ static int g_kbfield = 1;
 #define BTN_L3 (1ull << 4)  // Switch LSTICK (script_parse names[] order)
 static int g_kbtoggle = 1;
 static bool g_kb_drawn;
-static int g_kbdfx_bone = -3, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side, g_kbdfx_orient = 1, g_kbdfx_dir = 1;  // (kbdrawfx placement knobs; see kbdfx_blade_mid)
+static int g_kbdfx_bone = -3, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side, g_kbdfx_orient = 1, g_kbdfx_dir = 1, g_kbdfx_lenpct = 100;  // (kbdrawfx placement knobs; see kbdfx_blade_mid)
 static int g_kbdrawfx, g_kbdfx_last = -1;  // (kbdrawfx: the option, the last drive-path Keyblade hidden state; see kbdfx_tick)
 static void kbf_set(bool hide) {
     static int last_body = -1, last_hide = -1;
@@ -5581,6 +5581,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
             else if (!strcmp(key, "kbdfxbone")) g_kbdfx_bone = v, LOG("[sora] kbdrawfx anchor %d (-3 grip + turn, -1 blade middle, -2 tip, else that bone)\n", v);
+            else if (!strcmp(key, "kbdfxlen")) g_kbdfx_lenpct = v < 10 ? 10 : v > 300 ? 300 : v, LOG("[sora] kbdrawfx sweep length %d%%\n", g_kbdfx_lenpct);
             else if (!strcmp(key, "kbdfxdir")) g_kbdfx_dir = v < 0 ? -1 : 1, LOG("[sora] kbdrawfx dir %d\n", g_kbdfx_dir);
             else if (!strcmp(key, "kbdfxorient")) g_kbdfx_orient = v != 0, LOG("[sora] kbdrawfx turn %d (%s)\n", g_kbdfx_orient, g_kbdfx_orient ? "along the blade" : "his facing only");
             else if (!strcmp(key, "kbdfxfwd")) g_kbdfx_fwd = v, LOG("[sora] kbdrawfx fwd %d cm\n", v);
@@ -6289,7 +6290,9 @@ bool sora_draw_grip_world(float out[12], float *scale, float vel_out[3]);
 static bool kbdfx_from_grip(float to_u, float out[3], float *h_cm) {
     float gw[12], sc = 0, lm[12];
     if (!g_kbdfx_orient || g_kbdfx_bone != -3 || !sora_draw_grip_world(gw, &sc, NULL) || !linkpos_link_mtx(lm)) return false;
-    float d = g_kbdfx_dir < 0 ? 1.0f : -1.0f, w[3] = {d * gw[1], d * gw[5], d * gw[9]};  // (world: -Y column = toward the tip)
+    // (user test 5, F5 marks 064059 / 064102: on the blade line, but from the grip AWAY from the teeth. So the recording's
+    // sweep runs toward model -x, as read from kh2_fx.bin first: model -x -> toward the tip = model +x -> grip +Y.)
+    float d = g_kbdfx_dir < 0 ? -1.0f : 1.0f, w[3] = {d * gw[1], d * gw[5], d * gw[9]};  // (world: +Y column = toward the pommel)
     float l = sqrtf(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
     if (l < 1e-4f) return false;
     float sn = sinf(S.face), c = cosf(S.face);
@@ -6301,7 +6304,8 @@ static bool kbdfx_from_grip(float to_u, float out[3], float *h_cm) {
     if (yl < 1e-4f) return false;
     y[0] /= yl, y[1] /= yl, y[2] /= yl;
     float z[3] = {x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]};
-    for (int r = 0; r < 3; r++) g_kbdfx_rot[r * 3 + 0] = x[r], g_kbdfx_rot[r * 3 + 1] = y[r], g_kbdfx_rot[r * 3 + 2] = z[r];
+    float k = (float)g_kbdfx_lenpct / 100.0f;  // (kbdfxlen: the sweep's length along the blade, % of KH2's)
+    for (int r = 0; r < 3; r++) g_kbdfx_rot[r * 3 + 0] = x[r] * k, g_kbdfx_rot[r * 3 + 1] = y[r], g_kbdfx_rot[r * 3 + 2] = z[r];
     g_kbdfx_rot_ok = true, g_kbdfx_len = -1;
     // (the knobs in his facing frame, cm: +fwd ahead, +up, +side = his right (GUESS sign), as kbdfx_blade_mid)
     float ox = -(float)g_kbdfx_side, oz = (float)g_kbdfx_fwd;
@@ -6381,8 +6385,8 @@ static void kbdfx_tick(bool hidden, float to_u) {
     if (g_kbdfx_last >= 0 && (int)hidden != g_kbdfx_last && (g_kbdrawfx == 1 || (g_kbdrawfx == 2 && !hidden)) && kbdfx_blade_mid(to_u, m, &h)) {
         g_kbdfx_h = sora_fx_event("keyblade_appear", m, S.face, to_u), g_kbdfx_left = 90;
         kbdfx_orient(g_kbdfx_h);
-        LOG("[sora] kbdrawfx: %s flash (handle %d, slot %d, %.0f cm above his feet; anchor %d, fwd %d up %d side %d; blade %.0f cm, turn %s)\n", hidden ? "sheathe" : "draw",
-            g_kbdfx_h, S.mot->slot, h, g_kbdfx_bone, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side, g_kbdfx_len,
+        LOG("[sora] kbdrawfx: %s flash (handle %d, slot %d, %.0f cm above his feet; anchor %d, fwd %d up %d side %d, dir %d len %d%%; blade %.0f cm, turn %s)\n", hidden ? "sheathe" : "draw",
+            g_kbdfx_h, S.mot->slot, h, g_kbdfx_bone, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side, g_kbdfx_dir, g_kbdfx_lenpct, g_kbdfx_len,
             !g_kbdfx_orient ? "off" : !g_kbdfx_rot_ok ? "none (no blade)" : g_kbdfx_grip_used ? "along the drawn blade (grip -Y)" : "along the bones");
     }
     g_kbdfx_last = hidden;
