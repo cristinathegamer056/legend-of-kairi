@@ -3374,8 +3374,9 @@ static int g_hudslide = 1;
 // (hudclimb) user: "when Sora was finishing his climbing ladder animation the kh2 hud disappeared". Log: Link state 0x10
 // (climbing) -> a state-0 stretch (the pull-up at the top, ~0.5 s) -> 0x18000000; state 0 = g_event, which hid the HUD. Now a
 // state-0 stretch that STARTS within HCLIMB_GAP_MS of a climbing frame is the climb-up: the HUD stays up for it (at most
-// HCLIMB_MAX_MS, then a real event hides it as before). SAVAGEWIND_SORA_HUD_CLIMB=1 / live "set hudclimb 0/1"; default 0.
-static int g_hudclimb;
+// HCLIMB_MAX_MS, then a real event hides it as before). SAVAGEWIND_SORA_HUD_CLIMB=0/1 / live "set hudclimb 0/1"; default 1
+// (tested in game: the HUD stays up at the top of a ladder).
+static int g_hudclimb = 1;
 #define HCLIMB_GAP_MS 600
 #define HCLIMB_MAX_MS 3000
 #define HSLIDE_SPEED 2.5f
