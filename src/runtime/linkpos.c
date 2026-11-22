@@ -3857,6 +3857,32 @@ bool linkpos_raycast(const float from[3], const float to[3], float hit[3], float
     return ok;
 }
 
+// (kh2steps) linkpos_raycast + the hit's material: the helper's x4 = an out record (1.9.0 FUN_7100bd78a0 -> FUN_7100bd74a0:
+// if x4, *(int)(x4 + 8) = (int) RayCast[0x10] (the hit's MaterialMask raw value, GUESS: material in the low bits), *(u64)(x4 +
+// 0x10) = 0). *mat = that raw value (0 without a hit). Same rules as linkpos_raycast (inside linkpos_frame only).
+bool linkpos_raycast_mat(const float from[3], const float to[3], float hit[3], float normal[3], uint32_t *mat) {
+    Cpu *c = g_in_frame ? kernel_current_cpu() : NULL;
+    if (mat) *mat = 0;
+    if (!c || !dispatch_lookup(RC_GROUND_SEG)) return false;
+    Cpu save = *c;
+    uint64_t sp = (c->sp - 0xa0) & ~0xfull;        // g[0..15] as linkpos_raycast + the material record at +0x40 (0x18 bytes)
+    float *g = (float *)(uintptr_t)sp;
+    memset(g, 0, 0x60);
+    memcpy(g, from, 12), memcpy(g + 4, to, 12);
+    c->sp = sp;
+    c->x[0] = sp, c->x[1] = sp + 0x10, c->x[2] = sp + 0x20, c->x[3] = sp + 0x30, c->x[4] = sp + 0x40;
+    c->v[0] = 0;
+    guest_call(c, RC_GROUND_SEG);
+    bool ok = (c->x[0] & 1) != 0;
+    if (ok) {
+        if (hit) memcpy(hit, g + 8, 12);
+        if (normal) memcpy(normal, g + 12, 12);
+        if (mat) *mat = *(const uint32_t *)(uintptr_t)(sp + 0x48);
+    }
+    *c = save;
+    return ok;
+}
+
 // Game data flags (s55 levels, slice 2; recon/S54_HELPER_LV_LEVELS.md 4.2 A, S55_HELPER_LEVELS23.md): a guest call of
 // the gdt getters the way the Defeated counter FUN_7100ac6840 calls getS32 (disassembly 0x7100ac68d8..f4):
 // x0 = TriggerParam [[gdt::Manager + 0xbe0]], x1 = &out, x2 = &sead::SafeString {vtable [GOT 0x7101c05290] + 0x10,

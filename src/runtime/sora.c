@@ -483,6 +483,11 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
+// (kh2steps, stage 1 = diagnosis) user chose option 2: KH2's footsteps per surface. BotW's ground ray returns the hit's
+// material (exe linkpos_raycast_mat); this logs it under Sora's feet on every change ('[steps] floor ...'), with the water
+// depth, so the material numbers can be matched to grass / stone / sand / snow / wood / water by walking on them.
+// SAVAGEWIND_SORA_STEP_DIAG=1 / live "set stepdiag 0/1"; default 0.
+static int g_stepdiag;
 static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
@@ -688,6 +693,7 @@ static void hits_load(void) {
     g_cure_pct = env_f("SAVAGEWIND_SORA_CURE_PCT", g_cure_pct);
     g_hit_r = env_f("SAVAGEWIND_SORA_HIT_R", g_hit_r), g_hit_h = env_f("SAVAGEWIND_SORA_HIT_H", g_hit_h);
     g_hit_pad = env_f("SAVAGEWIND_SORA_HIT_PAD", g_hit_pad);
+    g_stepdiag = env_f("SAVAGEWIND_SORA_STEP_DIAG", (float)g_stepdiag) != 0;  // (kh2steps diag)
     const char *fin = getenv("SAVAGEWIND_SORA_FIN_F54");
     if (fin && *fin) g_fin_f54 = (int)strtol(fin, NULL, 0);
     LOG("[sora] hit bake %s: %d slots (damage base %.1f, finisher f54 %#x, enemy cylinder r %.2f h %.2f pad %.2f)\n",
@@ -5548,6 +5554,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 1500.0f;  // (an enemy within this = a fight)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "stepdiag")) g_stepdiag = v != 0, LOG("[steps] stepdiag %d\n", g_stepdiag);  // (kh2steps diag)
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
             else if (!strcmp(key, "slopemax")) g_slope_max = (float)v;
@@ -7316,6 +7323,27 @@ static void sora_mod_frame_body(void) {
     NET.wet = wet;  // (mp: SNAP flag NF_GHOST)
     warp_tint(0);  // (s54: only the 0x1 puppet below glows)
     light_tick();  // (s121 a1 light)
+    if (g_stepdiag) {  // (kh2steps diag) the floor material under Sora's feet, logged on change
+        typedef bool (*RayMat)(const float *, const float *, float *, float *, uint32_t *);
+        static RayMat rm;
+        static int tried;
+        if (!tried) tried = 1, rm = (RayMat)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_raycast_mat"),
+                    LOG("[steps] diag: %s\n", rm ? "floor material log on" : "this exe has no linkpos_raycast_mat (NEEDS EXE RELINK)");
+        float lp[3];
+        if (rm && linkpos_link_pos(lp)) {
+            float a[3] = {lp[0], lp[1] + 0.3f, lp[2]}, b[3] = {lp[0], lp[1] - 1.5f, lp[2]}, h[3], n[3];
+            uint32_t m = 0;
+            bool hit = rm(a, b, h, n, &m);
+            float wd = link_water_depth();
+            static uint32_t last = 0xffffffffu;
+            static int last_w = -1;
+            int w = wd > 0.02f;
+            if ((hit ? m : 0xfffffffeu) != last || w != last_w)
+                LOG("[steps] floor %s: material raw %#x (low 6 bits %u, bits 6.. %#x), water depth %.2f, at %.2f %.2f %.2f\n",
+                    hit ? "hit" : "none", m, m & 63u, m >> 6, wd, lp[0], lp[1], lp[2]),
+                    last = hit ? m : 0xfffffffeu, last_w = w;
+        }
+    }
     blob_tick();   // (s126: KH2 blob keep / off / auto)
     g_dg_playing = (st == LINK_GROUND || st == LINK_AIR) && !dead && !g_loading;  // (s183 kairi-diag)
     if (st != LINK_GROUND && st != LINK_AIR) {  // climbing, swimming, a cutscene...: Link's (the servo can't drive)
