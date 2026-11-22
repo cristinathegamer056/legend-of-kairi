@@ -3242,6 +3242,7 @@ float linkpos_tbox_near(float pos[3], char *name, int n) {
 }
 
 static void cam_override_late(void);  // (s137 fps: the FPS camera's late rewrite, camera section below)
+static void heldfire_note(uint64_t a);  // (firelight: below, with the fire code)
 static void opacity_apply(Cpu *c) {
     g_opacity_calls++;
     cam_override_late();
@@ -3251,6 +3252,7 @@ static void opacity_apply(Cpu *c) {
         zero_opacity(a);
         if (g_opacity_hits++ == 0) LOG("[linkpos] opacity hook: hiding Link (actor %llx)\n", (unsigned long long)g_servo_actor);
     } else if (g_servo_actor && in_guest(a) && is_link_equip(a) && g_hide && !g_no_equip_hide) {
+        heldfire_note(a);  // (firelight: a burning torch / branch in his hand lights Sora)
         if (slate_hip_wanted(a)) {  // (s94 b8-slatehip)
             slate_hip_apply(a);
             slate_xlu_probe(c, a);  // (s108 slatexlu)
@@ -4541,6 +4543,52 @@ static void fire_note(uint64_t a) {  // (opacity hook, any thread)
             (unsigned long long)*(const uint64_t *)(uintptr_t)(a + ACTOR_CHEMICAL));
 }
 
+// (firelight) Link's own weapons are his equipment (fire_note skips them): the held torch (Weapon_Sword_043) or a wooden
+// weapon set alight. heldfire_note (opacity hook, Link's equipment) keeps each Weapon_* piece with a chemical holder;
+// linkpos_held_fire(out) = 1 and its world position when one of them, drawn in the last 2 frames, is burning (chemical state
+// 2, the getChemical call of linkpos_fire_burning: inside linkpos_frame only), 0 none burning, -1 none seen / refused.
+static Cpu *fire_cpu(const char *what, uint64_t fn);  // (below)
+#define HELDFIRE_N 6
+static struct { uint64_t a, vt, seen; float pos[3]; } g_hf[HELDFIRE_N];
+static SRWLOCK g_hf_lock = SRWLOCK_INIT;
+static void heldfire_note(uint64_t a) {
+    const char *n = actor_name(a);
+    if (!n || strncmp(n, "Weapon_", 7) || !in_guest(*(const uint64_t *)(uintptr_t)(a + ACTOR_CHEMICAL))) return;
+    const float *m = (const float *)(uintptr_t)(a + ACTOR_MTX);
+    AcquireSRWLockExclusive(&g_hf_lock);
+    int i, old = 0;
+    for (i = 0; i < HELDFIRE_N && g_hf[i].a != a; i++) if (g_hf[i].seen < g_hf[old].seen) old = i;
+    if (i == HELDFIRE_N) i = old, g_hf[i].a = a;
+    g_hf[i].vt = *(const uint64_t *)(uintptr_t)a, g_hf[i].seen = g_vel_frame_id;
+    g_hf[i].pos[0] = m[3], g_hf[i].pos[1] = m[7], g_hf[i].pos[2] = m[11];
+    ReleaseSRWLockExclusive(&g_hf_lock);
+}
+int linkpos_held_fire(float out[3]) {
+    uint64_t cand[HELDFIRE_N];
+    float cp[HELDFIRE_N][3];
+    int nc = 0;
+    AcquireSRWLockExclusive(&g_hf_lock);
+    for (int i = 0; i < HELDFIRE_N; i++)
+        if (g_hf[i].a && g_vel_frame_id - g_hf[i].seen <= 2 && in_guest(g_hf[i].a) && *(const uint64_t *)(uintptr_t)g_hf[i].a == g_hf[i].vt)
+            cand[nc] = g_hf[i].a, memcpy(cp[nc], g_hf[i].pos, 12), nc++;
+    ReleaseSRWLockExclusive(&g_hf_lock);
+    if (!nc) return -1;
+    for (int i = 0; i < nc; i++) {
+        uint64_t a = cand[i];
+        if (*(const uint8_t *)(uintptr_t)(a + BASEPROC_STATE) == 3) continue;
+        uint64_t vt = *(const uint64_t *)(uintptr_t)a;
+        uint64_t getc = in_guest(vt) ? *(const uint64_t *)(uintptr_t)(vt + 8 * VT_GET_CHEMICAL) : 0;
+        Cpu *c = fire_cpu("held fire", getc);
+        if (!c) return -1;
+        Cpu save = *c;
+        c->x[0] = a;
+        guest_call(c, getc);
+        uint64_t chem = c->x[0];
+        *c = save;
+        if (in_guest(chem) && *(const uint8_t *)(uintptr_t)(chem + CHEM_STATE) == 2) { if (out) memcpy(out, cp[i], 12); return 1; }
+    }
+    return 0;
+}
 int linkpos_fire_objects(LinkposFireObj *out, int max) {  // (the ones drawn this or the last frame)
     AcquireSRWLockExclusive(&g_fire_lock);
     int n = 0;

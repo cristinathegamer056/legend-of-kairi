@@ -950,10 +950,14 @@ static bool fire_fns(void) {
 #define FL_SCAN 9.0f
 #define FL_FLAME_Y 0.6f
 #define FL_FADE 0.35f
+#define FL_HELD 1ull      // (the held fire's id: never an actor address)
+#define FL_TORCH_Y 0.35f  // u above the held weapon's origin (GUESS: the torch head)
+static int g_fl_torch = 1;  // live "set firelighttorch 0/1"
 static const float FL_RGB[3] = {1.0f, 0.55f, 0.22f};
 static int g_fl_k = 100, g_fl_reach = 60;
 static void firelight_tick(void) {
     static int (*burning)(uint64_t);
+    static int (*held)(float *);
     static void (*send)(const float *, int);
     static int tried;
     static uint64_t cur;
@@ -964,6 +968,7 @@ static void firelight_tick(void) {
         HMODULE exe = GetModuleHandleA(NULL);
         tried = 1, burning = (int (*)(uint64_t))(void *)GetProcAddress(exe, "linkpos_fire_burning");
         send = (void (*)(const float *, int))(void *)GetProcAddress(exe, "sora_draw_point_light");
+        held = (int (*)(float *))(void *)GetProcAddress(exe, "linkpos_held_fire");  // (a burning torch / branch in Link's hand)
         LOG("[firelight] %s\n", send && burning ? "ready" : !send ? "this exe has no sora_draw_point_light (NEEDS EXE RELINK)" : "no linkpos_fire_burning in this exe");
     }
     if (!send) return;
@@ -983,10 +988,20 @@ static void firelight_tick(void) {
             if (d < bd && burning(fo[i].actor) == 1) bd = d, best = fo[i].actor, memcpy(bp, fo[i].pos, sizeof bp);
         }
     }
+    // (torch light) user: "Can we add the held torch as a light too?" A burning weapon in Link's hand (the exe's linkpos_held_fire;
+    // Sora holds it in bowtorch) wins over any fire object: it is the one in his hand. Its flame is at the weapon's origin + FL_TORCH_Y
+    // (GUESS: the torch's head), so the flame offset below is taken back. Key FL_HELD = the slot's id for the fade logic.
+    bool held_lit = false;
+    if (g_firelight && held && g_fl_torch) {
+        float hp[3];
+        if (held(hp) == 1) held_lit = true, best = FL_HELD, bp[0] = hp[0], bp[1] = hp[1] + FL_TORCH_Y - FL_FLAME_Y, bp[2] = hp[2];
+    }
+    (void)held_lit;
     // (the weight goes to 0 before a different fire takes over, so the light never jumps across the scene)
     float step = dt > 0 ? dt / FL_FADE : 1.0f;
     if (best && (best == cur || w <= 0)) {
         if (best != cur) LOG("[firelight] lit by a fire %.1f u away\n", sqrtf((bp[0] - lp[0]) * (bp[0] - lp[0]) + (bp[2] - lp[2]) * (bp[2] - lp[2])));
+        if (best != cur && best == FL_HELD) LOG("[firelight] lit by the fire in Link's hand (torch)\n");
         cur = best, memcpy(cur_p, bp, sizeof cur_p);
         w = w + step > 1 ? 1 : w + step;
     } else {
@@ -5616,6 +5631,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
             else if (!strcmp(key, "firelight")) g_firelight = v != 0, LOG("[firelight] firelight %d\n", g_firelight);  // (firelight)
+            else if (!strcmp(key, "firelighttorch")) g_fl_torch = v != 0, LOG("[firelight] held torch light %d\n", g_fl_torch);
             else if (!strcmp(key, "firelightk")) g_fl_k = v < 0 ? 0 : v > 400 ? 400 : v, LOG("[firelight] strength %d%%\n", g_fl_k);
             else if (!strcmp(key, "firelightr")) g_fl_reach = v < 5 ? 5 : v > 300 ? 300 : v, LOG("[firelight] reach %.1f u\n", g_fl_reach / 10.0f);
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
