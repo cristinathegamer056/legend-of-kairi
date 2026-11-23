@@ -4391,6 +4391,7 @@ static void trunk_watch(uint64_t a) {
 #define TRUNK_MAX 16
 #define TRUNK_CHOP_OFF 0x71c
 #define TRUNK_CHOP_BIT 0x2000u
+#define TRUNK_KILL_VSLOT 54  // (Actor::killWithDropsAndEffects, breakables section)
 typedef struct { LinkposTrunk t; uint64_t vt, seen, born_ms; } TrunkE;
 static TrunkE g_trunk[TRUNK_MAX];
 static int g_ntrunk;
@@ -4440,13 +4441,29 @@ int linkpos_trunk_hit(uint64_t actor) {
         if (e->t.actor != actor) continue;
         if (g_vel_frame_id - e->seen <= 1 && *(const uint64_t *)(uintptr_t)actor == e->vt &&
             *(const uint8_t *)(uintptr_t)(actor + BASEPROC_STATE) != 3) {
-            *(volatile uint32_t *)(uintptr_t)(actor + TRUNK_CHOP_OFF) |= TRUNK_CHOP_BIT;
             memcpy(name, e->t.name, sizeof name), ok = 1;
         }
         break;
     }
     ReleaseSRWLockExclusive(&g_world_lock);
-    LOG("[linkpos] trunk hit %llx %s: %s\n", (unsigned long long)actor, name, ok > 0 ? "chop flag set (+0x71c | 0x2000)" : "refused");
+    // (round 5) the +0x71c bit was a side effect (set on the wood bundles too, and on a settled trunk it chopped nothing);
+    // the trunk's drop table is Obj_FireWoodBundle, so the chop = its own killWithDropsAndEffects (actor vslot 54, x1 0), the
+    // call BotW's damage step makes for a broken breakable (breakables section): break effect, vanish, drops.
+    if (ok > 0) {
+        Cpu *c = kernel_current_cpu();
+        uint64_t vt = *(const uint64_t *)(uintptr_t)actor;
+        uint64_t fn = in_guest(vt) ? *(const uint64_t *)(uintptr_t)(vt + TRUNK_KILL_VSLOT * 8) : 0;
+        if (!c || !fn || !dispatch_lookup(fn)) ok = -1;
+        else {
+            Cpu save = *c;
+            c->sp = (c->sp - 0x40) & ~0xfull;
+            c->x[0] = actor, c->x[1] = 0;
+            guest_call(c, fn);
+            *c = save;
+        }
+    }
+    LOG("[linkpos] trunk hit %llx %s: %s\n", (unsigned long long)actor, name,
+        ok > 0 ? "killWithDropsAndEffects (vslot 54)" : "refused");
     return ok;
 }
 

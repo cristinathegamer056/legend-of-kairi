@@ -1151,6 +1151,7 @@ static void floor_probe(const float p[3], bool grounded) {
 }
 
 static void play(int m);  // (repel_try, s51: defined below)
+static bool logchop_at(const HitWin *win, const float c[3], const float now[6], float to_u);  // (logchop, world section)
 static bool repel_try(const HitWin *win, int w, const float now[6], const float prev[6], const float feet[3], float to_u) {
     // (S.hit: this swing already hit an enemy - re:0x3D0BB0 skips the wall test then, WALL_REPEL_RECON.md 10)
     if (!g_repel || !repel_row(win->atkp) || R.swing == S.swing || S.hit || !blade_in_wall(now, prev, feet)) return false;
@@ -1159,6 +1160,7 @@ static bool repel_try(const HitWin *win, int w, const float now[6], const float 
         if (!(said++ % 20)) LOG("[sora] blade ray hit an enemy body at %.2f %.2f %.2f: no repel\n", RC.pos[0], RC.pos[1], RC.pos[2]);
         return false;
     }
+    if (logchop_at(win, RC.pos, now, to_u)) return false;  // (logchop: the blade met a felled log: chopped, no repel)
     bool air = ACT_AIR(S.act);
     int from = S.motion, slot = S.mot ? S.mot->slot : -1;
     R.swing = S.swing + 1;  // (play() below counts the repel as the next swing: the latch holds through it)
@@ -1299,6 +1301,10 @@ static void st_cache(uint64_t actor) {
         return;
     }
 }
+static bool world_hit_already(uint64_t actor) {  // (logchop: the same test, without counting it)
+    for (int k = 0; k < S.nhit; k++) if (S.hit_actor[k] == actor) return true;
+    return false;
+}
 static bool world_seen(uint64_t actor) {  // (already hit in this window; else counts it)
     int k = 0;
     while (k < S.nhit && S.hit_actor[k] != actor) k++;
@@ -1340,7 +1346,7 @@ static int world_blade(const HitWin *win, const float prev[6], const float now[6
             // (test 1: the felling swing hit the trunk as it spawned, still falling: flag set, no wood; later swings
             // missed it = the hit volume off) a trunk younger than TRUNK_SETTLE_MS is left alone; points both ways
             // along the axis; a miss within 8 m logs where the tip was relative to the axis ('LOG miss').
-            if (world_seen(t[i].actor) || t[i].age_ms < TRUNK_SETTLE_MS) continue;
+            if (world_hit_already(t[i].actor) || t[i].age_ms < TRUNK_SETTLE_MS) continue;
             bool hit = false;
             for (float d = -g_trunk_len; d <= g_trunk_len && !hit; d += TRUNK_STEP) {
                 float c[3] = {t[i].pos[0] + t[i].axis[0] * d, t[i].pos[1] + t[i].axis[1] * d - g_trunk_r, t[i].pos[2] + t[i].axis[2] * d};
@@ -1360,6 +1366,7 @@ static int world_blade(const HitWin *win, const float prev[6], const float now[6
                         t[i].name, t[i].pos[0], t[i].pos[1], t[i].pos[2], t[i].axis[0], t[i].axis[1], t[i].axis[2], now[3], now[4], now[5], along, off);
                 continue;
             }
+            world_seen(t[i].actor);  // (counted now: one chop per window)
             int r = WD.trunk_hit(t[i].actor);
             LOG("[sora] LOG hit %llx %s by %s: %s\n", (unsigned long long)t[i].actor, t[i].name, fin ? "finisher" : "swing",
                 r > 0 ? "chop" : "refused");
@@ -1391,6 +1398,36 @@ static int world_blade(const HitWin *win, const float prev[6], const float now[6
         }
     }
     return hits;
+}
+// (logchop, test 4) the sweep runs before the blade reaches the log (misses ~2-3 m off the axis) while the wall repel's
+// contact lies ~0.75 m from it: a repel contact within g_trunk_r + LOGCHOP_PAD of a settled trunk's axis = a log hit.
+#define LOGCHOP_PAD 0.4f
+static bool logchop_at(const HitWin *win, const float c[3], const float now[6], float to_u) {
+    world_fns();
+    if (!g_logchop || !WD.trunks || !WD.trunk_hit) return false;
+    LinkposTrunk t[16];
+    int n = WD.trunks(t, 16);
+    for (int i = 0; i < n; i++) {
+        if (t[i].age_ms < TRUNK_SETTLE_MS || world_hit_already(t[i].actor)) continue;
+        float v[3] = {c[0] - t[i].pos[0], c[1] - t[i].pos[1], c[2] - t[i].pos[2]};
+        float along = v[0] * t[i].axis[0] + v[1] * t[i].axis[1] + v[2] * t[i].axis[2];
+        if (along < -g_trunk_len || along > g_trunk_len) continue;
+        float px = v[0] - along * t[i].axis[0], py = v[1] - along * t[i].axis[1], pz = v[2] - along * t[i].axis[2];
+        float off = sqrtf(px * px + py * py + pz * pz);
+        if (off > g_trunk_r + LOGCHOP_PAD) continue;
+        world_seen(t[i].actor);  // (counted now: one chop per window)
+        int r = WD.trunk_hit(t[i].actor);
+        bool fin = win->kind != ATKP_KIND_NORMAL;
+        LOG("[sora] LOG hit %llx %s by %s (wall contact %.2f along, %.2f off the axis): %s\n", (unsigned long long)t[i].actor,
+            t[i].name, fin ? "finisher" : "swing", along, off, r > 0 ? "chop" : "refused");
+        if (r <= 0) return false;
+        wpn_wear(1);
+        sora_fx_event(kbfx_name(fin ? "hit_finish" : "hit"), c, S.face, to_u);
+        kbse_hit(win->atkp, 1.0f, now + 3);
+        S.hit = true;
+        return true;
+    }
+    return false;
 }
 
 // (s122b worlddiag) every 120 frames while something changed: the exe's tree / Stasis lists and BotW's stasis pool read
