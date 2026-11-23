@@ -4242,8 +4242,53 @@ static void tree_dbg(uint64_t a) {
     LOG("%s\n", b);
 }
 
+// (logchop diag) user: "Sora's keyblade cut knocked tree down into wood ... it just deflects like he's hitting a wall".
+// A felled tree is a new actor Obj_Tree*_Trunk (ActorInfo; pack: AIProgram TreeWeapon = WeaponRootAI ... LumberjackTree
+// node named LumberjackFallenTree + ChanegToLog, DamageParam LumberjackTree, DropTable Obj_FireWoodBundle) that tree_note
+// skips (profile not MapDynamic, or the LumberjackTree node not in mode 0). First TRUNK_DBG_MAX of them within TREE_DIST:
+// profile, life, damage manager vtable, the AI tree to depth 3 (vtables, actor at +8, child counts) and, for a
+// LumberjackTree node, its mode +0x240 / +0x24a..+0x24c. Always on (stops itself).
+#define TRUNK_DBG_MAX 6
+static volatile LONG g_trunk_dbg_n;
+static uint64_t g_trunk_dbg_seen[TRUNK_DBG_MAX];
+static int trunk_ai_dump(char *b, int len, int cap, uint64_t node, uint64_t a, int depth) {
+    if (!in_guest(node) || len >= cap - 96) return len;
+    uint64_t vt = *(const uint64_t *)(uintptr_t)node;
+    uint32_t cnt = *(const uint32_t *)(uintptr_t)(node + TAI_NCHILD);
+    len += snprintf(b + len, cap - len, " [d%d %llx vt %llx%s act%s n%u", depth, (unsigned long long)node, (unsigned long long)vt,
+                    vt == TREE_AI_VT ? " =LumberjackTree" : "", *(const uint64_t *)(uintptr_t)(node + AI_ACTOR) == a ? "=me" : "", cnt);
+    if (vt == TREE_AI_VT)
+        len += snprintf(b + len, cap - len, " mode %d 24a %d 24b %d 24c %d", *(const int8_t *)(uintptr_t)(node + TAI_MODE),
+                        *(const uint8_t *)(uintptr_t)(node + 0x24a), *(const uint8_t *)(uintptr_t)(node + 0x24b),
+                        *(const uint8_t *)(uintptr_t)(node + TAI_FELLED));
+    len += snprintf(b + len, cap - len, "]");
+    uint64_t kids = *(const uint64_t *)(uintptr_t)(node + TAI_CHILDREN);
+    if (depth >= 3 || !cnt || cnt > 64 || !in_guest(kids)) return len;
+    for (uint32_t k = 0; k < cnt && k < 8; k++) len = trunk_ai_dump(b, len, cap, *(const uint64_t *)(uintptr_t)(kids + 8ull * k), a, depth + 1);
+    return len;
+}
+static void trunk_dbg(uint64_t a) {
+    if (g_trunk_dbg_n >= TRUNK_DBG_MAX || !g_servo_actor || link_dist(a) > TREE_DIST) return;
+    const char *name = actor_name(a);
+    if (!name || !(strstr(name, "_Trunk") || !strncmp(name, "Obj_TreeTrunk", 13) || !strncmp(name, "Obj_TreeLog", 11))) return;
+    for (int i = 0; i < TRUNK_DBG_MAX; i++) if (g_trunk_dbg_seen[i] == a) return;
+    LONG k = InterlockedIncrement(&g_trunk_dbg_n) - 1;
+    if (k >= TRUNK_DBG_MAX) return;
+    g_trunk_dbg_seen[k] = a;
+    uint64_t ap = *(const uint64_t *)(uintptr_t)(a + ACTOR_PARAM);
+    uint64_t pc = in_guest(ap) ? *(const uint64_t *)(uintptr_t)(ap + AP_PROFILE_CSTR) : 0;
+    uint64_t dm = *(const uint64_t *)(uintptr_t)(a + ACTOR_DAMAGE_MGR);
+    char b[1400];
+    int len = snprintf(b, sizeof b, "[linkpos] trunkdbg %s %llx profile %s life %d dm %llx (vt %llx):", name, (unsigned long long)a,
+                       in_guest(pc) ? (const char *)(uintptr_t)pc : "?", *(const int32_t *)(uintptr_t)(a + ACTOR_LIFE),
+                       (unsigned long long)dm, in_guest(dm) ? (unsigned long long)*(const uint64_t *)(uintptr_t)dm : 0ull);
+    len = trunk_ai_dump(b, len, (int)sizeof b, *(const uint64_t *)(uintptr_t)(a + ACTOR_ROOT_AI), a, 0);
+    LOG("%s\n", b);
+}
+
 static void tree_note(uint64_t a) {  // (opacity hook, any thread)
     world_env();
+    trunk_dbg(a);  // (logchop diag)
     if (!g_tree_on || !TREE_FELL || !g_servo_actor || a == g_servo_actor || link_dist(a) > TREE_DIST) return;
     uint64_t ai = tree_ai(a);
     if (!ai) { if (g_tree_dbg_n < TREE_DBG_MAX) tree_dbg(a); return; }
