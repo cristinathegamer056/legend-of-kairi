@@ -1249,8 +1249,9 @@ static int g_tree_on = 1, g_tree_k = 100, g_tree_fin = 200, g_st_on = 1, g_st_fi
 // hit spark / sound, and no wall repel. SAVAGEWIND_SORA_LOG_CHOP=1 / live "set logchop 0/1", "set trunklen <cm>" (600),
 // "set trunkr <cm>" (80); default 0.
 static int g_logchop;
-static float g_trunk_len = 6.0f, g_trunk_r = 0.8f;
+static float g_trunk_len = 8.0f, g_trunk_r = 1.0f;
 #define TRUNK_STEP 0.75f
+#define TRUNK_SETTLE_MS 1500
 static float g_tree_r = 0.9f, g_tree_h = 3.0f, g_st_r = 1.0f, g_st_h = 2.0f;
 static struct { LinkposTreesFn trees; LinkposTreeHitFn tree_hit; LinkposStasisObjsFn st_objs; LinkposStasisHitFn st_hit; int tried;
                 LinkposTrunksFn trunks; LinkposTrunkHitFn trunk_hit; } WD;
@@ -1336,15 +1337,29 @@ static int world_blade(const HitWin *win, const float prev[6], const float now[6
         LinkposTrunk t[16];
         int n = WD.trunks(t, 16);
         for (int i = 0; i < n; i++) {
-            if (world_seen(t[i].actor)) continue;
+            // (test 1: the felling swing hit the trunk as it spawned, still falling: flag set, no wood; later swings
+            // missed it = the hit volume off) a trunk younger than TRUNK_SETTLE_MS is left alone; points both ways
+            // along the axis; a miss within 8 m logs where the tip was relative to the axis ('LOG miss').
+            if (world_seen(t[i].actor) || t[i].age_ms < TRUNK_SETTLE_MS) continue;
             bool hit = false;
-            for (float d = 0; d <= g_trunk_len && !hit; d += TRUNK_STEP) {
+            for (float d = -g_trunk_len; d <= g_trunk_len && !hit; d += TRUNK_STEP) {
                 float c[3] = {t[i].pos[0] + t[i].axis[0] * d, t[i].pos[1] + t[i].axis[1] * d - g_trunk_r, t[i].pos[2] + t[i].axis[2] * d};
                 float dx = c[0] - feet[0], dz = c[2] - feet[2];
                 if (dx * dx + dz * dz > 36) continue;
                 hit = sweep_hits_rh(prev, now, c, g_trunk_r, 2 * g_trunk_r);
             }
-            if (!hit) continue;
+            if (!hit) {
+                float v[3] = {now[3] - t[i].pos[0], now[4] - t[i].pos[1], now[5] - t[i].pos[2]};
+                float along = v[0] * t[i].axis[0] + v[1] * t[i].axis[1] + v[2] * t[i].axis[2];
+                float px = v[0] - along * t[i].axis[0], py = v[1] - along * t[i].axis[1], pz = v[2] - along * t[i].axis[2];
+                float off = sqrtf(px * px + py * py + pz * pz);
+                static uint64_t last_miss_ms;
+                if (off < 8 && GetTickCount64() - last_miss_ms > 250)
+                    last_miss_ms = GetTickCount64(),
+                    LOG("[sora] LOG miss %s: origin %.2f %.2f %.2f axis %.2f %.2f %.2f, tip %.2f %.2f %.2f = %.2f along, %.2f off the axis\n",
+                        t[i].name, t[i].pos[0], t[i].pos[1], t[i].pos[2], t[i].axis[0], t[i].axis[1], t[i].axis[2], now[3], now[4], now[5], along, off);
+                continue;
+            }
             int r = WD.trunk_hit(t[i].actor);
             LOG("[sora] LOG hit %llx %s by %s: %s\n", (unsigned long long)t[i].actor, t[i].name, fin ? "finisher" : "swing",
                 r > 0 ? "chop" : "refused");

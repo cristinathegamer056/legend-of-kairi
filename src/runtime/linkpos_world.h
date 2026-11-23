@@ -25,6 +25,7 @@ typedef struct {
     uint64_t actor;
     float pos[3];   // mMtx translation (the trunk's root end), BotW units
     float axis[3];  // the trunk's length direction (the tree's local Y, unit)
+    int32_t age_ms; // since the list first saw it (a fresh trunk is still falling)
     char name[48];
 } LinkposTrunk;
 typedef int (*LinkposTrunksFn)(LinkposTrunk *out, int max);  // "linkpos_trunks": copies, any thread
