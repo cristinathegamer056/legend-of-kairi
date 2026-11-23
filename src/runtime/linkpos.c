@@ -4456,6 +4456,40 @@ int linkpos_trunk_hit(uint64_t actor) {
     // (round 5) the +0x71c bit was a side effect (set on the wood bundles too, and on a settled trunk it chopped nothing);
     // the trunk's drop table is Obj_FireWoodBundle, so the chop = its own killWithDropsAndEffects (actor vslot 54, x1 0), the
     // call BotW's damage step makes for a broken breakable (breakables section): break effect, vanish, drops.
+    // (round 6, the game's own chop: f_700094e5a0, guest lr 700094ebd0, read in generated/main) before the delete it
+    // (1) puts the drop point (the trunk's mMtx x an offset) into a vec, (2) FUN_7100bdc1f0(actor, out*, pos*) = *out = pos,
+    // the actor's drop object (vslot 134, +0x430) checked by type, its flag +0xc |= 0x80 = drops wanted, (3) vslot 135
+    // (+0x438) -> if not null, its +4 = 1, (4) FUN_7100aa5330(actor, 0) = slot 54 (+0x1b0) unless being deleted. Same here,
+    // with the drop point = the trunk's own position (GUESS: the offset only spreads the bundles).
+    if (ok > 0 && SS->drop_request && dispatch_lookup(SS->drop_request)) {
+        Cpu *c = kernel_current_cpu();
+        uint64_t vt = *(const uint64_t *)(uintptr_t)actor;
+        if (c && in_guest(vt)) {
+            Cpu save = *c;
+            uint64_t sp = (c->sp - 0x80) & ~0xfull;
+            float *g = (float *)(uintptr_t)sp;  // g[0..2] the point, g[4..6] the copy
+            const float *m = (const float *)(uintptr_t)(actor + ACTOR_MTX);
+            memset(g, 0, 0x40);
+            g[0] = m[3], g[1] = m[7], g[2] = m[11];
+            c->sp = sp;
+            c->x[0] = actor, c->x[1] = sp + 0x10, c->x[2] = sp;
+            guest_call(c, SS->drop_request);
+            int dr = (int)(c->x[0] & 1);
+            *c = save;
+            uint64_t f135 = *(const uint64_t *)(uintptr_t)(vt + 0x438);
+            int s135 = -1;
+            if (f135 && dispatch_lookup(f135)) {
+                c->sp = sp, c->x[0] = actor;
+                guest_call(c, f135);
+                uint64_t r = c->x[0];
+                *c = save;
+                s135 = 0;
+                if (in_guest(r)) *(volatile uint32_t *)(uintptr_t)(r + 4) = 1, s135 = 1;
+            }
+            LOG("[linkpos] trunk drops: request %s (point %.2f %.2f %.2f), slot 135 %s\n", dr ? "set" : "NOT set (no drop object?)",
+                g[0], g[1], g[2], s135 > 0 ? "flagged" : s135 == 0 ? "null" : "no function");
+        }
+    }
     if (ok > 0) {
         Cpu *c = kernel_current_cpu();
         uint64_t vt = *(const uint64_t *)(uintptr_t)actor;
