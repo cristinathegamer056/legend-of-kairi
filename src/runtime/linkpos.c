@@ -4292,6 +4292,7 @@ static void trunk_dbg(uint64_t a) {
 // both small ints, or one of them 0) is logged ('[trunkwatch] ... +off old -> new'), at most TW_LINES per actor per
 // frame and TW_TOTAL lines in all. A trunk not drawn for 30 frames = '[trunkwatch] gone'. SAVAGEWIND_LINK_TRUNK_WATCH=1.
 #define TW_MAX 4
+#define TRUNK_CHOP_OFF_W 0x71c
 #define TW_DIST 8.0f
 #define TW_ACT 0x1000
 #define TW_AI 0x300
@@ -4359,6 +4360,13 @@ static void trunk_watch(uint64_t a) {
         LOG("[trunkwatch] new %s %llx profile %s at %.2f %.2f %.2f, LumberjackTree node %llx (mode %d)\n", name, (unsigned long long)a,
             in_guest(pc) ? (const char *)(uintptr_t)pc : "?", m[3], m[7], m[11], (unsigned long long)g_tw[slot].ai,
             g_tw[slot].ai ? *(const int8_t *)(uintptr_t)(g_tw[slot].ai + TAI_MODE) : -9);
+        {  // (logchop round 4: setting +0x71c 0x2000 alone chops nothing) SAVAGEWIND_LINK_TRUNK_WATCHPT=1: the page watch on the
+            // first trunk's +0x71c, so the log names every game function reading / writing it (dispatch.c '[watch]' lines + chain)
+            extern void watch_retarget(uint64_t lo, uint64_t hi);
+            static int armed;
+            if (!armed && strstr(name, "_Trunk") && env_int("SAVAGEWIND_LINK_TRUNK_WATCHPT", 0))
+                armed = 1, watch_retarget(a + TRUNK_CHOP_OFF_W, a + TRUNK_CHOP_OFF_W + 4);
+        }
     }
     if (slot >= 0 && g_tw[slot].seen != g_vel_frame_id) {
         g_tw[slot].seen = g_vel_frame_id;
