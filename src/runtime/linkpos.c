@@ -4322,6 +4322,19 @@ static uint64_t tw_find_lj(uint64_t node, uint64_t a, int depth) {
     }
     return 0;
 }
+static uint64_t tw_find_vt(uint64_t node, uint64_t a, uint64_t vt, int depth) {  // (logchop) an AI node of `a` by vtable
+    if (!vt || !in_guest(node)) return 0;
+    if (*(const uint64_t *)(uintptr_t)node == vt && *(const uint64_t *)(uintptr_t)(node + AI_ACTOR) == a) return node;
+    if (depth >= 4) return 0;
+    uint32_t cnt = *(const uint32_t *)(uintptr_t)(node + TAI_NCHILD);
+    uint64_t kids = *(const uint64_t *)(uintptr_t)(node + TAI_CHILDREN);
+    if (!cnt || cnt > 64 || !in_guest(kids)) return 0;
+    for (uint32_t k = 0; k < cnt && k < TAI_KIDS_MAX; k++) {
+        uint64_t r = tw_find_vt(*(const uint64_t *)(uintptr_t)(kids + 8ull * k), a, vt, depth + 1);
+        if (r) return r;
+    }
+    return 0;
+}
 static void tw_diff(int slot, const char *what, uint8_t *old, const uint8_t *now, int n, int *budget) {
     for (int o = 0; o + 4 <= n && *budget > 0 && g_tw_lines < TW_TOTAL; o += 4) {
         int32_t a = *(const int32_t *)(old + o), b = *(const int32_t *)(now + o);
@@ -4471,13 +4484,16 @@ int linkpos_trunk_hit(uint64_t actor) {
             const float *m = (const float *)(uintptr_t)(actor + ACTOR_MTX);
             memset(g, 0, 0x40);
             // (test 7: request set, slot 135 flagged, still no wood: the copy went to our scratch, so the drop object had no
-            // point) f_700094e5a0's this = the trunk's LumberjackTree node (this+8 = the actor): the point = mMtx x the
-            // node's local offset at +0x274 (stored back there), the copy goes to the pointer at node +0xe8.
-            uint64_t lj = tw_find_lj(*(const uint64_t *)(uintptr_t)(actor + ACTOR_ROOT_AI), actor, 0);
+            // point) f_700094e5a0's this (this+8 = the actor): the point = mMtx x the node's local offset at +0x274 (stored
+            // back there), the copy goes to the pointer at node +0xe8. (test 8: NOT the LumberjackTree node - garbage there;
+            // f_700094e5a0 is slot 32 of vtable 0x7101c711a8 (Ghidra: DATA ref 7101c712a8) = the LumberjackTree node's
+            // child (trunkdbg d3, GUESS the ChanegToLog action).)
+            uint64_t lj = tw_find_vt(*(const uint64_t *)(uintptr_t)(actor + ACTOR_ROOT_AI), actor, SS->trunk_chop_vt, 0);
             uint64_t dst = lj ? *(const uint64_t *)(uintptr_t)(lj + 0xe8) : 0;
             if (lj) {
                 float *o = (float *)(uintptr_t)(lj + 0x274);
                 float ox = o[0], oy = o[1], oz = o[2];
+                if (!(fabsf(ox) < 50 && fabsf(oy) < 50 && fabsf(oz) < 50)) ox = oy = oz = 0;  // (not an offset: the trunk's origin)
                 o[0] = m[0] * ox + m[1] * oy + m[2] * oz + m[3];
                 o[1] = m[4] * ox + m[5] * oy + m[6] * oz + m[7];
                 o[2] = m[8] * ox + m[9] * oy + m[10] * oz + m[11];
