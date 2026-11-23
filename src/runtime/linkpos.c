@@ -4470,9 +4470,23 @@ int linkpos_trunk_hit(uint64_t actor) {
             float *g = (float *)(uintptr_t)sp;  // g[0..2] the point, g[4..6] the copy
             const float *m = (const float *)(uintptr_t)(actor + ACTOR_MTX);
             memset(g, 0, 0x40);
+            // (test 7: request set, slot 135 flagged, still no wood: the copy went to our scratch, so the drop object had no
+            // point) f_700094e5a0's this = the trunk's LumberjackTree node (this+8 = the actor): the point = mMtx x the
+            // node's local offset at +0x274 (stored back there), the copy goes to the pointer at node +0xe8.
+            uint64_t lj = tw_find_lj(*(const uint64_t *)(uintptr_t)(actor + ACTOR_ROOT_AI), actor, 0);
+            uint64_t dst = lj ? *(const uint64_t *)(uintptr_t)(lj + 0xe8) : 0;
+            if (lj) {
+                float *o = (float *)(uintptr_t)(lj + 0x274);
+                float ox = o[0], oy = o[1], oz = o[2];
+                o[0] = m[0] * ox + m[1] * oy + m[2] * oz + m[3];
+                o[1] = m[4] * ox + m[5] * oy + m[6] * oz + m[7];
+                o[2] = m[8] * ox + m[9] * oy + m[10] * oz + m[11];
+                LOG("[linkpos] trunk drop point: node %llx offset %.2f %.2f %.2f -> %.2f %.2f %.2f, destination +0xe8 %llx\n",
+                    (unsigned long long)lj, ox, oy, oz, o[0], o[1], o[2], (unsigned long long)dst);
+            }
             g[0] = m[3], g[1] = m[7], g[2] = m[11];
             c->sp = sp;
-            c->x[0] = actor, c->x[1] = sp + 0x10, c->x[2] = sp;
+            c->x[0] = actor, c->x[1] = in_guest(dst) ? dst : sp + 0x10, c->x[2] = lj ? lj + 0x274 : sp;
             guest_call(c, SS->drop_request);
             int dr = (int)(c->x[0] & 1);
             *c = save;
