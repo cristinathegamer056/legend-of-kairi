@@ -4286,9 +4286,100 @@ static void trunk_dbg(uint64_t a) {
     LOG("%s\n", b);
 }
 
+// (logchop watch, round 2) Link chops a felled log with a real weapon (Sora mode off): what changes on it? Up to TW_MAX
+// trunks within TW_DIST m of the player: each drawn frame the actor's first TW_ACT bytes and its LumberjackTree node's first
+// TW_AI bytes are compared with the last copy; every 4-byte word that changed and looks like a count / flag (old and new
+// both small ints, or one of them 0) is logged ('[trunkwatch] ... +off old -> new'), at most TW_LINES per actor per
+// frame and TW_TOTAL lines in all. A trunk not drawn for 30 frames = '[trunkwatch] gone'. SAVAGEWIND_LINK_TRUNK_WATCH=1.
+#define TW_MAX 4
+#define TW_DIST 8.0f
+#define TW_ACT 0x1000
+#define TW_AI 0x300
+#define TW_LINES 24
+#define TW_TOTAL 6000
+static struct { uint64_t actor, ai, seen; char name[48]; uint8_t act[TW_ACT], aib[TW_AI]; bool have; } g_tw[TW_MAX];
+static int g_tw_on = -1, g_tw_lines;
+static SRWLOCK g_tw_lock = SRWLOCK_INIT;
+static bool tw_small(int32_t v) { return v > -100000 && v < 100000; }
+static uint64_t tw_find_lj(uint64_t node, uint64_t a, int depth) {
+    if (!in_guest(node)) return 0;
+    if (*(const uint64_t *)(uintptr_t)node == TREE_AI_VT && *(const uint64_t *)(uintptr_t)(node + AI_ACTOR) == a) return node;
+    if (depth >= 3) return 0;
+    uint32_t cnt = *(const uint32_t *)(uintptr_t)(node + TAI_NCHILD);
+    uint64_t kids = *(const uint64_t *)(uintptr_t)(node + TAI_CHILDREN);
+    if (!cnt || cnt > 64 || !in_guest(kids)) return 0;
+    for (uint32_t k = 0; k < cnt && k < TAI_KIDS_MAX; k++) {
+        uint64_t r = tw_find_lj(*(const uint64_t *)(uintptr_t)(kids + 8ull * k), a, depth + 1);
+        if (r) return r;
+    }
+    return 0;
+}
+static void tw_diff(int slot, const char *what, uint8_t *old, const uint8_t *now, int n, int *budget) {
+    for (int o = 0; o + 4 <= n && *budget > 0 && g_tw_lines < TW_TOTAL; o += 4) {
+        int32_t a = *(const int32_t *)(old + o), b = *(const int32_t *)(now + o);
+        if (a == b) continue;
+        if (!(tw_small(a) && tw_small(b)) && a != 0 && b != 0) continue;  // (floats / pointers drifting: skip)
+        LOG("[trunkwatch] %s %llx %s +%#x %d -> %d (%#x -> %#x)\n", g_tw[slot].name, (unsigned long long)g_tw[slot].actor, what, o, a, b,
+            (unsigned)a, (unsigned)b);
+        (*budget)--, g_tw_lines++;
+    }
+    memcpy(old, now, n);
+}
+static void trunk_watch(uint64_t a) {
+    if (g_tw_on < 0) g_tw_on = env_int("SAVAGEWIND_LINK_TRUNK_WATCH", 0);
+    if (!g_tw_on || g_tw_lines >= TW_TOTAL) return;
+    const char *name = actor_name(a);
+    if (!name || !(strstr(name, "_Trunk") || !strncmp(name, "Obj_TreeTrunk", 13) || !strncmp(name, "Obj_TreeLog", 11) ||
+                   !strncmp(name, "Obj_FireWood", 12)))
+        return;
+    uint64_t pinfo = *(uint64_t *)(uintptr_t)PLAYER_INFO_PTR;
+    uint64_t pl = in_guest(pinfo) ? *(uint64_t *)(uintptr_t)(pinfo + PLAYER_ACTOR) : 0;
+    if (!in_guest(pl) || readable(a, TW_ACT) < TW_ACT) return;
+    const float *pm = (const float *)(uintptr_t)(pl + ACTOR_MTX), *m = (const float *)(uintptr_t)(a + ACTOR_MTX);
+    float dx = m[3] - pm[3], dy = m[7] - pm[7], dz = m[11] - pm[11];
+    if (dx * dx + dy * dy + dz * dz > TW_DIST * TW_DIST) return;
+    AcquireSRWLockExclusive(&g_tw_lock);
+    int slot = -1, freei = -1;
+    for (int i = 0; i < TW_MAX; i++) {
+        if (g_tw[i].actor == a) slot = i;
+        else if (g_tw[i].actor && g_vel_frame_id - g_tw[i].seen > 30) {
+            LOG("[trunkwatch] gone %s %llx\n", g_tw[i].name, (unsigned long long)g_tw[i].actor);
+            g_tw[i].actor = 0;
+        }
+        if (!g_tw[i].actor && freei < 0) freei = i;
+    }
+    if (slot < 0 && freei >= 0) {
+        slot = freei;
+        memset(&g_tw[slot], 0, sizeof g_tw[slot]);
+        g_tw[slot].actor = a;
+        snprintf(g_tw[slot].name, sizeof g_tw[slot].name, "%s", name);
+        g_tw[slot].ai = tw_find_lj(*(const uint64_t *)(uintptr_t)(a + ACTOR_ROOT_AI), a, 0);
+        uint64_t ap = *(const uint64_t *)(uintptr_t)(a + ACTOR_PARAM);
+        uint64_t pc = in_guest(ap) ? *(const uint64_t *)(uintptr_t)(ap + AP_PROFILE_CSTR) : 0;
+        LOG("[trunkwatch] new %s %llx profile %s at %.2f %.2f %.2f, LumberjackTree node %llx (mode %d)\n", name, (unsigned long long)a,
+            in_guest(pc) ? (const char *)(uintptr_t)pc : "?", m[3], m[7], m[11], (unsigned long long)g_tw[slot].ai,
+            g_tw[slot].ai ? *(const int8_t *)(uintptr_t)(g_tw[slot].ai + TAI_MODE) : -9);
+    }
+    if (slot >= 0 && g_tw[slot].seen != g_vel_frame_id) {
+        g_tw[slot].seen = g_vel_frame_id;
+        int budget = TW_LINES;
+        if (!g_tw[slot].have) {
+            memcpy(g_tw[slot].act, (const void *)(uintptr_t)a, TW_ACT);
+            if (g_tw[slot].ai && readable(g_tw[slot].ai, TW_AI) >= TW_AI) memcpy(g_tw[slot].aib, (const void *)(uintptr_t)g_tw[slot].ai, TW_AI);
+            g_tw[slot].have = true;
+        } else {
+            tw_diff(slot, "actor", g_tw[slot].act, (const uint8_t *)(uintptr_t)a, TW_ACT, &budget);
+            if (g_tw[slot].ai && readable(g_tw[slot].ai, TW_AI) >= TW_AI)
+                tw_diff(slot, "lumberjack", g_tw[slot].aib, (const uint8_t *)(uintptr_t)g_tw[slot].ai, TW_AI, &budget);
+        }
+    }
+    ReleaseSRWLockExclusive(&g_tw_lock);
+}
+
 static void tree_note(uint64_t a) {  // (opacity hook, any thread)
     world_env();
     trunk_dbg(a);  // (logchop diag)
+    trunk_watch(a);  // (logchop watch)
     if (!g_tree_on || !TREE_FELL || !g_servo_actor || a == g_servo_actor || link_dist(a) > TREE_DIST) return;
     uint64_t ai = tree_ai(a);
     if (!ai) { if (g_tree_dbg_n < TREE_DBG_MAX) tree_dbg(a); return; }
