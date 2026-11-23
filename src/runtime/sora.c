@@ -1249,8 +1249,9 @@ static int g_tree_on = 1, g_tree_k = 100, g_tree_fin = 200, g_st_on = 1, g_st_fi
 // mode 1); BotW turns it into Bundles of Wood on one real weapon hit. A Keyblade hit on it (points every TRUNK_STEP m along
 // its axis, each a cylinder g_trunk_r around the log) = linkpos_trunk_hit (the chop flag BotW's axe hit raises) + the
 // hit spark / sound, and no wall repel. SAVAGEWIND_SORA_LOG_CHOP=1 / live "set logchop 0/1", "set trunklen <cm>" (600),
-// "set trunkr <cm>" (80); default 0.
-static int g_logchop;
+// "set trunkr <cm>" (100), "set logchoplog 1"; default 1.
+static int g_logchop = 1;  // (tested in game: "The bundle of wood finally appears when hitting a log")
+static int g_logchop_log;  // (live "set logchoplog 1": the 'LOG miss' lines)
 static float g_trunk_len = 8.0f, g_trunk_r = 1.0f;
 #define TRUNK_STEP 0.75f
 #define TRUNK_SETTLE_MS 1500
@@ -1360,7 +1361,7 @@ static int world_blade(const HitWin *win, const float prev[6], const float now[6
                 float px = v[0] - along * t[i].axis[0], py = v[1] - along * t[i].axis[1], pz = v[2] - along * t[i].axis[2];
                 float off = sqrtf(px * px + py * py + pz * pz);
                 static uint64_t last_miss_ms;
-                if (off < 8 && GetTickCount64() - last_miss_ms > 250)
+                if (g_logchop_log && off < 8 && GetTickCount64() - last_miss_ms > 250)
                     last_miss_ms = GetTickCount64(),
                     LOG("[sora] LOG miss %s: origin %.2f %.2f %.2f axis %.2f %.2f %.2f, tip %.2f %.2f %.2f = %.2f along, %.2f off the axis\n",
                         t[i].name, t[i].pos[0], t[i].pos[1], t[i].pos[2], t[i].axis[0], t[i].axis[1], t[i].axis[2], now[3], now[4], now[5], along, off);
@@ -5500,6 +5501,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "brkltn")) g_brk_ltn = v != 0;
             else if (!strcmp(key, "logchop")) g_logchop = v != 0, LOG("[sora] logchop %d\n", g_logchop);  // (logchop)
             else if (!strcmp(key, "trunklen")) g_trunk_len = v / 100.0f;
+            else if (!strcmp(key, "logchoplog")) g_logchop_log = v != 0;
             else if (!strcmp(key, "trunkr")) g_trunk_r = v / 100.0f;
             else if (!strcmp(key, "tree")) g_tree_on = v != 0;        // (s122 world)
             else if (!strcmp(key, "treek")) g_tree_k = v;

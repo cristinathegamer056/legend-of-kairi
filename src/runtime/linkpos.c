@@ -2934,7 +2934,9 @@ static void die_note(Cpu *c, int kind) {
     const char *name = in_guest(a) ? actor_name(a) : NULL;
     static int log_all = -1;
     if (log_all < 0) log_all = env_int("SAVAGEWIND_LINK_DIE_LOG", 0);
-    if (name && (strstr(name, "_Trunk") || !strncmp(name, "Obj_TreeTrunk", 13))) {  // (logchop round 6: who kills a trunk, how)
+    static int trunk_log = -1;  // (the world section's SAVAGEWIND_LINK_WORLD_LOG, read here: that flag is declared further down)
+    if (trunk_log < 0) trunk_log = env_int("SAVAGEWIND_LINK_WORLD_LOG", 0);
+    if (trunk_log && name && (strstr(name, "_Trunk") || !strncmp(name, "Obj_TreeTrunk", 13))) {  // (logchop round 6: who kills a trunk)
         LOG("[linkpos] trunkdie slot 54 (%s) %llx %s x1 %#llx x2 %#llx x3 %#llx lr %llx\n", kind == 1 ? "enemy" : "base",
             (unsigned long long)a, name, (unsigned long long)c->x[1], (unsigned long long)c->x[2], (unsigned long long)c->x[3],
             (unsigned long long)c->x[30]);
@@ -4254,7 +4256,7 @@ static void tree_dbg(uint64_t a) {
 // node named LumberjackFallenTree + ChanegToLog, DamageParam LumberjackTree, DropTable Obj_FireWoodBundle) that tree_note
 // skips (profile not MapDynamic, or the LumberjackTree node not in mode 0). First TRUNK_DBG_MAX of them within TREE_DIST:
 // profile, life, damage manager vtable, the AI tree to depth 3 (vtables, actor at +8, child counts) and, for a
-// LumberjackTree node, its mode +0x240 / +0x24a..+0x24c. Always on (stops itself).
+// LumberjackTree node, its mode +0x240 / +0x24a..+0x24c. With SAVAGEWIND_LINK_WORLD_LOG=1 (stops itself).
 #define TRUNK_DBG_MAX 6
 static volatile LONG g_trunk_dbg_n;
 static uint64_t g_trunk_dbg_seen[TRUNK_DBG_MAX];
@@ -4275,7 +4277,7 @@ static int trunk_ai_dump(char *b, int len, int cap, uint64_t node, uint64_t a, i
     return len;
 }
 static void trunk_dbg(uint64_t a) {
-    if (g_trunk_dbg_n >= TRUNK_DBG_MAX || !g_servo_actor || link_dist(a) > TREE_DIST) return;
+    if (!g_world_log || g_trunk_dbg_n >= TRUNK_DBG_MAX || !g_servo_actor || link_dist(a) > TREE_DIST) return;
     const char *name = actor_name(a);
     if (!name || !(strstr(name, "_Trunk") || !strncmp(name, "Obj_TreeTrunk", 13) || !strncmp(name, "Obj_TreeLog", 11))) return;
     for (int i = 0; i < TRUNK_DBG_MAX; i++) if (g_trunk_dbg_seen[i] == a) return;
@@ -4299,7 +4301,6 @@ static void trunk_dbg(uint64_t a) {
 // both small ints, or one of them 0) is logged ('[trunkwatch] ... +off old -> new'), at most TW_LINES per actor per
 // frame and TW_TOTAL lines in all. A trunk not drawn for 30 frames = '[trunkwatch] gone'. SAVAGEWIND_LINK_TRUNK_WATCH=1.
 #define TW_MAX 4
-#define TRUNK_CHOP_OFF_W 0x71c
 #define TW_DIST 8.0f
 #define TW_ACT 0x1000
 #define TW_AI 0x300
@@ -4380,13 +4381,6 @@ static void trunk_watch(uint64_t a) {
         LOG("[trunkwatch] new %s %llx profile %s at %.2f %.2f %.2f, LumberjackTree node %llx (mode %d)\n", name, (unsigned long long)a,
             in_guest(pc) ? (const char *)(uintptr_t)pc : "?", m[3], m[7], m[11], (unsigned long long)g_tw[slot].ai,
             g_tw[slot].ai ? *(const int8_t *)(uintptr_t)(g_tw[slot].ai + TAI_MODE) : -9);
-        {  // (logchop round 4: setting +0x71c 0x2000 alone chops nothing) SAVAGEWIND_LINK_TRUNK_WATCHPT=1: the page watch on the
-            // first trunk's +0x71c, so the log names every game function reading / writing it (dispatch.c '[watch]' lines + chain)
-            extern void watch_retarget(uint64_t lo, uint64_t hi);
-            static int armed;
-            if (!armed && strstr(name, "_Trunk") && env_int("SAVAGEWIND_LINK_TRUNK_WATCHPT", 0))
-                armed = 1, watch_retarget(a + TRUNK_CHOP_OFF_W, a + TRUNK_CHOP_OFF_W + 4);
-        }
     }
     if (slot >= 0 && g_tw[slot].seen != g_vel_frame_id) {
         g_tw[slot].seen = g_vel_frame_id;
@@ -4405,12 +4399,9 @@ static void trunk_watch(uint64_t a) {
 }
 
 // (logchop) round 2 (trunkwatch, Link chopping a felled log with an axe, Sora mode off): BotW turns a trunk into
-// Obj_FireWoodBundle on ONE weapon hit (no life counts down); the only change on the trunk at that moment: actor +0x71c
-// bit 0x2000 set for one frame, then cleared, then the bundle spawns and the trunk is gone. GUESS: that bit = the hit
-// the trunk's AI acts on. linkpos_trunk_hit sets it (inside linkpos_frame) on a listed trunk.
+// Obj_FireWoodBundle on ONE weapon hit (no life counts down). (Its actor +0x71c bit 0x2000 flips then, but on the bundles
+// too: a generic flag, setting it chops nothing.) linkpos_trunk_hit does what the game's chop does (below).
 #define TRUNK_MAX 16
-#define TRUNK_CHOP_OFF 0x71c
-#define TRUNK_CHOP_BIT 0x2000u
 #define TRUNK_KILL_VSLOT 54  // (Actor::killWithDropsAndEffects, breakables section)
 typedef struct { LinkposTrunk t; uint64_t vt, seen, born_ms; } TrunkE;
 static TrunkE g_trunk[TRUNK_MAX];
