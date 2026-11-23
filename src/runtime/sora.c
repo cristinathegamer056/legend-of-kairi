@@ -3381,8 +3381,8 @@ static int g_hudclimb = 1;
 // rolling felled log, Link's state word went 0 for ~20 presents (a stagger on the moving log) = g_event, HUD hidden and back.
 // Real events last much longer, and talks open the message window (hidden at once on its own). So a state-0 stretch only
 // hides the HUD after g_hudgrace ms (message windows / freeze screens still at once). SAVAGEWIND_SORA_HUD_GRACE=<ms> / live
-// "set hudgrace <ms>"; default 0 (off).
-static int g_hudgrace;
+// "set hudgrace <ms>" (0 = off); default 400.
+static int g_hudgrace = 400;  // (tested in game: "The HUD stays up as it should now")
 #define HCLIMB_GAP_MS 600
 #define HCLIMB_MAX_MS 3000
 #define HSLIDE_SPEED 2.5f
