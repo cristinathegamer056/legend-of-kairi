@@ -1242,14 +1242,26 @@ static float g_hit_clk[2][16];
 // (BotW add() flags: 1 count, 2 launch angle, 4 no arrow refresh; 3), "set stasisr <cm>" / "set stasish <cm>" (100 / 200).
 #include "linkpos_world.h"
 static int g_tree_on = 1, g_tree_k = 100, g_tree_fin = 200, g_st_on = 1, g_st_fin = 1, g_st_fl = 3;
+// (logchop) user: "have Sora's keyblade cut knocked tree down into wood ... it just deflects like he's hitting a wall".
+// A felled tree is a trunk actor lying on the ground (exe linkpos_trunks: Obj_Tree*_Trunk with its LumberjackTree node in
+// mode 1); BotW turns it into Bundles of Wood on one real weapon hit. A Keyblade hit on it (points every TRUNK_STEP m along
+// its axis, each a cylinder g_trunk_r around the log) = linkpos_trunk_hit (the chop flag BotW's axe hit raises) + the
+// hit spark / sound, and no wall repel. SAVAGEWIND_SORA_LOG_CHOP=1 / live "set logchop 0/1", "set trunklen <cm>" (600),
+// "set trunkr <cm>" (80); default 0.
+static int g_logchop;
+static float g_trunk_len = 6.0f, g_trunk_r = 0.8f;
+#define TRUNK_STEP 0.75f
 static float g_tree_r = 0.9f, g_tree_h = 3.0f, g_st_r = 1.0f, g_st_h = 2.0f;
-static struct { LinkposTreesFn trees; LinkposTreeHitFn tree_hit; LinkposStasisObjsFn st_objs; LinkposStasisHitFn st_hit; int tried; } WD;
+static struct { LinkposTreesFn trees; LinkposTreeHitFn tree_hit; LinkposStasisObjsFn st_objs; LinkposStasisHitFn st_hit; int tried;
+                LinkposTrunksFn trunks; LinkposTrunkHitFn trunk_hit; } WD;
 static void world_fns(void) {
     if (WD.tried) return;
     WD.tried = 1;
     HMODULE exe = GetModuleHandleA(NULL);
     WD.trees = (LinkposTreesFn)(void *)GetProcAddress(exe, "linkpos_trees");
     WD.tree_hit = (LinkposTreeHitFn)(void *)GetProcAddress(exe, "linkpos_tree_hit");
+    WD.trunks = (LinkposTrunksFn)(void *)GetProcAddress(exe, "linkpos_trunks");  // (logchop)
+    WD.trunk_hit = (LinkposTrunkHitFn)(void *)GetProcAddress(exe, "linkpos_trunk_hit");
     WD.st_objs = (LinkposStasisObjsFn)(void *)GetProcAddress(exe, "linkpos_stasis_objs");
     WD.st_hit = (LinkposStasisHitFn)(void *)GetProcAddress(exe, "linkpos_stasis_hit");
     LOG("[sora] world: trees %s, Stasis %s\n", WD.trees && WD.tree_hit ? "on" : "not in this exe",
@@ -1317,6 +1329,29 @@ static int world_blade(const HitWin *win, const float prev[6], const float now[6
             wpn_wear(1);  // (s128 wpn: GUESS vanilla: a tree hit wears the weapon too, S128_HELPER_DMG.md Q5)
             sora_fx_event(kbfx_name(fin ? "hit_finish" : "hit"), now + 3, S.face, to_u);
             kbse_hit(win->atkp, 1.0f, now + 3);  // (s216)
+            S.hit = true, hits++;
+        }
+    }
+    if (g_logchop && WD.trunks && WD.trunk_hit) {  // (logchop) felled trunks: one hit = BotW's chop into wood
+        LinkposTrunk t[16];
+        int n = WD.trunks(t, 16);
+        for (int i = 0; i < n; i++) {
+            if (world_seen(t[i].actor)) continue;
+            bool hit = false;
+            for (float d = 0; d <= g_trunk_len && !hit; d += TRUNK_STEP) {
+                float c[3] = {t[i].pos[0] + t[i].axis[0] * d, t[i].pos[1] + t[i].axis[1] * d - g_trunk_r, t[i].pos[2] + t[i].axis[2] * d};
+                float dx = c[0] - feet[0], dz = c[2] - feet[2];
+                if (dx * dx + dz * dz > 36) continue;
+                hit = sweep_hits_rh(prev, now, c, g_trunk_r, 2 * g_trunk_r);
+            }
+            if (!hit) continue;
+            int r = WD.trunk_hit(t[i].actor);
+            LOG("[sora] LOG hit %llx %s by %s: %s\n", (unsigned long long)t[i].actor, t[i].name, fin ? "finisher" : "swing",
+                r > 0 ? "chop" : "refused");
+            if (r <= 0) continue;
+            wpn_wear(1);
+            sora_fx_event(kbfx_name(fin ? "hit_finish" : "hit"), now + 3, S.face, to_u);
+            kbse_hit(win->atkp, 1.0f, now + 3);
             S.hit = true, hits++;
         }
     }
@@ -5411,6 +5446,9 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "brk")) g_brk_on = v != 0;          // (s55 breakables)
             else if (!strcmp(key, "brkk")) g_brk_k = v / 100.0f;
             else if (!strcmp(key, "brkltn")) g_brk_ltn = v != 0;
+            else if (!strcmp(key, "logchop")) g_logchop = v != 0, LOG("[sora] logchop %d\n", g_logchop);  // (logchop)
+            else if (!strcmp(key, "trunklen")) g_trunk_len = v / 100.0f;
+            else if (!strcmp(key, "trunkr")) g_trunk_r = v / 100.0f;
             else if (!strcmp(key, "tree")) g_tree_on = v != 0;        // (s122 world)
             else if (!strcmp(key, "treek")) g_tree_k = v;
             else if (!strcmp(key, "treefin")) g_tree_fin = v;
@@ -6875,6 +6913,7 @@ static void sora_mod_frame_body(void) {
         int lv = (int)env_f("SAVAGEWIND_SORA_GLIDE_LV", (float)g_glide_lv);
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
+        g_logchop = env_f("SAVAGEWIND_SORA_LOG_CHOP", (float)g_logchop) != 0;  // (logchop)
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
         slog_open();

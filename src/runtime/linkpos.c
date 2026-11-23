@@ -4376,10 +4376,76 @@ static void trunk_watch(uint64_t a) {
     ReleaseSRWLockExclusive(&g_tw_lock);
 }
 
+// (logchop) round 2 (trunkwatch, Link chopping a felled log with an axe, Sora mode off): BotW turns a trunk into
+// Obj_FireWoodBundle on ONE weapon hit (no life counts down); the only change on the trunk at that moment: actor +0x71c
+// bit 0x2000 set for one frame, then cleared, then the bundle spawns and the trunk is gone. GUESS: that bit = the hit
+// the trunk's AI acts on. linkpos_trunk_hit sets it (inside linkpos_frame) on a listed trunk.
+#define TRUNK_MAX 16
+#define TRUNK_CHOP_OFF 0x71c
+#define TRUNK_CHOP_BIT 0x2000u
+typedef struct { LinkposTrunk t; uint64_t vt, seen; } TrunkE;
+static TrunkE g_trunk[TRUNK_MAX];
+static int g_ntrunk;
+static void trunk_note(uint64_t a) {
+    if (!g_servo_actor || link_dist(a) > TREE_DIST) return;
+    const char *name = actor_name(a);
+    if (!name || !(strstr(name, "_Trunk") || !strncmp(name, "Obj_TreeTrunk", 13) || !strncmp(name, "Obj_TreeLog", 11))) return;
+    uint64_t ai = tw_find_lj(*(const uint64_t *)(uintptr_t)(a + ACTOR_ROOT_AI), a, 0);
+    if (!ai || *(const int8_t *)(uintptr_t)(ai + TAI_MODE) != 1) return;
+    const float *m = (const float *)(uintptr_t)(a + ACTOR_MTX);
+    AcquireSRWLockExclusive(&g_world_lock);
+    int i;
+    for (i = 0; i < g_ntrunk && g_trunk[i].t.actor != a; i++) {}
+    if (i == g_ntrunk) {
+        int old = -1;  // (full: reuse the stalest)
+        if (g_ntrunk < TRUNK_MAX) i = g_ntrunk++;
+        else for (int k = 0; k < TRUNK_MAX; k++) if (old < 0 || g_trunk[k].seen < g_trunk[old].seen) old = k, i = k;
+        memset(&g_trunk[i], 0, sizeof g_trunk[i]);
+        g_trunk[i].t.actor = a, g_trunk[i].vt = *(const uint64_t *)(uintptr_t)a;
+        snprintf(g_trunk[i].t.name, sizeof g_trunk[i].t.name, "%s", name);
+        if (g_world_log) LOG("[linkpos] trunk: %llx %s at %.2f %.2f %.2f axis %.2f %.2f %.2f\n", (unsigned long long)a, name,
+                             m[3], m[7], m[11], m[1], m[5], m[9]);
+    }
+    TrunkE *e = &g_trunk[i];
+    e->seen = g_vel_frame_id;
+    e->t.pos[0] = m[3], e->t.pos[1] = m[7], e->t.pos[2] = m[11];
+    float l = sqrtf(m[1] * m[1] + m[5] * m[5] + m[9] * m[9]);
+    if (l > 1e-4f) e->t.axis[0] = m[1] / l, e->t.axis[1] = m[5] / l, e->t.axis[2] = m[9] / l;
+    ReleaseSRWLockExclusive(&g_world_lock);
+}
+int linkpos_trunks(LinkposTrunk *out, int max) {  // (drawn this or the last frame)
+    AcquireSRWLockExclusive(&g_world_lock);
+    int n = 0;
+    for (int i = 0; i < g_ntrunk && n < max; i++)
+        if (g_vel_frame_id - g_trunk[i].seen <= 1) out[n++] = g_trunk[i].t;
+    ReleaseSRWLockExclusive(&g_world_lock);
+    return n;
+}
+int linkpos_trunk_hit(uint64_t actor) {
+    if (!g_in_frame) return -1;
+    int ok = -1;
+    char name[48] = "";
+    AcquireSRWLockExclusive(&g_world_lock);
+    for (int i = 0; i < g_ntrunk; i++) {
+        TrunkE *e = &g_trunk[i];
+        if (e->t.actor != actor) continue;
+        if (g_vel_frame_id - e->seen <= 1 && *(const uint64_t *)(uintptr_t)actor == e->vt &&
+            *(const uint8_t *)(uintptr_t)(actor + BASEPROC_STATE) != 3) {
+            *(volatile uint32_t *)(uintptr_t)(actor + TRUNK_CHOP_OFF) |= TRUNK_CHOP_BIT;
+            memcpy(name, e->t.name, sizeof name), ok = 1;
+        }
+        break;
+    }
+    ReleaseSRWLockExclusive(&g_world_lock);
+    LOG("[linkpos] trunk hit %llx %s: %s\n", (unsigned long long)actor, name, ok > 0 ? "chop flag set (+0x71c | 0x2000)" : "refused");
+    return ok;
+}
+
 static void tree_note(uint64_t a) {  // (opacity hook, any thread)
     world_env();
     trunk_dbg(a);  // (logchop diag)
     trunk_watch(a);  // (logchop watch)
+    trunk_note(a);  // (logchop)
     if (!g_tree_on || !TREE_FELL || !g_servo_actor || a == g_servo_actor || link_dist(a) > TREE_DIST) return;
     uint64_t ai = tree_ai(a);
     if (!ai) { if (g_tree_dbg_n < TREE_DBG_MAX) tree_dbg(a); return; }
