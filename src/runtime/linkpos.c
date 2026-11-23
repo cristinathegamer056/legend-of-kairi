@@ -2934,6 +2934,13 @@ static void die_note(Cpu *c, int kind) {
     const char *name = in_guest(a) ? actor_name(a) : NULL;
     static int log_all = -1;
     if (log_all < 0) log_all = env_int("SAVAGEWIND_LINK_DIE_LOG", 0);
+    if (name && (strstr(name, "_Trunk") || !strncmp(name, "Obj_TreeTrunk", 13))) {  // (logchop round 6: who kills a trunk, how)
+        LOG("[linkpos] trunkdie slot 54 (%s) %llx %s x1 %#llx x2 %#llx x3 %#llx lr %llx\n", kind == 1 ? "enemy" : "base",
+            (unsigned long long)a, name, (unsigned long long)c->x[1], (unsigned long long)c->x[2], (unsigned long long)c->x[3],
+            (unsigned long long)c->x[30]);
+        extern void kernel_log_guest_chain(void);
+        kernel_log_guest_chain();
+    }
     if (!name || !enemy_name_ok(name)) {
         if (log_all) LOG("[linkpos] die slot 54 (%s) %llx %s reason %d: not an enemy name, not queued\n",
                          kind == 1 ? "enemy" : "base", (unsigned long long)a, name ? name : "?", (int32_t)c->x[1]);
