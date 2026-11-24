@@ -3946,6 +3946,11 @@ void sora_draw_world(const float *bones, float face, float scale);
 static bool g_dg_posed, g_dg_playing, g_dg_nolink;
 static void fik_draw_pose(int slot, float clock, float face, float scale);  // (footik: below, after the rig helpers)
 static void fik_draw_world(const float *bones, float face, float scale);
+// The exe's own draw calls, taken before the macros below: further down 'sora_draw_pose' becomes kt_draw_pose (an object-like
+// macro that even '(sora_draw_pose)' expands), and kt_draw_pose calls back into fik_draw_pose -> endless loop (game froze at
+// 100% CPU the first time foot IK passed a pose on: Drive Forms, Mickey).
+static void (*const fik_exe_draw_pose)(int, float, float, float) = sora_draw_pose;
+static void (*const fik_exe_draw_world)(const float *, float, float) = sora_draw_world;
 #define sora_draw_pose(...) (g_dg_posed = true, fik_draw_pose(__VA_ARGS__))
 #define sora_draw_world(...) (g_dg_posed = true, fik_draw_world(__VA_ARGS__))
 // (s261 kbthrow) base Sora's body has no pose for Limit's Raid slots 924 - 939: while kbthrow is on they come from the Limit draw
@@ -4402,19 +4407,19 @@ static void fik_apply(float *pose, int nb, float face, float scale) {
 static float g_fik_buf[POSE_BUF_BONES * 12];
 static void fik_draw_world(const float *bones, float face, float scale) {
     int nb = sora_draw_bone_count();
-    if (!g_fik_now || !g_footik || nb <= 0 || nb > POSE_BUF_BONES) { (sora_draw_world)(bones, face, scale); return; }
+    if (!g_fik_now || !g_footik || nb <= 0 || nb > POSE_BUF_BONES) { fik_exe_draw_world(bones, face, scale); return; }
     if (bones != g_fik_buf) memcpy(g_fik_buf, bones, (size_t)nb * 12 * sizeof(float));
     fik_apply(g_fik_buf, nb, face, scale);
-    (sora_draw_world)(g_fik_buf, face, scale);
+    fik_exe_draw_world(g_fik_buf, face, scale);
 }
 static void fik_draw_pose(int slot, float clock, float face, float scale) {
     int nb = sora_draw_bone_count();
     if (!g_fik_now || !g_footik || nb <= 0 || nb > POSE_BUF_BONES || !sora_draw_slot_pose(slot, clock, g_fik_buf)) {
-        (sora_draw_pose)(slot, clock, face, scale);
+        fik_exe_draw_pose(slot, clock, face, scale);
         return;
     }
     fik_apply(g_fik_buf, nb, face, scale);
-    (sora_draw_world)(g_fik_buf, face, scale);
+    fik_exe_draw_world(g_fik_buf, face, scale);
 }
 static void keyblade_hide_rig(float *bones, const RagRig *rg) {
     const float *palm = bones + rg->kb_parent * 12 + 9;
