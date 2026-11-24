@@ -14,12 +14,12 @@
 //     growth (fmlv byte 1,1,2,2,3,3,4) - 1 (as High Jump from Valor, Aerial Dodge from Master); Wisdom Form uses its own growth.
 // No stamina (KH2 has none; the roll before a hold already paid its own). Only base Sora and Wisdom Form (both bakes have slots
 // 814 / 818; other forms would fall back to base Sora's body).
-// Option: SAVAGEWIND_SORA_QUICK_RUN / live "set qrun 0/1" (default 0 while testing). Debug Menu row "Quick Run" = g_dbm_qrun
+// Option: SAVAGEWIND_SORA_QUICK_RUN=0 / live "set qrun 0" = off. On by default (user tested: "It works as it should"). Debug Menu row "Quick Run" = g_dbm_qrun
 // (sora.c, Off / LV1-3, base Sora at least that). Log lines "[qrun]".
 #pragma once
 enum { MOT_QRUN = 203, MOT_QRUN_END = 204 };
 #define QR_HOLD_FRAME 10.0f  // A180 frame trigger 0x22
-static int g_qrun = 0;
+static int g_qrun = 1;
 static const uint8_t QR_GROWTH[7] = {1, 1, 2, 2, 3, 3, 4};  // Wisdom fmlv growth byte per form level
 static const struct { float time, speed, brake, stop, inv; } QR_ROW[4] = {
     {14, 30, 0.94f, 0.93f, 0}, {18, 34, 0.95f, 0.93f, 8}, {40, 38, 0.96f, 0.93f, 12}, {40, 38, 0.98f, 0.93f, 16}};

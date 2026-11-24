@@ -6887,7 +6887,7 @@ static void sora_mod_frame_body(void) {
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
         g_kg_stick = env_f("SAVAGEWIND_SORA_KBTHROW_STICK", (float)g_kg_stick) != 0;
         g_qrun = env_f("SAVAGEWIND_SORA_QUICK_RUN", (float)g_qrun) != 0;  // (qrun)
-        if (g_qrun) LOG("[qrun] on: hold Square through the roll = Quick Run (Wisdom growth; Debug Menu row LV%d)\n", g_dbm_qrun);
+        if (!g_qrun) LOG("[qrun] off: Square = roll / guard only (no Quick Run)\n");
         if (g_kg_stick) LOG("[kbgyro] kbthrowstick on: the right stick aims the Keyblade throw too\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
