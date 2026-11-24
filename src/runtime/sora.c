@@ -5126,7 +5126,7 @@ static float g_wo_floor_cm = 50.0f;
 // knocked-back enemy downhill was held back and its root move cut, with the floor 18 cm under his feet ("pulled back").
 // A real drop (no floor in reach) is held as before. Only with the walk-off guard on (else nothing would keep him on the
 // slope). Off by default until tested in game: SAVAGEWIND_SORA_LEDGE_SLOPE=1 / live "set ledgeslope 1".
-static int g_ledge_slope = 0;
+static int g_ledge_slope = 1;
 static bool walkoff_floor(const float p[3], float *floor_u) {  // true: a floor (not a wall) within reach, its y (u)
     float a[3] = {p[0], p[1] + 0.3f, p[2]}, b[3] = {p[0], p[1] - g_wo_floor_cm * 0.01f * g_k, p[2]}, h[3] = {0}, n[3] = {0};
     if (!linkpos_raycast(a, b, h, n) || n[1] < g_ray_wall_ny) return false;
