@@ -84,6 +84,7 @@ void sora_draw_off(void);
 void sora_hud_set(float hp, float hp_max, float mp, float mp_max);    // (runtime/sora_hud.c)
 void sora_hud_off(void);
 int linkpos_enemies(uint64_t *actor, float (*pos)[3], int32_t *life, int max);
+int linkpos_enemy_name(uint64_t actor, char *buf, int n);
 void linkpos_damage_enemy(uint64_t actor, int n, int f54);
 void linkpos_damage_enemy_ex(uint64_t actor, int n, int f54, int f40);  // f40: 0 none, 1 fire, 2 ice, 3 electric
 int linkpos_link_heal(int q);  // quarter hearts (Cure)
@@ -487,6 +488,19 @@ static int g_bstance = 1;  // live "set bstance 0 / 1"
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
 static int g_bs_log = 1;
+// (bsnoanimal) user: Sora drew the Keyblade and took the battle stance for animals that never attack (deer, birds, boars):
+// linkpos's enemy list holds BotW's animals too. bs_tick skips every Animal_* except Animal_Wolf_* / Animal_Bear_* (they
+// attack Link), the same rule as the party's pnoanimal. Only the stance: lock-on, targeting and hits still take animals.
+// SAVAGEWIND_SORA_BS_NOANIMAL=0 / live "set bsnoanimal 0" = every listed actor, as before. Default 1.
+static int g_bs_noanimal = 1;
+static bool bs_animal_skip(uint64_t actor) {
+    char nm[64];
+    if (!g_bs_noanimal || !actor || !linkpos_enemy_name(actor, nm, sizeof nm) || strncmp(nm, "Animal_", 7)) return false;
+    if (!strncmp(nm + 7, "Wolf_", 5) || !strncmp(nm + 7, "Bear_", 5)) return false;
+    static uint64_t said;
+    if (said != actor && g_bs_log) said = actor, LOG("[sora] bsnoanimal: %s is no fight (no battle stance)\n", nm);
+    return true;
+}
 static const Mot *mot_st(int id) {
     static const int var[] = {0, 1, 3, 2};
     return g_bs_on && id >= MOT_IDLE && id <= MOT_RUN ? mot_var(id, var) : mot_of(id);
@@ -684,6 +698,7 @@ static void hits_load(void) {
     hits_file("D:/SoraBotW/data/forms/anti_hits_l.bin", g_ahslots[1], &g_nahslots[1]);
     LOG("[sora] Anti hit bakes: track 0 %d slots, track 1 %d slots\n", g_nahslots[0], g_nahslots[1]);
     g_dmg_base = env_f("SAVAGEWIND_SORA_DMG", g_dmg_base);
+    g_bs_noanimal = env_f("SAVAGEWIND_SORA_BS_NOANIMAL", (float)g_bs_noanimal) != 0;  // (bsnoanimal)
     g_mp_charge_time = env_f("SAVAGEWIND_SORA_MP_CHARGE", g_mp_charge_time);
     g_cure_pct = env_f("SAVAGEWIND_SORA_CURE_PCT", g_cure_pct);
     g_hit_r = env_f("SAVAGEWIND_SORA_HIT_R", g_hit_r), g_hit_h = env_f("SAVAGEWIND_SORA_HIT_H", g_hit_h);
@@ -5544,6 +5559,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "fray")) g_fray = v != 0;
             else if (!strcmp(key, "slope")) g_slope = v != 0;  // (s64 slope follow)
             else if (!strcmp(key, "lblend")) g_lblend = v != 0;  // (s64 idle / walk / run blend)
+            else if (!strcmp(key, "bsnoanimal")) g_bs_noanimal = v != 0, LOG("[sora] bsnoanimal %d\n", g_bs_noanimal);  // (no stance for animals)
             else if (!strcmp(key, "bstance")) g_bstance = v != 0;  // (s259 KH2's battle stance while a fight is on)
             else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 1500.0f;  // (an enemy within this = a fight)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
@@ -6225,7 +6241,9 @@ static void bs_tick(const Target *tg, int ntg, float kh) {
     if (g_bstance) {
         for (int i = 0; i < ntg; i++) {
             float d = sqrtf(tg[i].hd * tg[i].hd + tg[i].dy * tg[i].dy);
-            if (nd < 0 || d < nd) nd = d;
+            if (nd >= 0 && d >= nd) continue;
+            if (d < g_bs_cm && bs_animal_skip(tg[i].actor)) continue;  // (bsnoanimal; names only looked up in range)
+            nd = d;
         }
         hit = S.special == SP_DAMAGE;
         fight = hit || (nd >= 0 && nd < g_bs_cm);
