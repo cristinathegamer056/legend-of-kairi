@@ -62,6 +62,12 @@
     /* at 0x7100d12600 (pointer var 0x7101cab4e0, setter 0x7100a2085c, unique 7-word match of the 1.9.0 prologue) */           \
     X(rune_set_req,            0x7000a2085cull, 0x7000b33d6cull)    \
     X(rune_sel_ptr,            0x7001cab4e0ull, 0x7001e0cd40ull)    \
+    /* (eqtabs) BotW's quick weapon selector equips a pouch item (1.9.0 0x7100e25af4) with two calls: ui::PauseMenuDataMgr */ \
+    /* equip(mgr, item) 0x7100d9a4e0 (clears +0x24 on the items of the same type, sets the item's, updates the lists) and */  \
+    /* the player request 0x7100e88fb0(item) (type 0: name +0x28, value +0x20, modifier -> 0x7100b24cdc). 1.9.0 VERIFIED */  \
+    /* static (headless Ghidra, D:/KairiWork/ghidra/eq4.c / eq5.c); 1.8.2 not looked up = 0 (off) */                          \
+    X(pouch_equip,             0x0ull,          0x7000d9a4e0ull)    \
+    X(player_equip_req,        0x0ull,          0x7000e88fb0ull)    \
     /* s100 slatehip2: the Actor calc's bl of gsys::Model::calcWorld(model), right after the actor's mMtx was copied to */ \
     /* model+0x58..0x87. slate_model_call = that bl (inside the Actor calc), slate_model_target = the callee (ldr x1,[x0,#0xd8]; b). */ \
     /* 1.8.2 by hand, 1.9.0 by an instruction-word pattern of the 12 words around the bl (one hit); both capstone-checked */ \

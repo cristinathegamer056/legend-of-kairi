@@ -119,6 +119,65 @@ static bool wpn_equipped(WpnCur *out) {
 
 static void wpn_menu_pick(int use) { g_wpn_use = use != 0; }
 
+// ------------------------------------------------------------------ (eqtabs) the KH2 Equipment picker's BotW Weapons tab
+// wpn_pouch_list: the weapon-pouch items Sora can swing (pouch order: type 0, a WPN_TAB row that is not "keep the Keyblade",
+// life > 0), read like wpn_read_list. wpn_equip_ask: the menu picked one; the request waits for the first unpaused frame
+// (wpn_tick), then the exe export linkpos_weapon_equip(item, actor) equips it the way BotW's quick selector does.
+typedef struct { uint64_t item; const WpnDef *def; int life, atk_up; bool eq; } WpnPouch;
+static bool wpn_kb_only(const WpnDef *d);
+static int wpn_pouch_list(WpnPouch *out, int max) {
+    uint64_t got = sora_sites()->pmdm_got;
+    if (!got || !rd_ok(got, 8)) return 0;
+    uint64_t pp = *(const uint64_t *)(uintptr_t)got;
+    if (!rd_ok(pp, 8)) return 0;
+    uint64_t mgr = *(const uint64_t *)(uintptr_t)pp;
+    if (!rd_ok(mgr + 0x68, 0x18) || *(const int32_t *)(uintptr_t)(mgr + 0x7c) != 8) return 0;
+    uint64_t head = mgr + 0x68, nd = *(const uint64_t *)(uintptr_t)(head + 8);
+    int n = 0;
+    for (int k = 0; k < 500 && nd && nd != head && n < max; k++) {
+        uint64_t it = nd - 8;
+        if (!rd_ok(it, 0x90)) break;
+        nd = *(const uint64_t *)(uintptr_t)(nd + 8);
+        if (*(const int32_t *)(uintptr_t)(it + 0x18) != 0) continue;
+        uint64_t sp = *(const uint64_t *)(uintptr_t)(it + 0x30);
+        char actor[48];
+        int i;
+        if (!rd_ok(sp, 1)) continue;
+        for (i = 0; i < (int)sizeof actor - 1 && rd_ok(sp + (uint64_t)i, 1) && ((const char *)(uintptr_t)sp)[i]; i++) actor[i] = ((const char *)(uintptr_t)sp)[i];
+        actor[i] = 0;
+        const WpnDef *d = i ? wpn_find(actor) : NULL;
+        int life = *(const int32_t *)(uintptr_t)(it + 0x20);
+        if (!d || wpn_kb_only(d) || life <= 0) continue;
+        out[n].item = it, out[n].def = d, out[n].life = life / 100;
+        out[n].atk_up = (*(const uint32_t *)(uintptr_t)(it + 0x88) & 1) ? (int)*(const uint32_t *)(uintptr_t)(it + 0x80) : 0;
+        out[n].eq = *(const uint8_t *)(uintptr_t)(it + 0x24) != 0;
+        n++;
+    }
+    return n;
+}
+static struct { uint64_t item; char actor[48]; int tries; } g_wpn_ask;
+static void wpn_equip_ask(uint64_t item, const char *actor) {
+    g_wpn_ask.item = item, g_wpn_ask.tries = 0;
+    snprintf(g_wpn_ask.actor, sizeof g_wpn_ask.actor, "%s", actor);
+    LOG("[wpn] eqtabs: %s picked in the KH2 menu: BotW equips it when the game runs again\n", actor);
+}
+typedef int (*WpnEquipFn)(uint64_t, const char *);
+static void wpn_equip_tick(void) {  // (wpn_tick: playing, not paused)
+    static WpnEquipFn fn;
+    static int tried;
+    if (!g_wpn_ask.item || *(volatile uint32_t *)(uintptr_t)PAUSE_STATE) return;
+    if (!tried) {
+        tried = 1, fn = (WpnEquipFn)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_weapon_equip");
+        LOG("[wpn] exe export linkpos_weapon_equip: %s\n", fn ? "found" : "NOT in this exe (NEEDS EXE RELINK): the BotW tab cannot equip");
+    }
+    int r = fn ? fn(g_wpn_ask.item, g_wpn_ask.actor) : -9;
+    if (r == -1 && ++g_wpn_ask.tries < 30) return;  // (not inside the exe's frame yet: try again)
+    LOG("[wpn] eqtabs: equip %s -> %s\n", g_wpn_ask.actor, r == 1 ? "done (BotW's own equip calls)" : r == -2 ? "no PauseMenuDataMgr" : r == -3 ? "the item is not in the pouch any more"
+                                                          : r == -9 ? "no exe export" : "refused by the exe");
+    if (r == 1) g_wpn_use = 1;
+    g_wpn_ask.item = 0;
+}
+
 // exe export (s128 linkpos.c): int linkpos_weapon_info(char *actor, int cap, int *life_x100, int *atk_up)
 // = 1 when Link's sword slot (PauseMenuDataMgr mEquippedWeapons[0]) holds a weapon; older exe = no symbol = never.
 typedef int (*WpnInfoFn)(char *, int, int *, int *);
@@ -221,6 +280,7 @@ static void wpn_tick(bool drawn) {
         g_wpn_lead_fn = (WpnWearFn)(void *)GetProcAddress(exe, "linkpos_weapon_lead");  // (s129; NULL = an older exe)
         g_wpn_hand2_fn = (WpnHandFn)(void *)GetProcAddress(exe, "linkpos_weapon_hand2");  // (s131; NULL = an older exe: arms at scale 1)
     }
+    wpn_equip_tick();  // (eqtabs: a BotW weapon picked in the KH2 menu)
     WpnCur c = {0};
     bool on = drawn && wpn_active(&c);
     static const WpnDef *last;

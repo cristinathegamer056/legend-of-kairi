@@ -3950,6 +3950,54 @@ int linkpos_pouch_remove(const char *name) {
     return 1;
 }
 
+// (eqtabs) the KH2 Equipment picker's BotW Weapons tab: equip one weapon-pouch item the way BotW's own quick weapon selector
+// does (1.9.0 0x7100e25af4): PauseMenuDataMgr equip(mgr, item) (pouch_equip), then the player request(item)
+// (player_equip_req). item = a PouchItem* the DLL read from the pouch list; it must still be in that list with type 0 (a
+// melee weapon) and the same actor name (+0x30 SafeString cstr). Only inside linkpos_frame (guest calls).
+// 1 = called, -1 = refused (no site for this version / not now), -2 = no PauseMenuDataMgr yet, -3 = item gone / changed.
+static uint64_t g_nwpn_equip, g_nwpn_equip_refused;
+int linkpos_weapon_equip(uint64_t item, const char *name) {
+    Cpu *c = g_in_frame ? kernel_current_cpu() : NULL;
+    uint64_t f_eq = SS->pouch_equip, f_req = SS->player_equip_req, got = PMDM_GOT;
+    uint64_t pp = in_guest(got) ? *(const uint64_t *)(uintptr_t)got : 0;
+    uint64_t mgr = in_guest(pp) ? *(const uint64_t *)(uintptr_t)pp : 0;
+    if (!c || !f_eq || !f_req || !name || !dispatch_lookup(f_eq) || !dispatch_lookup(f_req)) {
+        if (!g_nwpn_equip_refused++)
+            LOG("[linkpos] weapon equip refused (%s)\n", !f_eq || !f_req ? "no site for this game version" : !c ? (g_in_frame ? "no guest cpu" : "outside linkpos_frame")
+                                                       : !name ? "no name" : "no function");
+        return -1;
+    }
+    if (!in_guest(mgr)) return -2;
+    // the item must still be in the pouch list (mgr +0x68 sead::OffsetList, node offset +0x7c = 8: node = item + 8)
+    if (readable(mgr + 0x68, 0x18) != 0x18 || *(const int32_t *)(uintptr_t)(mgr + 0x7c) != 8) return -3;
+    uint64_t head = mgr + 0x68, n = *(const uint64_t *)(uintptr_t)(head + 8);
+    bool found = false;
+    for (int k = 0; k < 500 && in_guest(n) && n != head; k++) {
+        if (n - 8 == item) { found = true; break; }
+        n = *(const uint64_t *)(uintptr_t)(n + 8);
+    }
+    char nm[64];
+    if (!found || readable(item, 0x90) != 0x90 || *(const int32_t *)(uintptr_t)(item + 0x18) != 0 || !wpn_item_name(item, nm, sizeof nm) || strcmp(nm, name)) {
+        LOG("[linkpos] weapon equip: %s item %llx not in the pouch any more (found %d)\n", name, (unsigned long long)item, (int)found);
+        return -3;
+    }
+    Cpu save = *c;
+    c->sp = (c->sp - 0x100) & ~0xfull;  // (scratch below the live guest sp, as linkpos_pouch_remove)
+    c->x[0] = mgr, c->x[1] = item;
+    guest_call(c, f_eq);
+    *c = save;
+    c->sp = (c->sp - 0x100) & ~0xfull;
+    c->x[0] = item;
+    guest_call(c, f_req);
+    uint64_t r = c->x[0];
+    *c = save;
+    g_nwpn_equip++;
+    LOG("[linkpos] weapon equip #%llu: %s (item %llx, life %d, equipped flag %d, player request %s)\n", (unsigned long long)g_nwpn_equip, name,
+        (unsigned long long)item, *(const int32_t *)(uintptr_t)(item + 0x20), *(const uint8_t *)(uintptr_t)(item + 0x24),
+        (r & 1) ? "sent" : "REFUSED (no player equipment object)");
+    return 1;
+}
+
 // s99 b14-runes: choose the Sheikah Slate rune like BotW's own wheel does (recon/S99_HELPER_RUNES.md). The wheel screen's
 // confirm calls f(obj = [rune_sel_ptr], id) (1.9.0 0x7100b33d6c); the object's per-frame update then sees +0x240 != +0x248,
 // refreshes the HUD icon, sets +0x248 and writes the gdt s32 PlayerEquipItemType. ids: 0 round bomb, 1 cube bomb, 2 Magnesis,

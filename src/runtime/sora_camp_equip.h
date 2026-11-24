@@ -39,8 +39,24 @@ static int cp_eq_pos(const int *l, int n, int i) { for (int k = 0; k < n; k++) i
 #define CP_EQ_WPN 1000
 static int cp_eq_wpn_row(const CpVals *v) { return g_eqlook && v->wpn_on && v->wpn_use; }  // (only the vanilla look: the old page has no panel / literal rows)
 static int cp_eq_has_wpn(const CpVals *v, int slot) { return g_eqlook && v->wpn_on && slot == KB_MAIN; }
-static int cp_eq_plist(const CpVals *v, const int kb[KB_SLOTS], int slot, int out[KB_N + 1]) {
+// (eqtabs) user: "2 different tabs. One for the keyblades, and one for botw weapons" (L1 / R1 switch them; melee only; picking
+// one equips it in BotW too). With the tabs (g_eqtabs, base Sora's Weapons slot, vanilla look) the picker lists ONE tab:
+// g_eq_tab 0 = the owned Keyblades (no s128 top entry), 1 = the pouch weapons Sora can swing (CP_EQ_BW + v->bw index).
+// g_eq_tab is set when the picker opens (the kind in the hand) and by L / R. Live "set eqtabs 0" = the s128 list.
+#define CP_EQ_BW 2000
+#define CP_EQ_LMAX (KB_N + 1 + CP_BW_MAX)
+static int g_eq_tab;  // (g_eqtabs: sora_kb.h)
+static int cp_eq_has_bw(const CpVals *v, int slot) { return g_eqlook && g_eqtabs && v->bw_base && slot == KB_MAIN; }
+static int cp_eq_bw_cur(const CpVals *v) {  // the equipped pouch weapon's entry (else the first)
+    for (int k = 0; k < v->bw_n; k++) if (v->bw_eq[k]) return CP_EQ_BW + k;
+    return CP_EQ_BW;
+}
+static int cp_eq_plist(const CpVals *v, const int kb[KB_SLOTS], int slot, int out[CP_EQ_LMAX]) {
     int n = 0;
+    if (cp_eq_has_bw(v, slot)) {
+        if (g_eq_tab) { for (int k = 0; k < v->bw_n && k < CP_BW_MAX; k++) out[n++] = CP_EQ_BW + k; return n; }
+        return cp_eq_list(v, kb, out);
+    }
     if (cp_eq_has_wpn(v, slot)) out[n++] = CP_EQ_WPN;
     return n + cp_eq_list(v, kb, out + n);
 }
@@ -209,23 +225,26 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
     } else {  // ---- state 5 / 6: the picker (vanilla swaps the window and the panel ags) ----
         cp_eq_title3_(title, cp_eq_row_key(slot));
         nt = 3;
-        int l[KB_N + 1], n = cp_eq_plist(v, kb, slot, l), sub = cp_eq_is_sub(slot);
+        if (cp_eq_has_bw(v, slot)) title[2].msg_key = 0, snprintf(title[2].text, sizeof title[2].text, "%s", g_eq_tab ? "BotW Weapons" : "Keyblades");  // (eqtabs)
+        int l[CP_EQ_LMAX], n = cp_eq_plist(v, kb, slot, l), sub = cp_eq_is_sub(slot);
         for (int e = top < 0 ? 0 : top; e < n && np < CP_EQ_VIS; e++, np++) {
             int i = l[e], m = 0;
-            if (i == CP_EQ_WPN) prk[np][m++] = cp_eq_txt_(123, v->wpn_name, 0, CS_BOTTOM_LEFT, 0, 0);  // (s128 wpnmenu) the top entry
+            if (i >= CP_EQ_BW) prk[np][m++] = cp_eq_txt_(123, v->bw_name[i - CP_EQ_BW], 0, CS_BOTTOM_LEFT, 0, 0);  // (eqtabs)
+            else if (i == CP_EQ_WPN) prk[np][m++] = cp_eq_txt_(123, v->wpn_name, 0, CS_BOTTOM_LEFT, 0, 0);  // (s128 wpnmenu) the top entry
             else prk[np][m++] = (CsDesc){ CP_SEQ_(-1, 123, -1), .msg_key = kb_text_key(i), .anchor = CS_BOTTOM_LEFT };
             if (i == pick) { prk[np][m++] = sel_kids[0]; prk[np][m++] = sel_kids[1]; }
             pkids[np * 2] = (CsDesc){ .y = 26.0f * np, CP_SEQ_(-1, sub ? 221 : 211, -1), .nkids = (uint8_t)m, .kids = prk[np] };
-            if (i == CP_EQ_WPN) {  // 2nd column = the Attack number (GUESS; a Keyblade shows its ability)
+            if (i >= CP_EQ_WPN) {  // 2nd column = the Attack number (GUESS; a Keyblade shows its ability)
                 char at[12];
-                snprintf(at, sizeof at, "%d", v->wpn_atk);
+                snprintf(at, sizeof at, "%d", i >= CP_EQ_BW ? v->bw_atk[i - CP_EQ_BW] : v->wpn_atk);
                 pcol[np][0] = cp_eq_txt_(124, at, 0, CS_BOTTOM_CENTER, 44.5f, 0);
             } else pcol[np][0] = (CsDesc){ .x = 44.5f, CP_SEQ_(-1, 124, -1), .msg_key = cp_eq_ab_key(KB_TAB[i].ability), .anchor = CS_BOTTOM_CENTER };
             pkids[np * 2 + 1] = (CsDesc){ .y = 26.0f * np, CP_SEQ_(-1, sub ? 222 : 212, -1), .nkids = 1, .kids = pcol[np] };
         }
         win[0] = sub ? (CsDesc){ CP_SEQ_(217, 218, 219), .nkids = (uint8_t)(np * 2), .kids = pkids }
                      : (CsDesc){ CP_SEQ_(207, 208, 209), .nkids = (uint8_t)(np * 2), .kids = pkids };
-        if (pick == CP_EQ_WPN) snprintf(hlit, sizeof hlit, "Use Link's BotW weapon.");  // (s128 review: <= 23 chars)  // (s128 wpnmenu)
+        if (pick >= CP_EQ_BW) snprintf(hlit, sizeof hlit, "Durability %d/%d", v->bw_life[pick - CP_EQ_BW], v->bw_life_max[pick - CP_EQ_BW]);  // (eqtabs)
+        else if (pick == CP_EQ_WPN) snprintf(hlit, sizeof hlit, "Use Link's BotW weapon.");  // (s128 review: <= 23 chars)  // (s128 wpnmenu)
         else hk = kb_text_key(pick) + 1;
     }
     help[0] = (CsDesc){ .x = (float)g_eqhx, .y = (float)g_eqhy, CP_SEQ_(-1, 124, -1), .flags = CS_A_TEXT_IGNORE_COLOR, .anchor = CS_BOTTOM_LEFT, .msg_key = hk };  // (s120b: was 150 352)
@@ -250,10 +269,10 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
         pk[npk++] = cp_eq_txt_(124, NULL, cp_eq_ab_key(kb_ability(cur_id)), CS_BOTTOM_CENTER, -100 + g_eq2x, 66 + g_eq2y);
         pnl[0] = (CsDesc){ CP_SEQ_(287, 288, 289), .nkids = (uint8_t)npk, .kids = pk };
     } else {
-        int sub = cp_eq_is_sub(slot), isw = pick == CP_EQ_WPN, nw = isw ? 0 : KB_TAB[pick].id;
+        int sub = cp_eq_is_sub(slot), isw = pick >= CP_EQ_WPN, nw = isw ? 0 : KB_TAB[pick].id;
         int curw = slot == KB_MAIN && wrow;  // (s128 wpnmenu) the weapon is in the hand now / is picked
         int cur_s = curw ? v->wpn_atk : kb_str(cur_id), cur_m = curw ? 0 : kb_mag(cur_id);
-        int nw_s = isw ? v->wpn_atk : kb_str(nw), nw_m = isw ? 0 : kb_mag(nw);
+        int nw_s = pick >= CP_EQ_BW ? v->bw_atk[pick - CP_EQ_BW] : isw ? v->wpn_atk : kb_str(nw), nw_m = isw ? 0 : kb_mag(nw);  // (eqtabs)
         int tot_s = slot == KB_MAIN ? nw_s : cp_eq_main_str(v, main_id), tot_m = slot == KB_MAIN ? nw_m : cp_eq_main_mag(v, main_id);
         cp_eq_cmp_lines_(&pk[0], pl3, 67, cur_s, nw_s, isw && slot == KB_MAIN ? nw_s : cp_eq_total_str(v, tot_s), 26);  // (s128 review: the weapon = [ Attack ])
         cp_eq_cmp_lines_(&pk[2], pl4, 68, cur_m, nw_m, cp_eq_total_mag(v, tot_m), 64);
@@ -275,7 +294,7 @@ static int cp_build_equip_list(CsTree *t, const int kb[KB_SLOTS], const CpVals *
 static int cp_eq_pic(const CampPage *p, int *kb_idx, float rect[4]) {
     *kb_idx = -1;
     if (!g_eqlook || p->page != 4 || p->sub == 0 || (p->sub == 1 && p->eq_slot >= CP_EQ_ARM)) return 0;
-    if (p->sub == 2 && p->eq_pick == CP_EQ_WPN) return 0;  // (s128 wpnmenu) no picture for the BotW weapon (GUESS: the atlas has Keyblades only)
+    if (p->sub == 2 && p->eq_pick >= CP_EQ_WPN) return 0;  // (eqtabs: + the BotW Weapons tab)  // (s128 wpnmenu) no picture for the BotW weapon (GUESS: the atlas has Keyblades only)
     if (p->sub == 1 && p->eq_slot == KB_MAIN && p->eq_wpnrow) return 0;
     if (p->sub == 2) { *kb_idx = p->eq_pick; rect[0] = 382, rect[1] = 80, rect[2] = 115, rect[3] = 115; return 1; }
     int i = kb_index(kb_slot_id(p->kb, p->eq_slot));

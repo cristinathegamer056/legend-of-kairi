@@ -107,6 +107,19 @@ static void camp_vals(CpVals *v) {
             snprintf(v->wpn_name, sizeof v->wpn_name, "%s", wc.def->name);
             v->wpn_atk = wc.def->power + wc.atk_up, v->wpn_life = wc.life, v->wpn_life_max = wc.life_max;
         }
+        v->bw_base = base && g_wpn_on, v->bw_n = 0;  // (eqtabs) the BotW Weapons tab: the pouch weapons he can swing
+        if (v->bw_base && g_eqtabs) {
+            WpnPouch wp[CP_BW_MAX];
+            int n = wpn_pouch_list(wp, CP_BW_MAX);
+            for (int k = 0; k < n; k++) {
+                v->bw_item[k] = wp[k].item, v->bw_atk[k] = wp[k].def->power + wp[k].atk_up;
+                v->bw_life[k] = wp[k].life, v->bw_life_max[k] = wp[k].def->life, v->bw_eq[k] = wp[k].eq;
+                snprintf(v->bw_name[k], sizeof v->bw_name[k], "%s", wp[k].def->name);
+                snprintf(v->bw_actor[k], sizeof v->bw_actor[k], "%s", wp[k].def->actor);
+            }
+            v->bw_n = n;
+            LOG("[sora] camp: BotW Weapons tab: %d pouch weapon%s Sora can swing\n", n, n == 1 ? "" : "s");
+        }
     }
     LOG("[sora] camp: armor rows %d%s%s%s%s%s%s\n", v->arm_n, v->arm_n > 0 ? " " : "", v->arm_n > 0 ? v->arm_name[0] : "",
         v->arm_n > 1 ? ", " : "", v->arm_n > 1 ? v->arm_name[1] : "", v->arm_n > 2 ? ", " : "", v->arm_n > 2 ? v->arm_name[2] : "");
@@ -238,6 +251,15 @@ static bool camp_frame(uint64_t present) {
     if (out.wpn_set) {  // (s128 wpnmenu) the Equipment picker chose the BotW weapon (1) or a Keyblade in the Weapons slot (2)
         wpn_menu_pick(out.wpn_set == 1);
         CAMP.v.wpn_use = g_wpn_use != 0;
+        if (out.bw_pick > 0 && out.bw_pick <= CAMP.v.bw_n) {  // (eqtabs) a pouch weapon: BotW equips it once the game runs again
+            int k = out.bw_pick - 1;
+            CpVals *cv = &CAMP.v;
+            wpn_equip_ask(cv->bw_item[k], cv->bw_actor[k]);
+            for (int j = 0; j < cv->bw_n; j++) cv->bw_eq[j] = j == k;
+            cv->wpn_on = 1;
+            snprintf(cv->wpn_name, sizeof cv->wpn_name, "%s", cv->bw_name[k]);
+            cv->wpn_atk = cv->bw_atk[k], cv->wpn_life = cv->bw_life[k], cv->wpn_life_max = cv->bw_life_max[k];
+        }
         LOG("[sora] camp: Weapons slot -> %s\n", g_wpn_use ? "BotW weapon" : "Keyblade");
         sl_persist_save();
     }
