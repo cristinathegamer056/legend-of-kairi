@@ -48,6 +48,77 @@ static void cp_db_value_(char *b, int n, const CampPage *p, int row) {
     else snprintf(b, (size_t)n, "%s", v ? "On" : "Off");
 }
 
+// (dbgtext) user: "I want to be able to type what the description is going to say" for the Debug page's rows. The help line
+// at the bottom reads <SORA_ROOT>/debug_menu_text.txt when it has a line for the row (the built-in CP_DB_HELP otherwise):
+//   Row Name = description        (the name as the row shows it, any case; up to 63 characters; \n = a second line)
+// '#' lines and unknown names are skipped. The file is read again when it changes (checked at each rebuild of the page, i.e. on
+// a cursor move), so an edit shows without a restart. A missing file is written once with every row's built-in text as a template.
+#define CP_DB_TEXT_FILE "D:/SoraBotW/debug_menu_text.txt"
+static char g_db_text[CP_DB_ROWS][64];
+static bool cp_db_same_(const char *a, const char *b) {  // (case-insensitive ASCII; no _stricmp on the Deck build)
+    for (; *a && *b; a++, b++) if ((*a | 0x20) != (*b | 0x20) && *a != *b) return false;
+    return !*a && !*b;
+}
+static void cp_db_text_template_(const char *path) {
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fputs("# Legend of Kairi - Debug Menu descriptions (the text at the bottom of the Debug page).\n"
+          "# One line per row:  Row Name = description\n"
+          "# Up to 63 characters. Type \\n for a second line. Save the file, then move the cursor in the Debug page to see it.\n"
+          "# Delete a line (or leave nothing after =) to get the built-in text back.\n\n", f);
+    for (int i = 0; i < CP_DB_ROWS; i++) fprintf(f, "%s = %s\n", CP_DB_NAME[CP_DB_ORD[i]], CP_DB_HELP[CP_DB_ORD[i]]);
+    fclose(f);
+    LOG("[dbgmenu] dbgtext: wrote the template %s\n", path);
+}
+static void cp_db_text_load_(void) {
+    static long long last = -1;
+    const char *path = sora_path(CP_DB_TEXT_FILE);
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        if (last == -1) cp_db_text_template_(path);
+        if (stat(path, &st) != 0) { if (last != -2) memset(g_db_text, 0, sizeof g_db_text), last = -2; return; }
+    }
+    long long stamp = (long long)st.st_mtime * 1000003LL + (long long)st.st_size;
+    if (stamp == last) return;
+    last = stamp;
+    memset(g_db_text, 0, sizeof g_db_text);
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char line[512];
+    int n = 0, bad = 0;
+    while (fgets(line, sizeof line, f)) {
+        char *p = line;
+        if ((unsigned char)p[0] == 0xEF && (unsigned char)p[1] == 0xBB && (unsigned char)p[2] == 0xBF) p += 3;  // (a UTF-8 BOM from Notepad)
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || *p == '\r' || *p == '\n' || !*p) continue;
+        char *eq = strchr(p, '=');
+        if (!eq) { bad++; continue; }
+        char *ne = eq;
+        while (ne > p && (ne[-1] == ' ' || ne[-1] == '\t')) ne--;
+        *ne = 0;
+        char *v = eq + 1;
+        while (*v == ' ' || *v == '\t') v++;
+        size_t vl = strlen(v);
+        while (vl && (v[vl - 1] == '\n' || v[vl - 1] == '\r' || v[vl - 1] == ' ' || v[vl - 1] == '\t')) v[--vl] = 0;
+        int row = -1;
+        for (int i = 0; i < CP_DB_ROWS && row < 0; i++) if (cp_db_same_(p, CP_DB_NAME[i])) row = i;
+        if (row < 0) { bad++; continue; }
+        int k = 0;
+        for (size_t i = 0; v[i] && k < 63; i++) {
+            if (v[i] == '\\' && v[i + 1] == 'n') { g_db_text[row][k++] = '\n'; i++; }
+            else g_db_text[row][k++] = v[i];
+        }
+        g_db_text[row][k] = 0;
+        if (k) n++;
+    }
+    fclose(f);
+    LOG("[dbgmenu] dbgtext: %s: %d descriptions%s\n", path, n, bad ? " (some lines skipped: unknown row name or no '=')" : "");
+}
+static const char *cp_db_help_(int be) {
+    cp_db_text_load_();
+    return g_db_text[be][0] ? g_db_text[be] : CP_DB_HELP[be];
+}
+
 // 4 roots: bg states, title, window, help
 static int cp_build_dbg(CsTree *t, const CampPage *p, const CpVals *v, int r[4]) {
     CsDesc k_munny[1], k_time[1], bg_state[3], title[1], sel_kids[2], kids[CP_DB_VIS * 2], rk[CP_DB_VIS][3], win[1], help[1];
@@ -71,7 +142,7 @@ static int cp_build_dbg(CsTree *t, const CampPage *p, const CpVals *v, int r[4])
     }
     win[0] = (CsDesc){ CP_SEQ_(227, 228, 229), .nkids = (uint8_t)nk, .kids = kids };
     help[0] = (CsDesc){ .x = 150, .y = 352, CP_SEQ_(-1, 124, -1), .flags = CS_A_TEXT_IGNORE_COLOR, .anchor = CS_BOTTOM_LEFT };
-    snprintf(help[0].text, sizeof help[0].text, "%s", CP_DB_HELP[CP_DB_ORD[p->db_row]]);
+    snprintf(help[0].text, sizeof help[0].text, "%s", cp_db_help_(CP_DB_ORD[p->db_row]));  // (dbgtext: the user's file wins)
     r[0] = cs_tree_add(t, bg_state, 3); r[1] = cs_tree_add(t, title, 1); r[2] = cs_tree_add(t, win, 1); r[3] = cs_tree_add(t, help, 1);
     return 4;
 }
