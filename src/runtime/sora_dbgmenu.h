@@ -41,6 +41,8 @@
 //                 growth - 1, LV3 only at form LV7); a higher earned level still wins; Off = KH2's rule alone. Drive Forms keep their
 //                 own. Never saved (session; a hot reload keeps them via DBM_ENV). Live keys dbmhjump 0..3, dbmadodge 0..3.
 //                 Both start at LV3 (DBM_GROW_DEF, sora.c); only a value other than that rides in DBM_ENV.
+//   (qrun) row 19 Quick Run = g_dbm_qrun (sora.c), the same rule for base Sora's Quick Run (Wisdom's growth - 1, sora_qrun.h qr_lv;
+//                 needs the qrun option). Starts at LV3 like the two above. Live key dbmqrun 0..3.
 //   (dbggyro) row 18 Gyro Aim = g_kg_on (sora_kbgyro.h): On (the normal state) = the pad's gyro aims the Keyblade throw, Off = the
 //                 right stick only. Its "off" value for All Off is 1 (dbm_off_val_). Never saved. Live key dbmgyro 0/1.
 // Included from sora.c after sora_summon_menu.h. All LOG lines carry "[dbgmenu]".
@@ -50,7 +52,7 @@ _Static_assert(CP_DB_OUTFITS == OF_N, "s263: the camp Debug page's Outfit tags (
 // backend rows (dbm_set / dbm_state; the page's CP_DB_ORD shows them in its own order). (s233) a new row = a number here + its name /
 // help / value list in sora_camp_dbg.h + a place in CP_DB_ORD + its case in dbm_set / dbm_state / dbm_persist + a DBM_KEYS entry
 enum { DBM_R_LV, DBM_R_KB, DBM_R_FORMS, DBM_R_SMN, DBM_R_AB, DBM_R_GOD, DBM_R_CLIP, DBM_R_SORA, DBM_R_OUTFIT, DBM_R_AUTOOUT, DBM_R_PARTY1,
-       DBM_R_PARTY2, DBM_R_INFDRIVE, DBM_R_FORM, DBM_R_MICKEY, DBM_R_INFMP, DBM_R_HJUMP, DBM_R_ADODGE, DBM_R_GYRO, DBM_NROWS };
+       DBM_R_PARTY2, DBM_R_INFDRIVE, DBM_R_FORM, DBM_R_MICKEY, DBM_R_INFMP, DBM_R_HJUMP, DBM_R_ADODGE, DBM_R_GYRO, DBM_R_QRUN, DBM_NROWS };
 _Static_assert(DBM_NROWS == CP_DB_ROWS, "sora_camp_page.h CP_DB_ROWS = the backend rows here");
 
 static struct {
@@ -87,7 +89,7 @@ static struct { int any, any_prev, now; uint64_t t; } DMK;
 static const char *const DBM_FORM_NAME[DBM_FORM_N] = {"Off", "Valor", "Wisdom", "Limit", "Master", "Final", "Anti"};
 
 static void dbm_persist(void) {
-    if (!DM.kb && !DM.forms && !DM.smn && !DM.ab && !g_dbm_god && !g_dbm_clip && !g_dbm_sora && !g_outfit && !g_outfit_auto && !DM.inf && !DM.imp && !DFM.want && !DMK.any && g_dbm_hjump == DBM_GROW_DEF && g_dbm_adodge == DBM_GROW_DEF && g_kg_on) { SetEnvironmentVariableA(DBM_ENV, NULL); return; }
+    if (!DM.kb && !DM.forms && !DM.smn && !DM.ab && !g_dbm_god && !g_dbm_clip && !g_dbm_sora && !g_outfit && !g_outfit_auto && !DM.inf && !DM.imp && !DFM.want && !DMK.any && g_dbm_hjump == DBM_GROW_DEF && g_dbm_adodge == DBM_GROW_DEF && g_dbm_qrun == DBM_GROW_DEF && g_kg_on) { SetEnvironmentVariableA(DBM_ENV, NULL); return; }
     char b[640];
     int n = snprintf(b, sizeof b, "v1 kb=%d fm=%d sm=%d k0=%d k1=%d k2=%d k3=%d bp=%d op=%d gp=%d pp=%d ab=%d", DM.kb, DM.forms, DM.smn, DM.kbs[0],
              DM.kbs[1], DM.kbs[2], DM.kbs[3], DM.beasts_prev, DM.own_prev, DM.gn_prev, DM.pp_prev, DM.ab);
@@ -101,6 +103,7 @@ static void dbm_persist(void) {
     if (DMK.any) n += snprintf(b + n, sizeof b - (size_t)n, " mk=1 mp=%d", DMK.any_prev);
     if (DM.imp) n += snprintf(b + n, sizeof b - (size_t)n, " im=1 mq=%.2f mc=%.2f mt=%.2f", DM.mp_prev, DM.mpc_prev, DM.mpt_prev);
     if (g_dbm_hjump != DBM_GROW_DEF || g_dbm_adodge != DBM_GROW_DEF) n += snprintf(b + n, sizeof b - (size_t)n, " hj=%d ad=%d", g_dbm_hjump, g_dbm_adodge);  // (dbgjump)
+    if (g_dbm_qrun != DBM_GROW_DEF) n += snprintf(b + n, sizeof b - (size_t)n, " qr=%d", g_dbm_qrun);  // (qrun)
     if (!g_kg_on) n += snprintf(b + n, sizeof b - (size_t)n, " gy=0");  // (dbggyro: only the non-default Off)
     SetEnvironmentVariableA(DBM_ENV, b);
 }
@@ -134,6 +137,7 @@ static void dbm_init(void) {
     { const char *g = strstr(b, " gd="); int a = 0, c = 0; if (g && sscanf(g, " gd=%d nc=%d", &a, &c) == 2) g_dbm_god = a != 0, g_dbm_clip = c != 0; }  // (s143)
     { const char *g = strstr(b, " hj="); int a = 0, c = 0; if (g && sscanf(g, " hj=%d ad=%d", &a, &c) == 2) g_dbm_hjump = a < 0 ? 0 : a > 3 ? 3 : a, g_dbm_adodge = c < 0 ? 0 : c > 3 ? 3 : c; }  // (dbgjump)
     if (strstr(b, " gy=0")) g_kg_on = 0;  // (dbggyro)
+    { const char *g = strstr(b, " qr="); int a = 0; if (g && sscanf(g, " qr=%d", &a) == 1) g_dbm_qrun = a < 0 ? 0 : a > 3 ? 3 : a; }  // (qrun)
     { const char *g = strstr(b, " so="); int a = 0, c = 0, d = 0; if (g && sscanf(g, " so=%d of=%d au=%d", &a, &c, &d) == 3) g_dbm_sora = a != 0, g_outfit = c < 0 || c >= OF_N ? 0 : c, g_outfit_auto = d != 0; }  // (s146)
     {   // (s233) Infinite Drive / Drive Form / Mickey Rescue Any Enemy / Infinite MP
         const char *g = strstr(b, " id=");
@@ -168,7 +172,7 @@ static void dbm_kb_fix_(const char *why) {
     LOG("[dbgmenu] keyblades back to what is really owned (%s): %d slot(s) put back, %d reset by the one-copy rule\n", why, n, bad);
 }
 
-static int dbm_state(int row) { return row == 0 ? SL.devlv : row == 1 ? DM.kb : row == 2 ? DM.forms : row == 3 ? DM.smn : row == 4 ? DM.ab : row == 5 ? g_dbm_god : row == 6 ? g_dbm_clip : row == 7 ? g_dbm_sora : row == 8 ? g_outfit : row == 9 ? g_outfit_auto : row == 10 || row == 11 ? (party_slot_off(row - 10) ? PCH_NONE : g_pchar[row - 10]) :row == DBM_R_INFDRIVE ? DM.inf : row == DBM_R_FORM ? DFM.want : row == DBM_R_MICKEY ? (DMK.now ? 2 : DMK.any) : row == DBM_R_INFMP ? DM.imp : row == DBM_R_HJUMP ? g_dbm_hjump : row == DBM_R_ADODGE ? g_dbm_adodge : row == DBM_R_GYRO ? g_kg_on : 0; }  // (the camp page at open)
+static int dbm_state(int row) { return row == 0 ? SL.devlv : row == 1 ? DM.kb : row == 2 ? DM.forms : row == 3 ? DM.smn : row == 4 ? DM.ab : row == 5 ? g_dbm_god : row == 6 ? g_dbm_clip : row == 7 ? g_dbm_sora : row == 8 ? g_outfit : row == 9 ? g_outfit_auto : row == 10 || row == 11 ? (party_slot_off(row - 10) ? PCH_NONE : g_pchar[row - 10]) :row == DBM_R_INFDRIVE ? DM.inf : row == DBM_R_FORM ? DFM.want : row == DBM_R_MICKEY ? (DMK.now ? 2 : DMK.any) : row == DBM_R_INFMP ? DM.imp : row == DBM_R_HJUMP ? g_dbm_hjump : row == DBM_R_ADODGE ? g_dbm_adodge : row == DBM_R_GYRO ? g_kg_on : row == DBM_R_QRUN ? g_dbm_qrun : 0; }  // (the camp page at open)
 
 // ---- (s142 dbgexp) the real EXP snapshots
 static void dbm_forms_snap_(const char *why) {
@@ -630,6 +634,15 @@ static int dbm_set(int row, int val, const char *why) {
         dbm_persist();
         return val;
     }
+    if (row == DBM_R_QRUN) {  // (qrun) base Sora's Quick Run level at least val (0 = KH2's rule: Wisdom's growth - 1)
+        val = val < 0 ? 0 : val > 3 ? 3 : val;
+        if (val == g_dbm_qrun) return val;
+        g_dbm_qrun = val;
+        LOG("[dbgmenu] quick run: %s %d (%s): base Sora's Quick Run LV%d now (Wisdom LV%d%s)\n", val ? "debug LV" : "OFF, KH2's rule", val, why,
+            qr_lv(), wl_lv(), g_qrun ? "" : "; the qrun option is OFF");
+        dbm_persist();
+        return val;
+    }
     if (row == DBM_R_HJUMP || row == DBM_R_ADODGE) {  // (dbgjump) base Sora's High Jump / Aerial Dodge level at least val (0 = KH2's rule)
         int *g = row == DBM_R_HJUMP ? &g_dbm_hjump : &g_dbm_adodge;
         val = val < 0 ? 0 : val > 3 ? 3 : val;
@@ -729,6 +742,7 @@ static void dbm_log(const char *why) {
     LOG("[dbgmenu] state 3 (%s): high jump row %d (base jump %.0f cm, Valor LV%d), aerial dodge row %d (base LV%d, Master LV%d)\n", why,
         g_dbm_hjump, vl_base_jump_h(KH_JUMP_H), vl_lv(), g_dbm_adodge, bd_lv(), ml_lv());  // (dbgjump)
     LOG("[dbgmenu] state 4 (%s): gyro aim %d, right stick aim %d\n", why, g_kg_on, g_kg_stick);  // (dbggyro)
+    LOG("[dbgmenu] state 5 (%s): quick run row %d (base LV%d, Wisdom LV%d, qrun %d)\n", why, g_dbm_qrun, qr_lv(), wl_lv(), g_qrun);  // (qrun)
 }
 static int dbm_off_val_(int r) { return r == DBM_R_PARTY1 || r == DBM_R_PARTY2 ? PCH_HOME[r - DBM_R_PARTY1] : r == DBM_R_GYRO ? 1 : 0; }  // (dbggyro: On is its normal state)  // (the Party rows' "off" = Donald / Goofy)
 static void dbm_all_off(const char *why) {
@@ -835,7 +849,7 @@ static bool dbm_set_key(const char *key, int v) {
     else {  // (s233) one table line per row from here on
         static const struct { const char *key; int row; } DBM_KEYS[] = {
             {"dbmdrive", DBM_R_INFDRIVE}, {"dbmform", DBM_R_FORM}, {"dbmmickey", DBM_R_MICKEY}, {"dbmmp", DBM_R_INFMP},
-            {"dbmhjump", DBM_R_HJUMP}, {"dbmadodge", DBM_R_ADODGE}, {"dbmgyro", DBM_R_GYRO}};  // (dbgjump; dbggyro)
+            {"dbmhjump", DBM_R_HJUMP}, {"dbmadodge", DBM_R_ADODGE}, {"dbmgyro", DBM_R_GYRO}, {"dbmqrun", DBM_R_QRUN}};  // (dbgjump; dbggyro)
         for (size_t i = 0; i < sizeof DBM_KEYS / sizeof *DBM_KEYS; i++)
             if (!strcmp(key, DBM_KEYS[i].key)) {
                 char why[40];

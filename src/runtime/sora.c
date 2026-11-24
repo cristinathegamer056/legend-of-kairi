@@ -217,6 +217,7 @@ static void sm_hit_refill(float drain);  // (s148 sumlv, sora_summon.h: a hit So
 // menu (or live dbmhjump / dbmadodge 0) = KH2's rule alone for the session.
 #define DBM_GROW_DEF 3
 static int g_dbm_hjump = DBM_GROW_DEF, g_dbm_adodge = DBM_GROW_DEF;
+static int g_dbm_qrun = DBM_GROW_DEF;  // (qrun) the Quick Run row, the same rule (sora_qrun.h qr_lv: Wisdom's growth - 1)
 #include "sora_valor_lv.h" // (s70: Valor EXP + form levels)
 #include "sora_light.h"  // (s121 a1 light: time of day / weather light for Sora + party; S121_HELPER_LIGHTDLL.md)
 // s54: the map warp's blue glow (sora_draw.c sora_draw_tint). Looked up in the exe by name, not imported: an exe linked
@@ -5481,6 +5482,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "gclimb")) g_gclimb = v != 0;
             else if (!strcmp(key, "climbair")) g_climb_air_ok = v != 0, LOG("[sora] climbair %d (%s)\n", g_climb_air_ok, g_climb_air_ok ? "old: a climb try also in the air" : "no climb try in the air");
             else if (!strcmp(key, "glideclimb")) g_glideclimb = v < 0 ? 0 : v > 2 ? 2 : v;  // (s88 b3-climb)
+            else if (qr_live_set(key, v)) {}  // (qrun)
             else if (!strcmp(key, "bdodge")) g_bdodge = v != 0, LOG("[sora] base Aerial Dodge (tap B) %s\n", g_bdodge ? "on" : "off (old: B in the air = glide only)");
             else if (!strcmp(key, "bdodgef")) g_bd_tap = v < 0 ? 0 : v > 30 ? 30 : v, LOG("[sora] base dodge tap window: %d KH frames (60 Hz)\n", g_bd_tap);
             else if (!strcmp(key, "gclholdb")) g_gcl_holdb = v != 0, g_gcl_eatb = 0;  // (s89b: held glide B kept from BotW after a grab)
@@ -6650,6 +6652,7 @@ static int sora_clock_in_world(void) {
 #include "sora_mkchoice.h"  // (s117 mkchoice: KH2 "I won't give up!" / "It's all over..." screen; S117_HELPER_MKCHOICE.md)
 #include "sora_rcslot.h"  // (s134 rcslot: KH2's Reaction Command slot over the command menu; used by sora_react.h / sora_plimit.h)
 #include "sora_react.h"  // (s131 react: Triangle reaction commands on Guardians / Lynels)
+#include "sora_qrun.h"   // (qrun: KH2 Quick Run, hold Square through the roll)
 #include "sora_plimit.h"  // (s133 limits: the party Limits Comet + Whirli-Goof and the small Limit player)
 #include "sora_summon_menu.h"  // (s137 smenu: Summon page / FPS pane / owned rule; the FPS helper's sora_summon_fps.h must come BEFORE this line)
 #include "sora_dbgmenu.h"  // (s140 dbgmenu: the camp Debug Menu page backend; needs sora_summon_menu.h)
@@ -6882,6 +6885,8 @@ static void sora_mod_frame_body(void) {
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
         g_kg_stick = env_f("SAVAGEWIND_SORA_KBTHROW_STICK", (float)g_kg_stick) != 0;
+        g_qrun = env_f("SAVAGEWIND_SORA_QUICK_RUN", (float)g_qrun) != 0;  // (qrun)
+        if (g_qrun) LOG("[qrun] on: hold Square through the roll = Quick Run (Wisdom growth; Debug Menu row LV%d)\n", g_dbm_qrun);
         if (g_kg_stick) LOG("[kbgyro] kbthrowstick on: the right stick aims the Keyblade throw too\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
@@ -7816,7 +7821,7 @@ static void sora_mod_frame_body(void) {
     sora_fx_tick(kh);  // (every effect element advances by the frame's KH frames, before the draw)
     if (S.mot && LF_SE_OK(S.mot)) kbsw_motion(sfx_slot(S.mot), prev_clock, S.clock, p, g_wpn_cur.def != NULL);  // (KH2 mset triggers: whooshes, jump, land, steps; s249 kbswing: kbswingse 1 = each hand its Keyblade's)
     meal_item_tick(kh);  // (s98 potion: KH2's item task - the use_item frame, the user SE, the heal 30 frames later)
-    if (S.special && S.mot && S.mot->root && S.edge_swing != S.swing) {
+    if (S.special && S.mot && S.mot->root && S.edge_swing != S.swing && !QR.ph) {  // (qrun: the dash moves by its own velocity)
         float a[3], b[3];
         mot_root(S.mot, clock_old, a), mot_root(S.mot, S.clock, b);
         for (int c = 0; c < 3; c++) root[c] = b[c] - a[c];
@@ -7940,6 +7945,7 @@ static void sora_mod_frame_body(void) {
         play(MOT_ROLL), S.special = SP_ROLL;
         LOG("[sora] roll at %.3f %.3f %.3f face %.1f\n", p[0], p[1], p[2], S.face * 180 / PI);
     }
+    qr_tick(press, held, sdir, sspeed, is_free, guard_took, clock_old, ratio, p);  // (qrun: roll held at frame 10 / no roll = Quick Run)
     // the air: re:0x3BA9A0 airborne = ACTION flag bit 0 (JUMP, GLIDE_HOVER, GLIDE), base Sora has no no-gravity
     // motions: each air swing is its own small jump start (re:0x3D78D0 -> re:0x3CBB00), which also leaves a glide
     // the cast (L 4.5 + the video: inside the combo). Like an attack press: combo_gate decides, and at the combo's
@@ -8135,6 +8141,7 @@ static void sora_mod_frame_body(void) {
             S.vel[0] = move[0] / kh, S.vel[1] = move[1] / kh;  // (a walk-off mid-roll carries this)
             S.root_cm = sqrtf(root[0] * root[0] + root[2] * root[2]);
         }
+        qr_move(move, kh, ratio);  // (qrun: the dash's braked velocity)
         gl_move(move, kh);  // (s139 genielim) Sora's root travel while he plays Genie's Limit motions (his pad is dead: no stick move)
         nl_move(move);      // (s139 review) Never Land: the flight / Journey's End step as a velocity (walls + ledges stay BotW's), not a teleport
         if (R.push >= 1.0f) {  // the repel push: -facing, 5 cm/frame x0.9 (re:0x3D4960), ~15 frames / ~35 cm
