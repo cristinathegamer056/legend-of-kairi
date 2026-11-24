@@ -48,6 +48,7 @@ static int cp_eq_has_wpn(const CpVals *v, int slot) { return g_eqlook && v->wpn_
 // (eqarmor) user: "add Armor to the equipment menu" (+ "None" first to take a piece off; BotW keeps applying the armor's
 // Defense to the hits, the KH2 pages show level Def + armor). An armor row's picker lists CP_EQ_ARN (None) + CP_EQ_AR + its
 // v->ar index; picking one wears it in BotW (BotW's own quick-selector calls). Live "set eqarmor 0" = the s120 show-only rows.
+#define CP_EQ_ARM 100            // eq_slot >= CP_EQ_ARM = an armor row (eq_slot - CP_EQ_ARM); only with g_eqlook
 #define CP_EQ_ARN 4000
 #define CP_EQ_AR 4001
 static int cp_eq_has_ar(const CpVals *v) { return g_eqlook && g_eqarmor && v->ar_on; }
@@ -131,7 +132,6 @@ static int cp_build_equip_list_old(CsTree *t, const int kb[KB_SLOTS], const CpVa
 // ======================= (s120 eqlook) the vanilla KH2 FM Equipment look, recon/S120_HELPER_EQLOOK.md =======================
 // g_eqlook 0 (live "set eqlook 0") = the old page above (Customize's window / rows, no panel, no Armor rows).
 // [V] = VERIFIED from the exe tables / decompile, [G] = GUESS (a position / colour read off the reference photos).
-#define CP_EQ_ARM 100            // eq_slot >= CP_EQ_ARM = an armor row (eq_slot - CP_EQ_ARM); only with g_eqlook
 #define CP_EQ_KEY_ARMOR 600      // "Armor" tag (sys 0x0463)
 #define CP_EQ_KEY_ABILITY 601    // "Ability" label (sys 0x464c)
 #define CP_EQ_ROWS_MAX (KB_SLOTS + 3)
