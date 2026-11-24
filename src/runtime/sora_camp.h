@@ -84,10 +84,16 @@ static void armor_hit_log(int pct) {
     static int last = -1;
     int life = linkpos_link_life();
     if (last > 0 && life >= 0 && life < last) {
-        char nm[3][24];
-        int df[3], n = armor_worn(nm, df), sum = 0;
-        for (int i = 0; i < n; i++) sum += df[i];
-        LOG("[armor] hit: Link life %d -> %d (-%d), KH2 Defense x%d%%, armor Defense %d worn (%d pieces)\n", last, life, last - life, pct, sum, n);
+        // (eqarmor test 1: armor_worn = the drawn Armor_* actors, stale right after a take-off; the pouch's equipped flags are not)
+        static uint64_t it[CP_AR_MAX];
+        static uint8_t df[CP_AR_MAX], eq[CP_AR_MAX];
+        static char nm[CP_AR_MAX][24], ac[CP_AR_MAX][24];
+        int sum = 0, n = 0;
+        for (int a = 0; a < 3; a++) {
+            int c = armor_pouch_list(a, it, df, eq, nm, ac, CP_AR_MAX);
+            for (int k = 0; k < c; k++) if (eq[k]) sum += df[k], n++;
+        }
+        LOG("[armor] hit: Link life %d -> %d (-%d), KH2 Defense x%d%%, armor Defense %d worn (%d pieces, pouch)\n", last, life, last - life, pct, sum, n);
     }
     last = life;
 }
