@@ -211,6 +211,12 @@ static WpnCur g_wpn_cur;  // this frame's (def NULL = the Keyblade)
 // keyblade does") sora.c sets this while the bow mimic is on: the exe is told "not in his hand", so the weapon is Link's hidden gear
 // again until the shot is over. Only the drawing changes (g_wpn_cur and the damage rules stay).
 static volatile int g_wpn_bow_hide;
+// (wpnsheathe) user: "Sora to be able to sheath the botw weapons the same way as he would with a keyblade". sora.c sets this
+// while kbfield puts the Keyblade away (field stance out of battle, or put away with L3): a BotW weapon in Sora's hand goes the
+// same way as for the bow ("not in his hand" -> Link's hidden gear). It is back for every swing, the battle stance and L3.
+// Only the drawing changes. SAVAGEWIND_SORA_WPN_SHEATHE=0 / live "set wpnsheathe 0" = always in his hand. Default 1.
+static int g_wpnsheathe = 1;
+static volatile int g_wpn_field_hide;
 static void wpn_tick(bool drawn) {
     static int tried;
     if (!tried) {
@@ -242,8 +248,9 @@ static void wpn_tick(bool drawn) {
         float off[8] = {c.def ? -(float)wpn_gz(c.def) / 100.0f : 0,  // (minus: the exe puts the origin at grip - Z*off; we want grip + Z*wgz, hands on the handle)
                         (float)(g_wroll + (rx ? g_wroll_rox : 0) + (a ? g_wroll_arm : 0)), (float)(g_wpitch + (rx ? g_wpitch_rox : 0) + (a ? g_wpitch_arm : 0)), (float)(g_wyaw + (rx ? g_wyaw_rox : 0) + (a ? g_wyaw_arm : 0)),
                         a ? (float)a->s_pct / 100.0f : 1.0f, a ? (float)a->gx_cm / 100.0f : 0, a ? a->gy : 0, a ? a->gz : 0};
-        if (g_wpn_hand2_fn) g_wpn_hand2_fn(on && !g_wpn_fake && !g_wpn_bow_hide, off);
-        else g_wpn_hand_fn(on && !g_wpn_fake && !g_wpn_bow_hide, off);
+        bool hand = on && !g_wpn_fake && !g_wpn_bow_hide && !g_wpn_field_hide;  // (wpnsheathe: put away with the Keyblade)
+        if (g_wpn_hand2_fn) g_wpn_hand2_fn(hand, off);
+        else g_wpn_hand_fn(hand, off);
     }
 }
 // the damage of one hit with the weapon (user s128 option a): (Attack + Attack up) x the KH2 window's power % x wpace %

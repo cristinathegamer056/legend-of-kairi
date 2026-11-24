@@ -5518,6 +5518,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "eny")) g_eny = v, LOG("[sora] eny %d (enemy gauge centre line, HUD units; 0 = 22)\n", v);
             else if (!strcmp(key, "wall")) g_wall_on = v != 0, W.on = W.on && v;
             else if (!strcmp(key, "repel")) g_repel = v != 0, R.push = v ? R.push : 0;
+            else if (!strcmp(key, "wpnsheathe")) g_wpnsheathe = v != 0, LOG("[sora] live: wpnsheathe %d (%s)\n", g_wpnsheathe, g_wpnsheathe ? "a BotW weapon is put away with the Keyblade" : "a BotW weapon stays in his hand");  // (wpnsheathe)
             else if (!strcmp(key, "wpnvis")) g_wpnvis = v != 0, LOG("[sora] live: wpnvis %d\n", g_wpnvis);  // (s128b)
             else if (!strcmp(key, "slvis")) g_slvis = v != 0, LOG("[sora] slvis %d: %s\n", g_slvis, g_slvis ? "Link's view bit 0 kept while the Slate is shown (Slate drawn)" : "old hide (Slate invisible)");  // (s113)
             else if (!strcmp(key, "showlink")) g_show_link = v != 0, hide_link(!g_show_link), LOG("[sora] showlink %d (debug: Link + his gear drawn too)\n", g_show_link);  // (s99)
@@ -7048,6 +7049,7 @@ static void sora_mod_frame_body(void) {
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
         g_kbfield = env_f("SAVAGEWIND_SORA_KB_FIELD", (float)g_kbfield) != 0;  // (kbfield)
+        g_wpnsheathe = env_f("SAVAGEWIND_SORA_WPN_SHEATHE", (float)g_wpnsheathe) != 0;  // (wpnsheathe)
         g_kbtoggle = env_f("SAVAGEWIND_SORA_KB_TOGGLE", (float)g_kbtoggle) != 0;  // (kbtoggle)
         {  // (kbdrawfx)
             int v = (int)env_f("SAVAGEWIND_SORA_KB_DRAWFX", (float)g_kbdrawfx);
@@ -7499,7 +7501,7 @@ static void sora_mod_frame_body(void) {
     light_tick();  // (s121 a1 light)
     blob_tick();   // (s126: KH2 blob keep / off / auto)
     g_dg_playing = (st == LINK_GROUND || st == LINK_AIR) && !dead && !g_loading;  // (s183 kairi-diag)
-    if (st != LINK_GROUND && st != LINK_AIR) kbf_set(false), g_kbdfx_last = -1;  // (kbfield: the puppet keeps its own Keyblade rule; kbdrawfx: no flash on the way back)
+    if (st != LINK_GROUND && st != LINK_AIR) kbf_set(false), g_kbdfx_last = -1, g_wpn_field_hide = 0;  // (wpnsheathe: back in his hand too)  // (kbfield: the puppet keeps its own Keyblade rule; kbdrawfx: no flash on the way back)
     if (st != LINK_GROUND && st != LINK_AIR) {  // climbing, swimming, a cutscene...: Link's (the servo can't drive)
         rox_tick();  // (s110: the body switch also runs while Link has the pad: the new game's wake-up / walk-out cutscenes kept Sora until the first save)
         static uint64_t said;
@@ -8390,6 +8392,12 @@ static void sora_mod_frame_body(void) {
     {
         bool kb_hid = g_kbfield && !g_bs_on && !g_kb_drawn && S.mot && (!S.special || S.special == SP_ROLL) && (S.mot->slot & 3) == 2;
         kbf_set(kb_hid);
+        {
+            int wh = g_wpnsheathe && kb_hid;  // (wpnsheathe: a BotW weapon is put away with the Keyblade)
+            if (wh != g_wpn_field_hide && g_wpn_cur.def)
+                LOG("[wpn] wpnsheathe: %s %s\n", g_wpn_cur.def->name, wh ? "put away (field stance)" : "drawn");
+            g_wpn_field_hide = wh;
+        }
         kbdfx_tick(kb_hid, to_u);  // (kbdrawfx: KH2's appear flash on a draw / sheathe)
     }
     // (kbfield: the no-weapon field variant, out of battle; the dodge roll A180 = slot 838 too)
