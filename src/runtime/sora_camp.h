@@ -255,6 +255,7 @@ static bool camp_frame(uint64_t present) {
             int k = out.bw_pick - 1;
             CpVals *cv = &CAMP.v;
             wpn_equip_ask(cv->bw_item[k], cv->bw_actor[k]);
+            wpn_equip_tick(true);  // (at once, from the menu)
             for (int j = 0; j < cv->bw_n; j++) cv->bw_eq[j] = j == k;
             cv->wpn_on = 1;
             snprintf(cv->wpn_name, sizeof cv->wpn_name, "%s", cv->bw_name[k]);
