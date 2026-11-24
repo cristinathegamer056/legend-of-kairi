@@ -218,6 +218,7 @@ static void sm_hit_refill(float drain);  // (s148 sumlv, sora_summon.h: a hit So
 #define DBM_GROW_DEF 3
 static int g_dbm_hjump = DBM_GROW_DEF, g_dbm_adodge = DBM_GROW_DEF;
 static int g_dbm_qrun = DBM_GROW_DEF;  // (qrun) the Quick Run row, the same rule (sora_qrun.h qr_lv: Wisdom's growth - 1)
+static bool qr_live_set(const char *key, int v);  // (qrun, sora_qrun.h: live qrun)
 #include "sora_valor_lv.h" // (s70: Valor EXP + form levels)
 #include "sora_light.h"  // (s121 a1 light: time of day / weather light for Sora + party; S121_HELPER_LIGHTDLL.md)
 // s54: the map warp's blue glow (sora_draw.c sora_draw_tint). Looked up in the exe by name, not imported: an exe linked
