@@ -213,7 +213,10 @@ static void sm_hit_refill(float drain);  // (s148 sumlv, sora_summon.h: a hit So
 #include "sora_drive.h"   // (s67 drive: KH2's Drive gauge, Drive Forms slice 1; S64_HELPER_DRIVE_RECON.md 6)
 // (dbgjump) the Debug Menu's High Jump / Aerial Dodge rows (sora_dbgmenu.h): base Sora's level is at least this (0 = Off = KH2's rule
 // alone: his level = Valor's / Master's growth - 1). Read by sora_valor_lv.h vl_base_jump_h and sora_bdodge.h bd_lv; never saved.
-static int g_dbm_hjump, g_dbm_adodge;
+// Both start at LV3 (DBM_GROW_DEF, user's choice: "High Jump and Aerial Dodge be on by default in the debug menu"); Off in the
+// menu (or live dbmhjump / dbmadodge 0) = KH2's rule alone for the session.
+#define DBM_GROW_DEF 3
+static int g_dbm_hjump = DBM_GROW_DEF, g_dbm_adodge = DBM_GROW_DEF;
 #include "sora_valor_lv.h" // (s70: Valor EXP + form levels)
 #include "sora_light.h"  // (s121 a1 light: time of day / weather light for Sora + party; S121_HELPER_LIGHTDLL.md)
 // s54: the map warp's blue glow (sora_draw.c sora_draw_tint). Looked up in the exe by name, not imported: an exe linked

@@ -40,6 +40,7 @@
 //                 Jump (235 / 310 / 385 cm) / Aerial Dodge level is at least that, at once (KH2 makes him earn them: Valor's / Master's
 //                 growth - 1, LV3 only at form LV7); a higher earned level still wins; Off = KH2's rule alone. Drive Forms keep their
 //                 own. Never saved (session; a hot reload keeps them via DBM_ENV). Live keys dbmhjump 0..3, dbmadodge 0..3.
+//                 Both start at LV3 (DBM_GROW_DEF, sora.c); only a value other than that rides in DBM_ENV.
 // Included from sora.c after sora_summon_menu.h. All LOG lines carry "[dbgmenu]".
 #pragma once
 _Static_assert(CP_DB_OUTFITS == OF_N, "s263: the camp Debug page's Outfit tags (sora_camp_dbg.h) must match sora_outfit.h OF_N");
@@ -84,7 +85,7 @@ static struct { int any, any_prev, now; uint64_t t; } DMK;
 static const char *const DBM_FORM_NAME[DBM_FORM_N] = {"Off", "Valor", "Wisdom", "Limit", "Master", "Final", "Anti"};
 
 static void dbm_persist(void) {
-    if (!DM.kb && !DM.forms && !DM.smn && !DM.ab && !g_dbm_god && !g_dbm_clip && !g_dbm_sora && !g_outfit && !g_outfit_auto && !DM.inf && !DM.imp && !DFM.want && !DMK.any && !g_dbm_hjump && !g_dbm_adodge) { SetEnvironmentVariableA(DBM_ENV, NULL); return; }
+    if (!DM.kb && !DM.forms && !DM.smn && !DM.ab && !g_dbm_god && !g_dbm_clip && !g_dbm_sora && !g_outfit && !g_outfit_auto && !DM.inf && !DM.imp && !DFM.want && !DMK.any && g_dbm_hjump == DBM_GROW_DEF && g_dbm_adodge == DBM_GROW_DEF) { SetEnvironmentVariableA(DBM_ENV, NULL); return; }
     char b[640];
     int n = snprintf(b, sizeof b, "v1 kb=%d fm=%d sm=%d k0=%d k1=%d k2=%d k3=%d bp=%d op=%d gp=%d pp=%d ab=%d", DM.kb, DM.forms, DM.smn, DM.kbs[0],
              DM.kbs[1], DM.kbs[2], DM.kbs[3], DM.beasts_prev, DM.own_prev, DM.gn_prev, DM.pp_prev, DM.ab);
@@ -97,7 +98,7 @@ static void dbm_persist(void) {
     if (DFM.want) n += snprintf(b + n, sizeof b - (size_t)n, " fo=%d", DFM.want);
     if (DMK.any) n += snprintf(b + n, sizeof b - (size_t)n, " mk=1 mp=%d", DMK.any_prev);
     if (DM.imp) n += snprintf(b + n, sizeof b - (size_t)n, " im=1 mq=%.2f mc=%.2f mt=%.2f", DM.mp_prev, DM.mpc_prev, DM.mpt_prev);
-    if (g_dbm_hjump || g_dbm_adodge) n += snprintf(b + n, sizeof b - (size_t)n, " hj=%d ad=%d", g_dbm_hjump, g_dbm_adodge);  // (dbgjump)
+    if (g_dbm_hjump != DBM_GROW_DEF || g_dbm_adodge != DBM_GROW_DEF) n += snprintf(b + n, sizeof b - (size_t)n, " hj=%d ad=%d", g_dbm_hjump, g_dbm_adodge);  // (dbgjump)
     SetEnvironmentVariableA(DBM_ENV, b);
 }
 static void dbm_smn_dirty_(void) { SMN.owned_last = -1, SMN.owned_mask_last = -1; }
