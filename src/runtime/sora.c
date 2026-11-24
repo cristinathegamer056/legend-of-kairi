@@ -4675,11 +4675,82 @@ static volatile LONG g_wd_stop;
 static volatile int g_invdiag;  // (s100 invdiag, below)
 static volatile LONG g_invdiag_thr;
 
+// (stallwatch, diag) SAVAGEWIND_SORA_STALL_MS=<ms> (default 0 = off; live 'set stallms <ms>'): a driver frame (sora_mod_frame)
+// still running after that long gets its thread's call stack logged by the watchdog below every 500 ms, up to 40 times a
+// stall: '[stall] driver frame running N ms: module+offset ...' (innermost first; addr2line -f -e build/<module> 0x<base+offset>
+// names them). The thread is suspended only while its registers are read; the stack is walked after it runs again (in a
+// stall the frames under the stuck function stay put), so nothing locks or allocates while it is suspended.
+static volatile LONG64 g_sw_t0;  // QPC at the running driver frame's start, 0 = none running
+static volatile LONG g_sw_ms;
+static HANDLE g_sw_thread;
+static DWORD g_sw_tid;
+static void stall_note_thread(void) {  // (driver thread, each frame: a new thread gets a new handle)
+    DWORD id = GetCurrentThreadId();
+    if (id == g_sw_tid && g_sw_thread) return;
+    HANDLE h = NULL;
+    if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &h,
+                         THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, 0)) return;
+    HANDLE old = g_sw_thread;
+    g_sw_thread = h, g_sw_tid = id;
+    if (old) CloseHandle(old);
+}
+static void stall_walk(double ms) {
+    static CONTEXT c;
+    HANDLE th = g_sw_thread;
+    if (!th) return;
+    memset(&c, 0, sizeof c);
+    c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+    if (SuspendThread(th) == (DWORD)-1) return;
+    BOOL got = GetThreadContext(th, &c);
+    ResumeThread(th);
+    if (!got) return;
+    DWORD64 pc[32];
+    int n = 0;
+    for (; n < 32 && c.Rip; n++) {
+        pc[n] = c.Rip;
+        DWORD64 base = 0;
+        PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(c.Rip, &base, NULL);
+        if (!fn) { c.Rip = *(DWORD64 *)c.Rsp, c.Rsp += 8; continue; }  // (leaf: the return address is on top)
+        void *hd = NULL;
+        DWORD64 est = 0;
+        RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.Rip, fn, &c, &hd, &est, NULL);
+    }
+    char line[3072];
+    int len = snprintf(line, sizeof line, "[stall] driver frame running %.0f ms:", ms);
+    for (int i = 0; i < n && len < (int)sizeof line - 80; i++) {
+        HMODULE m = NULL;
+        char nm[MAX_PATH] = "?";
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)pc[i], &m) &&
+            GetModuleFileNameA(m, nm, sizeof nm)) {
+            const char *b = strrchr(nm, '\\');
+            len += snprintf(line + len, sizeof line - len, " %s+0x%llx", b ? b + 1 : nm, (unsigned long long)(pc[i] - (DWORD64)m));
+        } else len += snprintf(line + len, sizeof line - len, " 0x%llx", (unsigned long long)pc[i]);
+    }
+    LOG("%s\n", line);
+}
+static void stall_tick(void) {  // (watchdog thread, every 16 ms)
+    static LARGE_INTEGER f;
+    static LONG64 seen;
+    static double next;
+    static int logged;
+    if (!g_sw_ms) return;
+    if (!f.QuadPart) QueryPerformanceFrequency(&f);
+    LONG64 t0 = g_sw_t0;
+    if (!t0) return;
+    if (t0 != seen) seen = t0, next = g_sw_ms, logged = 0;
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    double ms = (now.QuadPart - t0) * 1000.0 / f.QuadPart;
+    if (ms < next || logged >= 40) return;
+    next = ms + 500, logged++;
+    stall_walk(ms);
+}
 static DWORD WINAPI stale_watchdog(LPVOID arg) {
     (void)arg;
     bool off = false;
     while (!g_wd_stop) {
         Sleep(16);
+        stall_tick();
         uint64_t last = g_wd_frame;
         if (!last) continue;
         bool stale = (int64_t)(vk_frame_counter() - last) >= STALE_PRESENTS;
@@ -5517,6 +5588,7 @@ static void live_poll(const float p[3], uint64_t present) {
                 if (fp) fp(v);
                 else if (!warned) warned = true, LOG("[sora] drawperf: not in this exe (NEEDS EXE RELINK mp2-perf)\n");
             }
+            else if (!strcmp(key, "stallms")) g_sw_ms = v < 0 ? 0 : v, LOG("[stall] stallwatch %s (%d ms)\n", v > 0 ? "on" : "off", v);  // (stallwatch)
             else if (!strcmp(key, "animdiag")) g_animdiag = v != 0, LOG("[sora] animdiag %d: %s\n", g_animdiag, g_animdiag ? "logging the driver call gaps + feet cadence (\"[anim60]\" lines)" : "off");  // (s113 anim60)
             else if (!strcmp(key, "ffin")) ffin_set(v != 0);  // (s92 Final finishers: Interval re-hits + radius + body windows)
             else if (!strcmp(key, "bigbody")) g_big_body = v != 0;  // (s87 Guardian body cylinders)
@@ -6802,6 +6874,7 @@ __declspec(dllexport) void sora_mod_frame(void) {
     if (!f.QuadPart) QueryPerformanceFrequency(&f);
     LARGE_INTEGER a, b;
     QueryPerformanceCounter(&a);
+    stall_note_thread(), g_sw_t0 = a.QuadPart;  // (stallwatch)
     g_drv_frame++;  // (s170 bonedraw: the stamp of g_rcap)
     mark_poll();  // (s111: F5 marks work in every state, before the body's early returns)
     pcap_begin();  // (mp slice 3: a party draw record is only good for the frame it was drawn in)
@@ -6828,6 +6901,7 @@ __declspec(dllexport) void sora_mod_frame(void) {
     world_diag();  // (s122b)
     if (g_rox_hold) sora_draw_off();  // (s111 roxload: no Sora while a loaded Roxas save waits for his assets)
     QueryPerformanceCounter(&b);
+    g_sw_t0 = 0;  // (stallwatch: this frame is done)
     double ms = (b.QuadPart - a.QuadPart) * 1000.0 / f.QuadPart;
     double g1 = last.QuadPart ? (a.QuadPart - last.QuadPart) * 1000.0 / f.QuadPart : 0;
     gap += g1;
@@ -6888,6 +6962,11 @@ static void sora_mod_frame_body(void) {
         if (cm && *cm) g_combo_master = atoi(cm) != 0;
         LOG("[sora] Sora mode on (scale %.2f, Link %s, jump trigger at %.0f, Combo Master %s)\n", g_k,
             g_show_link ? "shown" : "hidden", g_jump_trigger, g_combo_master ? "on" : "off");
+        {
+            const char *e = getenv("SAVAGEWIND_SORA_STALL_MS");
+            if (e && *e) g_sw_ms = atoi(e) < 0 ? 0 : atoi(e);
+            if (g_sw_ms) LOG("[stall] stallwatch on: a driver frame over %ld ms logs its call stack ([stall] lines)\n", (long)g_sw_ms);
+        }
         HANDLE wd = CreateThread(NULL, 0, stale_watchdog, NULL, 0, NULL);
         if (wd) CloseHandle(wd);
     }
