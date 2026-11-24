@@ -3908,8 +3908,8 @@ static void goto_carry(bool hold) {
 // that carry came back as the body's ground velocity every frame after: some plain jumps flew ~2.8x as far (user report,
 // epictest log: 12.6-14.3 m instead of 4.3-5.0 m for the same air time, "ext ground (ride)" lines all through the
 // jump). The wind / updraft push (the AIR sample) stays. A carry taken before take-off still runs its EXT_HOLD frames.
-// Off by default until tested in game: SAVAGEWIND_SORA_AIR_NORIDE=1 / live "set airnoride 1".
-static int g_air_noride = 0;
+// On by default (tested in game); off: SAVAGEWIND_SORA_AIR_NORIDE=0 / live "set airnoride 0".
+static int g_air_noride = 1;
 static void air_carry(bool air, bool goto_hold) {
     static int applied = -1;  // the ride value this function last wrote (-1 = none / goto took it over)
     RideFn fn = ride_fn();
