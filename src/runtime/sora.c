@@ -896,6 +896,10 @@ static int brk_blade(const HitWin *win, const float prev[6], const float now[6],
 // On by default; SAVAGEWIND_SORA_SWHIT=0 / live "set swhit 0" = it bounces off as before. "set swhitv <x100>" the value
 // (default 1.0), "set swhitr <cm>" / "set swhith <cm>" the lever's cylinder (GUESS 80 / 300 cm; it connected in the test).
 static int g_swhit = 1;
+// (shrineswitch) the shrines' crystal switches too (exe names "SwitchHit" / "SwitchHitOnce", same SwitchHit AI as the lever; user:
+// "Sora couldn't hit the switch with his Keyblade" in a shrine, the log: repel 1 m from Dungeon056's SwitchHit). Default 0 while
+// testing; SAVAGEWIND_SORA_SWHIT_DGN=1 / live "set swhitdgn 1". An old exe lists only the lever (NEEDS EXE RELINK).
+static int g_swhit_dgn = 0;
 static float g_swhit_v = 1.0f, g_swhit_r = 0.8f, g_swhit_h = 3.0f;
 static int swh_blade(const HitWin *win, const float prev[6], const float now[6], float to_u) {
     static LinkposSwitchesFn list;
@@ -915,6 +919,7 @@ static int swh_blade(const HitWin *win, const float prev[6], const float now[6],
     for (int i = 0; i < n; i++) {
         int k = 0;
         while (k < S.nhit && S.hit_actor[k] != b[i].actor) k++;
+        if (!g_swhit_dgn && strncmp(b[i].name, "FldObj_GoronCannonSwitch", 24)) continue;  // (shrineswitch off: the lever only)
         if (k < S.nhit || !sweep_hits_rh(prev, now, b[i].pos, g_swhit_r, g_swhit_h)) continue;
         if (S.nhit < 16) S.hit_actor[S.nhit++] = b[i].actor;  // (once per swing window)
         int ok = hit(b[i].actor, g_swhit_v);
@@ -5471,6 +5476,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "wofloor")) g_wo_floor_cm = (float)v;
             else if (!strcmp(key, "woguard")) g_wo_guard = v;
             else if (!strcmp(key, "swhit")) g_swhit = v != 0;  // (the Keyblade flips the Goron cannon lever)
+            else if (!strcmp(key, "swhitdgn")) g_swhit_dgn = v != 0, LOG("[sora] swhitdgn %d: %s\n", g_swhit_dgn, g_swhit_dgn ? "the Keyblade flips the shrines' crystal switches too" : "the Goron cannon lever only");  // (shrineswitch)
             else if (!strcmp(key, "swhitv")) g_swhit_v = v / 100.0f;
             else if (!strcmp(key, "swhitr")) g_swhit_r = v / 100.0f;
             else if (!strcmp(key, "swhith")) g_swhit_h = v / 100.0f;
@@ -6917,6 +6923,8 @@ static void sora_mod_frame_body(void) {
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
         g_swhit = env_f("SAVAGEWIND_SORA_SWHIT", (float)g_swhit) != 0;
+        g_swhit_dgn = env_f("SAVAGEWIND_SORA_SWHIT_DGN", (float)g_swhit_dgn) != 0;  // (shrineswitch)
+        if (g_swhit_dgn) LOG("[sora] swhitdgn on: the Keyblade flips the shrines' crystal switches (SwitchHit / SwitchHitOnce)\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
         slog_open();

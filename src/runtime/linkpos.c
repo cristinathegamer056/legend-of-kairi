@@ -4124,10 +4124,16 @@ static SRWLOCK g_swhit_lock = SRWLOCK_INIT;
 static struct { uint64_t addr, frame; float old, v; int n; } g_swhit_put;  // (one pending write; game thread)
 static void swhit_frame(void);
 
+// (shrineswitch) the shrines' crystal switches are actors "SwitchHit" / "SwitchHitOnce" (Dungeon056_Static.smubin; their packs
+// name the same SwitchHit AI as the lever: user report "Sora couldn't hit the switch with his Keyblade" in Dungeon056). The DLL
+// decides which ones it hits (sora.c swhitdgn); the list holds all three kinds.
+static bool swhit_name(const char *name) {
+    return !strncmp(name, "FldObj_GoronCannonSwitch", 24) || !strcmp(name, "SwitchHit") || !strcmp(name, "SwitchHitOnce");
+}
 static void swhit_note(uint64_t a) {  // (opacity hook, any thread)
     if (!g_servo_actor || a == g_servo_actor) return;
     const char *name = actor_name(a);
-    if (!name || strncmp(name, "FldObj_GoronCannonSwitch", 24) || link_dist(a) > BREAK_DIST) return;
+    if (!name || !swhit_name(name) || link_dist(a) > BREAK_DIST) return;
     const float *m = (const float *)(uintptr_t)(a + ACTOR_MTX);
     AcquireSRWLockExclusive(&g_swhit_lock);
     int i;
