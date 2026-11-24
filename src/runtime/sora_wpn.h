@@ -157,28 +157,43 @@ static int wpn_pouch_list(WpnPouch *out, int max) {
     }
     return n;
 }
-static struct { uint64_t item; char actor[48]; int tries; } g_wpn_ask;
+// (eqarmor) one pending request: a pouch item to equip (a weapon or an armor piece: type 0 / 4..6), or off = take the piece
+// of pouch type `type` off (the picker's None entry). Tried at once from the menu, else on the first unpaused frames.
+static struct { uint64_t item; char actor[48]; int tries, type, off; } g_wpn_ask;
 static void wpn_equip_ask(uint64_t item, const char *actor) {
-    g_wpn_ask.item = item, g_wpn_ask.tries = 0;
+    g_wpn_ask.item = item, g_wpn_ask.tries = 0, g_wpn_ask.type = 0, g_wpn_ask.off = 0;
     snprintf(g_wpn_ask.actor, sizeof g_wpn_ask.actor, "%s", actor);
     LOG("[wpn] eqtabs: %s picked in the KH2 menu\n", actor);
 }
+static void armor_equip_ask(int type, uint64_t item, const char *actor) {  // item 0 = take the piece off
+    g_wpn_ask.item = item, g_wpn_ask.tries = 0, g_wpn_ask.type = type, g_wpn_ask.off = item == 0;
+    snprintf(g_wpn_ask.actor, sizeof g_wpn_ask.actor, "%s", item ? actor : "(none)");
+    LOG("[armor] eqarmor: %s picked in the KH2 menu for pouch type %d\n", g_wpn_ask.actor, type);
+}
 typedef int (*WpnEquipFn)(uint64_t, const char *);
 static void wpn_equip_tick(bool now) {  // now = the menu's own try (paused); else wpn_tick: playing, not paused
-    static WpnEquipFn fn;
+    static WpnEquipFn fn, fn_any;
+    static int (*fn_off)(int);
     static int tried;
-    if (!g_wpn_ask.item || (!now && *(volatile uint32_t *)(uintptr_t)PAUSE_STATE)) return;
+    if ((!g_wpn_ask.item && !g_wpn_ask.off) || (!now && *(volatile uint32_t *)(uintptr_t)PAUSE_STATE)) return;
     if (!tried) {
-        tried = 1, fn = (WpnEquipFn)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_weapon_equip");
-        LOG("[wpn] exe export linkpos_weapon_equip: %s\n", fn ? "found" : "NOT in this exe (NEEDS EXE RELINK): the BotW tab cannot equip");
+        HMODULE exe = GetModuleHandleA(NULL);
+        tried = 1, fn = (WpnEquipFn)(void *)GetProcAddress(exe, "linkpos_weapon_equip");
+        fn_any = (WpnEquipFn)(void *)GetProcAddress(exe, "linkpos_pouch_equip");
+        fn_off = (int (*)(int))(void *)GetProcAddress(exe, "linkpos_pouch_unequip");
+        LOG("[wpn] exe exports: linkpos_weapon_equip %s, linkpos_pouch_equip %s, linkpos_pouch_unequip %s\n", fn ? "found" : "MISSING",
+            fn_any ? "found" : "MISSING (armor cannot be equipped: NEEDS EXE RELINK)", fn_off ? "found" : "MISSING");
     }
-    int r = fn ? fn(g_wpn_ask.item, g_wpn_ask.actor) : -9;
-    if (r == -1 && now) { LOG("[wpn] eqtabs: not now (paused menu): BotW equips it when the game runs again\n"); return; }
+    WpnEquipFn f = g_wpn_ask.type == 0 && !fn_any ? fn : fn_any;
+    int r = g_wpn_ask.off ? (fn_off ? fn_off(g_wpn_ask.type) : -9) : f ? f(g_wpn_ask.item, g_wpn_ask.actor) : -9;
+    const char *tag = g_wpn_ask.type ? "[armor] eqarmor" : "[wpn] eqtabs";
+    if (r == -1 && now) { LOG("%s: not now (paused menu): BotW applies it when the game runs again\n", tag); return; }
     if (r == -1 && ++g_wpn_ask.tries < 30) return;  // (not inside the exe's frame yet: try again)
-    LOG("[wpn] eqtabs: equip %s -> %s\n", g_wpn_ask.actor, r == 1 ? "done (BotW's own equip calls)" : r == -2 ? "no PauseMenuDataMgr" : r == -3 ? "the item is not in the pouch any more"
-                                                          : r == -9 ? "no exe export" : "refused by the exe");
-    if (r == 1) g_wpn_use = 1;
-    g_wpn_ask.item = 0;
+    LOG("%s: %s %s -> %s\n", tag, g_wpn_ask.off ? "take off type" : "equip", g_wpn_ask.off ? "" : g_wpn_ask.actor,
+        r == 1 ? "done (BotW's own calls)" : r == 0 ? "nothing was worn there" : r == -2 ? "no PauseMenuDataMgr / player" : r == -3 ? "the item is not in the pouch any more"
+                                                                 : r == -9 ? "no exe export" : "refused by the exe");
+    if (r == 1 && g_wpn_ask.type == 0) g_wpn_use = 1;
+    g_wpn_ask.item = 0, g_wpn_ask.off = 0;
 }
 
 // exe export (s128 linkpos.c): int linkpos_weapon_info(char *actor, int cap, int *life_x100, int *atk_up)

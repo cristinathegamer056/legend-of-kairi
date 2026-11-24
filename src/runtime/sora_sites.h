@@ -68,6 +68,14 @@
     /* static (headless Ghidra, D:/KairiWork/ghidra/eq4.c / eq5.c); 1.8.2 not looked up = 0 (off) */                          \
     X(pouch_equip,             0x0ull,          0x7000d9a4e0ull)    \
     X(player_equip_req,        0x0ull,          0x7000e88fb0ull)    \
+    /* (eqarmor) the quick selector's "none" entry (1.9.0 0x7100e25948): PauseMenuDataMgr unequip(mgr, item) 0x7100d9a590, */ \
+    /* the pouch default name per type 0x7100d940c4(mgr, type), the player's wanted-name setter 0x7100cbe4d0(player, name, */ \
+    /* value, -1, &mod), player = 0x7100cc6fd0([PlayerInfo ptr 0x7101e13ed0]). VERIFIED static (D:/KairiWork/ghidra/eq2-5.c) */ \
+    X(pouch_unequip,           0x0ull,          0x7000d9a590ull)    \
+    X(pouch_dflt_name,         0x0ull,          0x7000d940c4ull)    \
+    X(player_equip_set,        0x0ull,          0x7000cbe4d0ull)    \
+    X(player_from_info,        0x0ull,          0x7000cc6fd0ull)    \
+    X(player_info_ptr,         0x0ull,          0x7001e13ed0ull)    \
     /* s100 slatehip2: the Actor calc's bl of gsys::Model::calcWorld(model), right after the actor's mMtx was copied to */ \
     /* model+0x58..0x87. slate_model_call = that bl (inside the Actor calc), slate_model_target = the callee (ldr x1,[x0,#0xd8]; b). */ \
     /* 1.8.2 by hand, 1.9.0 by an instruction-word pattern of the 12 words around the bl (one hit); both capstone-checked */ \

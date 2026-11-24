@@ -3955,8 +3955,13 @@ int linkpos_pouch_remove(const char *name) {
 // (player_equip_req). item = a PouchItem* the DLL read from the pouch list; it must still be in that list with type 0 (a
 // melee weapon) and the same actor name (+0x30 SafeString cstr). Only inside linkpos_frame (guest calls).
 // 1 = called, -1 = refused (no site for this version / not now), -2 = no PauseMenuDataMgr yet, -3 = item gone / changed.
+// (eqarmor) the same for the armor pieces: types 4 / 5 / 6 (ArmorHead / Upper / Lower; the request takes them at 0x7100e88fb0's
+// case 4..6 -> 0x7100b25018). linkpos_pouch_equip accepts types 0 and 4..6; linkpos_weapon_equip keeps type 0 only.
 static uint64_t g_nwpn_equip, g_nwpn_equip_refused;
-int linkpos_weapon_equip(uint64_t item, const char *name) {
+static int pouch_equip_(uint64_t item, const char *name, bool armor_ok);
+int linkpos_weapon_equip(uint64_t item, const char *name) { return pouch_equip_(item, name, false); }
+int linkpos_pouch_equip(uint64_t item, const char *name) { return pouch_equip_(item, name, true); }
+static int pouch_equip_(uint64_t item, const char *name, bool armor_ok) {
     Cpu *c = g_in_frame ? kernel_current_cpu() : NULL;
     uint64_t f_eq = SS->pouch_equip, f_req = SS->player_equip_req, got = PMDM_GOT;
     uint64_t pp = in_guest(got) ? *(const uint64_t *)(uintptr_t)got : 0;
@@ -3977,7 +3982,8 @@ int linkpos_weapon_equip(uint64_t item, const char *name) {
         n = *(const uint64_t *)(uintptr_t)(n + 8);
     }
     char nm[64];
-    if (!found || readable(item, 0x90) != 0x90 || *(const int32_t *)(uintptr_t)(item + 0x18) != 0 || !wpn_item_name(item, nm, sizeof nm) || strcmp(nm, name)) {
+    int ty = found && readable(item, 0x90) == 0x90 ? *(const int32_t *)(uintptr_t)(item + 0x18) : -1;
+    if (!found || !(ty == 0 || (armor_ok && ty >= 4 && ty <= 6)) || !wpn_item_name(item, nm, sizeof nm) || strcmp(nm, name)) {
         LOG("[linkpos] weapon equip: %s item %llx not in the pouch any more (found %d)\n", name, (unsigned long long)item, (int)found);
         return -3;
     }
@@ -3995,6 +4001,60 @@ int linkpos_weapon_equip(uint64_t item, const char *name) {
     LOG("[linkpos] weapon equip #%llu: %s (item %llx, life %d, equipped flag %d, player request %s)\n", (unsigned long long)g_nwpn_equip, name,
         (unsigned long long)item, *(const int32_t *)(uintptr_t)(item + 0x20), *(const uint8_t *)(uintptr_t)(item + 0x24),
         (r & 1) ? "sent" : "REFUSED (no player equipment object)");
+    return 1;
+}
+
+// (eqarmor) take one piece off, the way BotW's quick selector's "none" entry does (1.9.0 0x7100e25948): PauseMenuDataMgr
+// unequip(mgr, item) 0x7100d9a590 on the equipped item of that type, then the player's wanted name for the slot = the
+// pouch's default name for the type (0x7100d940c4(mgr, type), e.g. Armor_Default_Upper) via 0x7100cbe4d0(player, name,
+// 0x1e, -1, &0); player = 0x7100cc6fd0([PlayerInfo]). type 0 / 4..6. 1 = done, 0 = nothing of that type equipped,
+// -1 = refused (no site / not now), -2 = no PauseMenuDataMgr / player.
+int linkpos_pouch_unequip(int type) {
+    Cpu *c = g_in_frame ? kernel_current_cpu() : NULL;
+    uint64_t f_un = SS->pouch_unequip, f_dn = SS->pouch_dflt_name, f_set = SS->player_equip_set, f_pl = SS->player_from_info;
+    uint64_t pinfo = SS->player_info_ptr, got = PMDM_GOT;
+    uint64_t pp = in_guest(got) ? *(const uint64_t *)(uintptr_t)got : 0;
+    uint64_t mgr = in_guest(pp) ? *(const uint64_t *)(uintptr_t)pp : 0;
+    if (!c || !f_un || !f_dn || !f_set || !f_pl || !pinfo || !(type == 0 || (type >= 4 && type <= 6)) || !dispatch_lookup(f_un) ||
+        !dispatch_lookup(f_dn) || !dispatch_lookup(f_set) || !dispatch_lookup(f_pl)) {
+        LOG("[linkpos] pouch unequip %d refused (%s)\n", type, !f_un || !f_set ? "no site for this game version" : !c ? (g_in_frame ? "no guest cpu" : "outside linkpos_frame") : "bad type / no function");
+        return -1;
+    }
+    uint64_t info = in_guest(pinfo) ? *(const uint64_t *)(uintptr_t)pinfo : 0;
+    if (!in_guest(mgr) || !in_guest(info)) return -2;
+    if (readable(mgr + 0x68, 0x18) != 0x18 || *(const int32_t *)(uintptr_t)(mgr + 0x7c) != 8) return -2;
+    uint64_t head = mgr + 0x68, n = *(const uint64_t *)(uintptr_t)(head + 8), item = 0;
+    for (int k = 0; k < 500 && in_guest(n) && n != head; k++) {
+        uint64_t it = n - 8;
+        if (readable(it, 0x90) == 0x90 && *(const int32_t *)(uintptr_t)(it + 0x18) == type && *(const uint8_t *)(uintptr_t)(it + 0x24)) { item = it; break; }
+        n = *(const uint64_t *)(uintptr_t)(n + 8);
+    }
+    if (!item) { LOG("[linkpos] pouch unequip: nothing of type %d equipped\n", type); return 0; }
+    char nm[64] = "?";
+    wpn_item_name(item, nm, sizeof nm);
+    Cpu save = *c;
+    uint64_t sp = (c->sp - 0x100) & ~0xfull;
+    c->sp = sp;
+    c->x[0] = mgr, c->x[1] = item;
+    guest_call(c, f_un);
+    *c = save, c->sp = sp;
+    c->x[0] = info;
+    guest_call(c, f_pl);
+    uint64_t player = c->x[0];
+    *c = save, c->sp = sp;
+    c->x[0] = mgr, c->x[1] = (uint64_t)type;
+    guest_call(c, f_dn);
+    uint64_t dname = c->x[0];
+    *c = save;
+    if (in_guest(player) && in_guest(dname)) {
+        c->sp = sp;
+        memset((void *)(uintptr_t)(sp + 0x20), 0, 8);  // (the 8-byte modifier, 0)
+        c->x[0] = player, c->x[1] = dname, c->x[2] = 0x1e, c->x[3] = 0xffffffffu, c->x[4] = sp + 0x20;
+        guest_call(c, f_set);
+        *c = save;
+    }
+    LOG("[linkpos] pouch unequip: %s (type %d, item %llx) taken off; player %llx, default name %llx%s\n", nm, type, (unsigned long long)item,
+        (unsigned long long)player, (unsigned long long)dname, in_guest(player) && in_guest(dname) ? "" : " - NO player request");
     return 1;
 }
 

@@ -5343,6 +5343,7 @@ static void live_poll(const float p[3], uint64_t present) {
                 *p = (int)v, LOG("[sora] live: %s %d (Roxas only, added to the Sora value)\n", key, *p);
             }
             else if (!strcmp(key, "wpnfake")) g_wpn_fake = (int)v, LOG("[sora] live: wpnfake %d (%s)\n", g_wpn_fake, g_wpn_fake > 0 && g_wpn_fake <= WPN_N ? WPN_TAB[g_wpn_fake - 1].name : "off: the real equipped weapon");  // (s128)
+            else if (!strcmp(key, "eqarmor")) g_eqarmor = v != 0, LOG("[sora] live: eqarmor %d (Equipment Armor rows: %s)\n", g_eqarmor, g_eqarmor ? "pick / take off pieces" : "show only (s120)");
             else if (!strcmp(key, "eqtabs")) g_eqtabs = v != 0, LOG("[sora] live: eqtabs %d (Equipment picker: %s)\n", g_eqtabs, g_eqtabs ? "Keyblades / BotW Weapons tabs, L1 / R1" : "one list (s128)");
             else if (!strcmp(key, "eqlook")) g_eqlook = v != 0, LOG("[sora] live: eqlook %d (Equipment page: %s)\n", g_eqlook, g_eqlook ? "vanilla KH2 look" : "the old Customize-style page");
             else if (!strncmp(key, "wgz", 3) && key[3] >= '0' && key[3] <= '2' && !key[4]) g_wgz[key[3] - '0'] = (int)v, LOG("[sora] live: %s %d cm (BotW weapon type %c: model origin past the grip)\n", key, (int)v, key[3]);  // (s128)
@@ -6877,6 +6878,8 @@ static void sora_mod_frame_body(void) {
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
         g_eqtabs = env_f("SAVAGEWIND_SORA_EQ_TABS", (float)g_eqtabs) != 0;  // (eqtabs)
+        g_eqarmor = env_f("SAVAGEWIND_SORA_EQ_ARMOR", (float)g_eqarmor) != 0;  // (eqarmor)
+        if (g_eqarmor) LOG("[sora] eqarmor on: the Equipment page's Head / Body / Legs rows pick armor (None = take it off)\n");
         if (g_eqtabs) LOG("[sora] eqtabs on: the Equipment picker has a Keyblades and a BotW Weapons tab (L1 / R1)\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);

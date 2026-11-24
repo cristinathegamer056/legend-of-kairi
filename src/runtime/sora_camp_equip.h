@@ -44,7 +44,17 @@ static int cp_eq_has_wpn(const CpVals *v, int slot) { return g_eqlook && v->wpn_
 // g_eq_tab 0 = the owned Keyblades (no s128 top entry), 1 = the pouch weapons Sora can swing (CP_EQ_BW + v->bw index).
 // g_eq_tab is set when the picker opens (the kind in the hand) and by L / R. Live "set eqtabs 0" = the s128 list.
 #define CP_EQ_BW 2000
-#define CP_EQ_LMAX (KB_N + 1 + CP_BW_MAX)
+#define CP_EQ_LMAX (KB_N + 1 + CP_BW_MAX + CP_AR_MAX + 1)
+// (eqarmor) user: "add Armor to the equipment menu" (+ "None" first to take a piece off; BotW keeps applying the armor's
+// Defense to the hits, the KH2 pages show level Def + armor). An armor row's picker lists CP_EQ_ARN (None) + CP_EQ_AR + its
+// v->ar index; picking one wears it in BotW (BotW's own quick-selector calls). Live "set eqarmor 0" = the s120 show-only rows.
+#define CP_EQ_ARN 4000
+#define CP_EQ_AR 4001
+static int cp_eq_has_ar(const CpVals *v) { return g_eqlook && g_eqarmor && v->ar_on; }
+static int cp_eq_ar_cur(const CpVals *v, int a) {
+    for (int k = 0; k < v->ar_n[a]; k++) if (v->ar_eq[a][k]) return CP_EQ_AR + k;
+    return CP_EQ_ARN;
+}
 static int g_eq_tab;  // (g_eqtabs: sora_kb.h)
 static int cp_eq_has_bw(const CpVals *v, int slot) { return g_eqlook && g_eqtabs && v->bw_base && slot == KB_MAIN; }
 static int cp_eq_bw_cur(const CpVals *v) {  // the equipped pouch weapon's entry (else the first)
@@ -53,6 +63,13 @@ static int cp_eq_bw_cur(const CpVals *v) {  // the equipped pouch weapon's entry
 }
 static int cp_eq_plist(const CpVals *v, const int kb[KB_SLOTS], int slot, int out[CP_EQ_LMAX]) {
     int n = 0;
+    if (slot >= CP_EQ_ARM) {  // (eqarmor)
+        int a = slot - CP_EQ_ARM;
+        if (a < 0 || a > 2 || !cp_eq_has_ar(v)) return 0;
+        out[n++] = CP_EQ_ARN;
+        for (int k = 0; k < v->ar_n[a] && k < CP_AR_MAX; k++) out[n++] = CP_EQ_AR + k;
+        return n;
+    }
     if (cp_eq_has_bw(v, slot)) {
         if (g_eq_tab) { for (int k = 0; k < v->bw_n && k < CP_BW_MAX; k++) out[n++] = CP_EQ_BW + k; return n; }
         return cp_eq_list(v, kb, out);
@@ -223,8 +240,26 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
         else if (slot == KB_MAIN && wrow) snprintf(hlit, sizeof hlit, "Link's BotW weapon.");  // (s128 review: CsDesc.text is 24 bytes)  // (s128 wpnmenu)
         else { int ki = kb_index(kb_slot_id(kb, slot)); hk = ki >= 0 ? kb_text_key(ki) + 1 : cp_eq_row_key(slot) + 1; }  // (s120b ref0: the Keyblade's description)
     } else {  // ---- state 5 / 6: the picker (vanilla swaps the window and the panel ags) ----
-        cp_eq_title3_(title, cp_eq_row_key(slot));
+        cp_eq_title3_(title, slot >= CP_EQ_ARM ? CP_EQ_KEY_ARMOR : cp_eq_row_key(slot));
         nt = 3;
+        if (slot >= CP_EQ_ARM) {  // (eqarmor) None + the slot's pieces: name, Defense column (the form sub-weapon kind's ags: GUESS)
+            static const char *const SLOTN[3] = {"Head", "Body", "Legs"};
+            int a = slot - CP_EQ_ARM, l[CP_EQ_LMAX], n = cp_eq_plist(v, kb, slot, l);
+            title[2].msg_key = 0, snprintf(title[2].text, sizeof title[2].text, "%s", SLOTN[a < 0 ? 0 : a > 2 ? 2 : a]);
+            for (int e = top < 0 ? 0 : top; e < n && np < CP_EQ_VIS; e++, np++) {
+                int i = l[e], m = 0, k = i - CP_EQ_AR;
+                char df[12];
+                prk[np][m++] = cp_eq_txt_(123, i == CP_EQ_ARN ? "None" : v->ar_name[a][k], 0, CS_BOTTOM_LEFT, 0, 0);
+                if (i == pick) { prk[np][m++] = sel_kids[0]; prk[np][m++] = sel_kids[1]; }
+                pkids[np * 2] = (CsDesc){ .y = 26.0f * np, CP_SEQ_(-1, 221, -1), .nkids = (uint8_t)m, .kids = prk[np] };
+                snprintf(df, sizeof df, "%d", i == CP_EQ_ARN ? 0 : v->ar_def[a][k]);
+                pcol[np][0] = cp_eq_txt_(124, i == CP_EQ_ARN ? "" : df, 0, CS_BOTTOM_CENTER, 44.5f, 0);
+                pkids[np * 2 + 1] = (CsDesc){ .y = 26.0f * np, CP_SEQ_(-1, 222, -1), .nkids = 1, .kids = pcol[np] };
+            }
+            win[0] = (CsDesc){ CP_SEQ_(217, 218, 219), .nkids = (uint8_t)(np * 2), .kids = pkids };
+            if (pick == CP_EQ_ARN) snprintf(hlit, sizeof hlit, "Take this piece off.");
+            else snprintf(hlit, sizeof hlit, "Defense %d", pick - CP_EQ_AR >= 0 && pick - CP_EQ_AR < v->ar_n[a] ? v->ar_def[a][pick - CP_EQ_AR] : 0);
+        } else {
         if (cp_eq_has_bw(v, slot)) title[2].msg_key = 0, snprintf(title[2].text, sizeof title[2].text, "%s", g_eq_tab ? "BotW Weapons" : "Keyblades");  // (eqtabs)
         int l[CP_EQ_LMAX], n = cp_eq_plist(v, kb, slot, l), sub = cp_eq_is_sub(slot);
         for (int e = top < 0 ? 0 : top; e < n && np < CP_EQ_VIS; e++, np++) {
@@ -246,6 +281,7 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
         if (pick >= CP_EQ_BW) snprintf(hlit, sizeof hlit, "Durability %d/%d", v->bw_life[pick - CP_EQ_BW], v->bw_life_max[pick - CP_EQ_BW]);  // (eqtabs)
         else if (pick == CP_EQ_WPN) snprintf(hlit, sizeof hlit, "Use Link's BotW weapon.");  // (s128 review: <= 23 chars)  // (s128 wpnmenu)
         else hk = kb_text_key(pick) + 1;
+        }  // (eqarmor: the weapon / Keyblade picker)
     }
     help[0] = (CsDesc){ .x = (float)g_eqhx, .y = (float)g_eqhy, CP_SEQ_(-1, 124, -1), .flags = CS_A_TEXT_IGNORE_COLOR, .anchor = CS_BOTTOM_LEFT, .msg_key = hk };  // (s120b: was 150 352)
     if (hlit[0]) snprintf(help[0].text, sizeof help[0].text, "%s", hlit);
@@ -268,6 +304,11 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
         pk[npk++] = (CsDesc){ .x = -95 + g_eq2x, .y = 46 + g_eq2y, CP_SEQ2_(-1, 33, -1), .msg_key = CP_EQ_KEY_ABILITY, .anchor = CS_BOTTOM_LEFT, .flags = CS_A_TEXT_IGNORE_SCALE };  // (s120b ag 33 = label, no brackets)
         pk[npk++] = cp_eq_txt_(124, NULL, cp_eq_ab_key(kb_ability(cur_id)), CS_BOTTOM_CENTER, -100 + g_eq2x, 66 + g_eq2y);
         pnl[0] = (CsDesc){ CP_SEQ_(287, 288, 289), .nkids = (uint8_t)npk, .kids = pk };
+    } else if (slot >= CP_EQ_ARM) {  // (eqarmor) "Defense  cur > new  [ total worn ]" (GUESS layout: the weapon picker's first line)
+        int a = slot - CP_EQ_ARM, k = pick - CP_EQ_AR, cur = v->arm_def[a], nw = pick == CP_EQ_ARN || k < 0 || k >= v->ar_n[a] ? 0 : v->ar_def[a][k];
+        cp_eq_cmp_lines_(&pk[0], pl3, 0, cur, nw, cp_eq_arm_total(v) - cur + nw, 26);
+        snprintf(pk[0].text, sizeof pk[0].text, "Defense");
+        pnl[0] = (CsDesc){ CP_SEQ_(223, 224, 225), .nkids = 2, .kids = pk };
     } else {
         int sub = cp_eq_is_sub(slot), isw = pick >= CP_EQ_WPN, nw = isw ? 0 : KB_TAB[pick].id;
         int curw = slot == KB_MAIN && wrow;  // (s128 wpnmenu) the weapon is in the hand now / is picked

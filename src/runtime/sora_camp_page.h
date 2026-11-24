@@ -30,6 +30,7 @@ static void cp_name_(CsDesc *d, int i) {
 // one Status page column set (slice 2): a value < 0 shows "--"
 typedef struct { int lv, exp, next, hp, hp_max, mp, mp_max, ap_used, ap_max, drive, bonus_lv, str, mag, def, res[4]; } CpStat;
 #define CP_BW_MAX 20  // (eqtabs) BotW's weapon pouch holds at most 20
+#define CP_AR_MAX 48  // (eqarmor) armor pieces listed per slot (Head / Body / Legs)
 typedef struct { int munny; int time_s; int lv[3]; int hp[3], hp_max[3], mp[3], mp_max[3]; CpStat st[3];
                  uint16_t ab_id[64]; int ab_n, ab_ap_max; abm_t ab_on; int sc[CUST_SLOTS]; int kb[KB_SLOTS]; uint32_t kb_own; int kb_forms;
                  int sp_hide;  // (s147) bit sp = a spell the player does not have yet: left out of the Customize picker (KH2 lists learned spells; 0 = all)
@@ -41,7 +42,11 @@ typedef struct { int munny; int time_s; int lv[3]; int hp[3], hp_max[3], mp[3], 
                  int wpn_on, wpn_use, wpn_atk, wpn_life, wpn_life_max; char wpn_name[32];
                  // (eqtabs) the BotW Weapons tab: bw_base = Sora's base form (the tab exists), bw_n pouch weapons he can swing
                  int bw_base, bw_n; uint64_t bw_item[CP_BW_MAX]; int bw_atk[CP_BW_MAX], bw_life[CP_BW_MAX], bw_life_max[CP_BW_MAX];
-                 uint8_t bw_eq[CP_BW_MAX]; char bw_name[CP_BW_MAX][24], bw_actor[CP_BW_MAX][32]; } CpVals;  // (s128 wpnmenu) Link's BotW weapon: wpn_on = equipped + usable here (the picker's top entry), wpn_use = Sora swings it (g_wpn_use), wpn_atk = power + atk_up
+                 uint8_t bw_eq[CP_BW_MAX]; char bw_name[CP_BW_MAX][24], bw_actor[CP_BW_MAX][32];
+                 // (eqarmor) ar_on = the armor rows pick; per slot (0 Head 1 Body 2 Legs) the pouch pieces of that type. With ar_on
+                 // arm_n is 3 and arm_name / arm_def[slot] = the worn piece ("None", 0 when nothing)
+                 int ar_on, ar_n[3]; uint64_t ar_item[3][CP_AR_MAX]; uint8_t ar_def[3][CP_AR_MAX], ar_eq[3][CP_AR_MAX];
+                 char ar_name[3][CP_AR_MAX][24], ar_actor[3][CP_AR_MAX][24]; } CpVals;  // (s128 wpnmenu) Link's BotW weapon: wpn_on = equipped + usable here (the picker's top entry), wpn_use = Sora swings it (g_wpn_use), wpn_atk = power + atk_up
 // ab_* = Sora's learned abilities (slice 3), sc = his shortcuts (slice 4), kb = his Keyblades (slice 5); 0 Sora 1 Donald 2 Goofy; munny / time_s < 0 = "--"
 // kb_own = the owned Keyblades (s89 kb: bit i = KB_TAB[i]; the picker adds KK + Star Seeker + the equipped ones)
 
@@ -61,6 +66,7 @@ typedef struct { int state, row, timer, held, layout_l2, layout_f, page, who, ne
 // kb_set: Keyblade slot kb_slot <- item id kb_id
 typedef struct { uint8_t db_set /* (s140) Debug page: BACKEND row + 1 changed */; int db_val; uint8_t eat, pulse_plus, pass_plus, draw, se, ab_set, sc_set, kb_set, wpn_set /* (s128) 1 = BotW weapon picked, 2 = a Keyblade picked in the Weapons slot */, kb_swap /* (s118) other slot + 1 */; uint16_t ab_id; abm_t ab_on; int sc_slot, sc_spell, kb_slot, kb_id;
                  int bw_pick;  // (eqtabs) 1 + the v->bw index picked in the BotW Weapons tab (equip it in BotW)
+                 int ar_set, ar_idx;  // (eqarmor) ar_set = armor slot + 1 picked; ar_idx = its v->ar index, -1 = None (take it off)
                  int log_row; const char *log; } CpOut;  // log_row -1 = none
 
 #define CP_ROWS 6
@@ -408,6 +414,15 @@ static void cp_equip_input_(CampPage *p, const CampSeq *s, uint64_t press, float
     if (p->sub == 1) {
         if (press & CP_BTN_B) { cp_cust_go_(p, s, v, 0, true); out->se = CP_SE_CANCEL; out->log = "equip list back"; return; }
         if (press & (CP_BTN_ZL | CP_BTN_ZR)) { out->se = CP_SE_ERROR; return; }
+        if ((press & CP_BTN_A) && p->eq_slot >= CP_EQ_ARM && cp_eq_has_ar(v)) {  // (eqarmor) the slot's armor picker
+            int l[CP_EQ_LMAX], n = cp_eq_plist(v, p->kb, p->eq_slot, l), e;
+            p->eq_pick = cp_eq_ar_cur(v, p->eq_slot - CP_EQ_ARM);
+            e = cp_eq_pos(l, n, p->eq_pick);
+            p->eq_top = e < CP_EQ_VIS ? 0 : e - CP_EQ_VIS + 1;
+            cp_cust_go_(p, s, v, 2, false);
+            out->se = CP_SE_DECIDE; out->log = "equip armor picker";
+            return;
+        }
         if ((press & CP_BTN_A) && p->eq_slot >= CP_EQ_ARM) { out->se = CP_SE_ERROR; out->log = "equip armor"; return; }  // (s120) show only
         if (press & CP_BTN_A) {
             int i = kb_index(kb_slot_id(p->kb, p->eq_slot)), l[CP_EQ_LMAX], n, e;
@@ -430,6 +445,19 @@ static void cp_equip_input_(CampPage *p, const CampSeq *s, uint64_t press, float
         return;
     }
     if (press & CP_BTN_B) { cp_cust_go_(p, s, v, 1, false); out->se = CP_SE_CANCEL; out->log = "equip picker back"; return; }
+    if ((press & CP_BTN_A) && p->eq_slot >= CP_EQ_ARM && cp_eq_has_ar(v)) {  // (eqarmor) wear this piece / None = take it off
+        int a = p->eq_slot - CP_EQ_ARM, k = p->eq_pick == CP_EQ_ARN ? -1 : p->eq_pick - CP_EQ_AR;
+        if (a < 0 || a > 2 || k < -1 || k >= v->ar_n[a]) { out->se = CP_SE_ERROR; out->log = "equip armor bad entry"; return; }
+        CpVals nv = *v;
+        snprintf(nv.arm_name[a], sizeof nv.arm_name[a], "%s", k < 0 ? "None" : v->ar_name[a][k]);
+        nv.st[0].def += (k < 0 ? 0 : v->ar_def[a][k]) - nv.arm_def[a];
+        nv.arm_def[a] = k < 0 ? 0 : v->ar_def[a][k];
+        for (int j = 0; j < nv.ar_n[a]; j++) nv.ar_eq[a][j] = j == k;
+        out->ar_set = a + 1, out->ar_idx = k;
+        cp_cust_go_(p, s, &nv, 1, false);
+        out->se = CP_SE_DECIDE; out->log = k < 0 ? "equip armor off" : "equip armor piece";
+        return;
+    }
     if ((press & CP_BTN_A) && (p->eq_slot < 0 || p->eq_slot >= KB_SLOTS)) { out->se = CP_SE_ERROR; out->log = "equip bad slot"; return; }  // (s120 review) never kb_set an armor row
     if ((press & (CP_BTN_L | CP_BTN_R)) && cp_eq_has_bw(v, p->eq_slot)) {  // (eqtabs) L1 / R1: Keyblades <-> BotW Weapons
         if (!g_eq_tab && v->bw_n <= 0) { out->se = CP_SE_ERROR; out->log = "equip tab: no BotW weapon Sora can swing"; return; }

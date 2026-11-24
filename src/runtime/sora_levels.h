@@ -1634,6 +1634,7 @@ static void sl_died_tick(void) {
 // attacker = the nearest enemy within 20 m (GUESS: BotW's hit carries no attacker for us). Exe export
 // linkpos_hurt_scale_set(pct) applies it in the player addDamage hook (old exe: no effect). Live khdef 0 = off.
 static int sl_khdef = 1;
+static void armor_hit_log(int pct);  // (eqarmor, sora_camp.h)
 static void sl_def_tick(void) {
     static void (*set)(int);
     static bool bound;
@@ -1678,6 +1679,7 @@ static void sl_def_tick(void) {
     }
     if (!sl_khdef) pct = 100;
     set(pct);
+    armor_hit_log(pct);
     if (pct != said) {
         said = pct;
         LOG("[sora] khdef: incoming x%d%% (nearest enemy KH LV%d, Sora LV %d Def %d, diff %d)\n", pct, lv, sl_lv(),

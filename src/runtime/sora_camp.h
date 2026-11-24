@@ -48,6 +48,49 @@ static void camp_load(void) {
 }
 
 // the page's values, snapshotted at open (cp_tick rebuilds the tree on a row change from them)
+// (eqarmor) the armor pouch: pieces of pouch type 4 / 5 / 6 (Head / Upper / Lower) that sora_armor_tab.h knows (BotW name +
+// Defense), in pouch order, read like sora_wpn.h wpn_pouch_list. -> count for that slot.
+static int armor_pouch_list(int slot, uint64_t *item, uint8_t *def, uint8_t *eq, char (*name)[24], char (*actor)[24], int max) {
+    uint64_t got = sora_sites()->pmdm_got;
+    if (!got || !rd_ok(got, 8)) return 0;
+    uint64_t pp = *(const uint64_t *)(uintptr_t)got;
+    if (!rd_ok(pp, 8)) return 0;
+    uint64_t mgr = *(const uint64_t *)(uintptr_t)pp;
+    if (!rd_ok(mgr + 0x68, 0x18) || *(const int32_t *)(uintptr_t)(mgr + 0x7c) != 8) return 0;
+    uint64_t head = mgr + 0x68, nd = *(const uint64_t *)(uintptr_t)(head + 8);
+    int n = 0;
+    for (int k = 0; k < 1000 && nd && nd != head && n < max; k++) {
+        uint64_t it = nd - 8;
+        if (!rd_ok(it, 0x90)) break;
+        nd = *(const uint64_t *)(uintptr_t)(nd + 8);
+        if (*(const int32_t *)(uintptr_t)(it + 0x18) != 4 + slot) continue;
+        uint64_t sp = *(const uint64_t *)(uintptr_t)(it + 0x30);
+        char a[40];
+        int i;
+        if (!rd_ok(sp, 1)) continue;
+        for (i = 0; i < (int)sizeof a - 1 && rd_ok(sp + (uint64_t)i, 1) && ((const char *)(uintptr_t)sp)[i]; i++) a[i] = ((const char *)(uintptr_t)sp)[i];
+        a[i] = 0;
+        const SoraArmor *d = i ? armor_find(a) : NULL;
+        if (!d) continue;
+        item[n] = it, def[n] = d->def, eq[n] = *(const uint8_t *)(uintptr_t)(it + 0x24) != 0;
+        snprintf(name[n], 24, "%s", d->name), snprintf(actor[n], 24, "%s", d->actor);
+        n++;
+    }
+    return n;
+}
+// (eqarmor) every hit Sora takes: Link's life before / after, the KH2 Defense percent and the armor Defense worn, so a hit
+// with and without armor can be compared (user's choice: BotW keeps applying the armor; this log checks that it does).
+static void armor_hit_log(int pct) {
+    static int last = -1;
+    int life = linkpos_link_life();
+    if (last > 0 && life >= 0 && life < last) {
+        char nm[3][24];
+        int df[3], n = armor_worn(nm, df), sum = 0;
+        for (int i = 0; i < n; i++) sum += df[i];
+        LOG("[armor] hit: Link life %d -> %d (-%d), KH2 Defense x%d%%, armor Defense %d worn (%d pieces)\n", last, life, last - life, pct, sum, n);
+    }
+    last = life;
+}
 static void camp_vals(CpVals *v) {
     memset(v, 0, sizeof *v);
     g_cp_solo = rm_actor() > 0;  // (s111 roxmenu: Roxas alone in the member rows / plates)
@@ -120,6 +163,19 @@ static void camp_vals(CpVals *v) {
             v->bw_n = n;
             LOG("[sora] camp: BotW Weapons tab: %d pouch weapon%s Sora can swing\n", n, n == 1 ? "" : "s");
         }
+    }
+    if (g_eqarmor) {  // (eqarmor) the three rows from the pouch (what is worn, "None" when nothing) + each slot's pieces
+        int sum = 0;
+        v->ar_on = 1, v->arm_n = 3;
+        for (int a = 0; a < 3; a++) {
+            v->ar_n[a] = armor_pouch_list(a, v->ar_item[a], v->ar_def[a], v->ar_eq[a], v->ar_name[a], v->ar_actor[a], CP_AR_MAX);
+            snprintf(v->arm_name[a], sizeof v->arm_name[a], "None"), v->arm_def[a] = 0;
+            for (int k = 0; k < v->ar_n[a]; k++)
+                if (v->ar_eq[a][k]) snprintf(v->arm_name[a], sizeof v->arm_name[a], "%s", v->ar_name[a][k]), v->arm_def[a] = v->ar_def[a][k];
+            sum += v->arm_def[a];
+        }
+        v->st[0].def += sum;  // (shown only: BotW applies the armor itself; sl_def_tick keeps the level Defense)
+        LOG("[sora] camp: armor pickers: %d head, %d body, %d legs pieces; worn Defense %d (Status Def %d)\n", v->ar_n[0], v->ar_n[1], v->ar_n[2], sum, v->st[0].def);
     }
     LOG("[sora] camp: armor rows %d%s%s%s%s%s%s\n", v->arm_n, v->arm_n > 0 ? " " : "", v->arm_n > 0 ? v->arm_name[0] : "",
         v->arm_n > 1 ? ", " : "", v->arm_n > 1 ? v->arm_name[1] : "", v->arm_n > 2 ? ", " : "", v->arm_n > 2 ? v->arm_name[2] : "");
@@ -263,6 +319,18 @@ static bool camp_frame(uint64_t present) {
         }
         LOG("[sora] camp: Weapons slot -> %s\n", g_wpn_use ? "BotW weapon" : "Keyblade");
         sl_persist_save();
+    }
+    if (out.ar_set > 0 && out.ar_set <= 3 && CAMP.v.ar_on) {  // (eqarmor) wear the piece / take it off, at once (BotW's own calls)
+        int a = out.ar_set - 1, k = out.ar_idx;
+        CpVals *cv = &CAMP.v;
+        if (k >= 0 && k < cv->ar_n[a]) armor_equip_ask(4 + a, cv->ar_item[a][k], cv->ar_actor[a][k]);
+        else armor_equip_ask(4 + a, 0, NULL);
+        wpn_equip_tick(true);
+        cv->st[0].def += (k >= 0 ? cv->ar_def[a][k] : 0) - cv->arm_def[a];
+        snprintf(cv->arm_name[a], sizeof cv->arm_name[a], "%s", k >= 0 ? cv->ar_name[a][k] : "None");
+        cv->arm_def[a] = k >= 0 ? cv->ar_def[a][k] : 0;
+        for (int j = 0; j < cv->ar_n[a]; j++) cv->ar_eq[a][j] = j == k;
+        LOG("[sora] camp: armor slot %d -> %s (Defense %d, Status Def %d)\n", a, cv->arm_name[a], cv->arm_def[a], cv->st[0].def);
     }
     if (out.kb_set && (out.kb_swap ? kb_swap_v(out.kb_slot, out.kb_id, "camp") : kb_set_v(out.kb_slot, out.kb_id, "camp")) >= 0) {  // (s85; s118 kbswap)
         int an = CAMP.v.arm_n, ad[3];                                // (s120) the Armor rows stay as read at open: the paused world
