@@ -497,8 +497,11 @@ static bool bs_animal_skip(uint64_t actor) {
     char nm[64];
     if (!g_bs_noanimal || !actor || !linkpos_enemy_name(actor, nm, sizeof nm) || strncmp(nm, "Animal_", 7)) return false;
     if (!strncmp(nm + 7, "Wolf_", 5) || !strncmp(nm + 7, "Bear_", 5)) return false;
-    static uint64_t said;
-    if (said != actor && g_bs_log) said = actor, LOG("[sora] bsnoanimal: %s is no fight (no battle stance)\n", nm);
+    static uint64_t said[32];  // (each animal logged once: two in range alternated every frame -> 138k lines)
+    static int ns;
+    bool known = false;
+    for (int i = 0; i < 32 && !known; i++) known = said[i] == actor;
+    if (!known && g_bs_log) said[ns++ & 31] = actor, LOG("[sora] bsnoanimal: %s is no fight (no battle stance)\n", nm);
     return true;
 }
 static const Mot *mot_st(int id) {
