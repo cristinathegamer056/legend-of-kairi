@@ -18,8 +18,17 @@
 #define O_BINARY 0
 #endif
 
-// Files kept open (macOS allows 256 open files by default, and the overlay keeps its own open: runtime/services/fs.c)
+// Files kept open. Windows: an open is slow (the antivirus scans each file it opens, several ms) and BotW streams many
+// files while the player travels: with 32 they were opened again and again and each open stalled the game thread (hitches of
+// 20 - 40 ms), so it keeps 512 (the C runtime allows 8192). Elsewhere 32 (macOS allows 256 open files by default, and the
+// overlay keeps its own open: runtime/services/fs.c).
+#ifndef OPEN_FILES  // (tools/test_romfs.c also builds with a small one: the closing path under 8 threads)
+#ifdef _WIN32
+#define OPEN_FILES 512
+#else
 #define OPEN_FILES 32
+#endif
+#endif
 
 typedef struct {
     int file, fd, busy;  // busy: reads using fd right now
@@ -60,36 +69,54 @@ RomfsImage *romfs_image_open(const char *dir, char *why, size_t why_size) {
 
 uint64_t romfs_image_size(const RomfsImage *img) { return img->size; }
 
-// The descriptor of file i, marked busy in its slot (*slot; -1: every slot busy, the caller closes it). lock held.
+// The descriptor of file i, marked busy in its slot (*slot; -1: every slot busy, the caller closes it). Takes the lock
+// itself: a file that is not open yet is opened (and the slot's old file closed) OUTSIDE it, so a slow open never holds up
+// the other threads' reads of files that are already open.
 static int file_fd(RomfsImage *img, int i, int *slot) {
-    int pick = -1;
+    pthread_mutex_lock(&img->lock);
     for (int k = 0; k < OPEN_FILES; k++) {
         OpenFile *o = &img->open[k];
         if (o->fd >= 0 && o->file == i) {
             o->busy++, o->used = ++img->tick, *slot = k;
-            return o->fd;
+            int fd = o->fd;
+            pthread_mutex_unlock(&img->lock);
+            return fd;
+        }
+    }
+    pthread_mutex_unlock(&img->lock);
+    int fd = open(img->layout.files[i].path, O_RDONLY | O_BINARY);
+    *slot = -1;
+    if (fd < 0) return fd;
+    pthread_mutex_lock(&img->lock);
+    int pick = -1;
+    for (int k = 0; k < OPEN_FILES; k++) {
+        OpenFile *o = &img->open[k];
+        if (o->fd >= 0 && o->file == i) {  // another thread opened it meanwhile: share that one
+            o->busy++, o->used = ++img->tick, *slot = k;
+            int mine = fd;
+            fd = o->fd;
+            pthread_mutex_unlock(&img->lock);
+            close(mine);
+            return fd;
         }
         if (!o->busy && (pick < 0 || o->used < img->open[pick].used)) pick = k;
     }
-    int fd = open(img->layout.files[i].path, O_RDONLY | O_BINARY);
-    *slot = fd >= 0 ? pick : -1;
-    if (*slot < 0) return fd;
-    if (img->open[pick].fd >= 0) close(img->open[pick].fd);
-    img->open[pick] = (OpenFile){i, fd, 1, ++img->tick};
+    int old = -1;
+    if (pick >= 0) old = img->open[pick].fd, img->open[pick] = (OpenFile){i, fd, 1, ++img->tick}, *slot = pick;
+    pthread_mutex_unlock(&img->lock);
+    if (old >= 0) close(old);  // (its slot was not busy: no read uses it)
     return fd;
 }
 
 static bool read_file(RomfsImage *img, int i, uint8_t *dst, uint64_t n, uint64_t off) {
     int slot;
-    pthread_mutex_lock(&img->lock);
     int fd = file_fd(img, i, &slot);
-    pthread_mutex_unlock(&img->lock);
     if (fd < 0) return false;
     bool ok = pread(fd, dst, n, (off_t)off) == (ssize_t)n;
     pthread_mutex_lock(&img->lock);
     if (slot >= 0) img->open[slot].busy--;
-    else close(fd);
     pthread_mutex_unlock(&img->lock);
+    if (slot < 0) close(fd);
     return ok;
 }
 
