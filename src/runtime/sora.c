@@ -897,9 +897,10 @@ static int brk_blade(const HitWin *win, const float prev[6], const float now[6],
 // (default 1.0), "set swhitr <cm>" / "set swhith <cm>" the lever's cylinder (GUESS 80 / 300 cm; it connected in the test).
 static int g_swhit = 1;
 // (shrineswitch) the shrines' crystal switches too (exe names "SwitchHit" / "SwitchHitOnce", same SwitchHit AI as the lever; user:
-// "Sora couldn't hit the switch with his Keyblade" in a shrine, the log: repel 1 m from Dungeon056's SwitchHit). Default 0 while
-// testing; SAVAGEWIND_SORA_SWHIT_DGN=1 / live "set swhitdgn 1". An old exe lists only the lever (NEEDS EXE RELINK).
-static int g_swhit_dgn = 0;
+// "Sora couldn't hit the switch with his Keyblade" in a shrine, the log: repel 1 m from Dungeon056's SwitchHit).
+// On by default (user tested in Dungeon056: "Sora's keyblade works on the switches now!"); SAVAGEWIND_SORA_SWHIT_DGN=0 / live
+// "set swhitdgn 0" = the lever only. An old exe lists only the lever (NEEDS EXE RELINK).
+static int g_swhit_dgn = 1;
 static float g_swhit_v = 1.0f, g_swhit_r = 0.8f, g_swhit_h = 3.0f;
 static int swh_blade(const HitWin *win, const float prev[6], const float now[6], float to_u) {
     static LinkposSwitchesFn list;
@@ -6924,7 +6925,7 @@ static void sora_mod_frame_body(void) {
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
         g_swhit = env_f("SAVAGEWIND_SORA_SWHIT", (float)g_swhit) != 0;
         g_swhit_dgn = env_f("SAVAGEWIND_SORA_SWHIT_DGN", (float)g_swhit_dgn) != 0;  // (shrineswitch)
-        if (g_swhit_dgn) LOG("[sora] swhitdgn on: the Keyblade flips the shrines' crystal switches (SwitchHit / SwitchHitOnce)\n");
+        if (!g_swhit_dgn) LOG("[sora] swhitdgn off: the Keyblade flips the Goron cannon lever only\n");
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
         slog_open();
