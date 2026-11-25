@@ -49,7 +49,7 @@ static bool gparry_live(const char *key, int v) {
     else if (!strcmp(key, "gparryf54")) g_gparry_f54 = v;
     else if (!strcmp(key, "gparrycycle")) g_gparry_cyc = v != 0, g_gparry_n = 0;
     else return false;
-    LOG("[sora] gparry: live %s %d (parry window GFR 0..%d, stagger hit %d f54 %#x, %s)\n", key, v, g_gparry_win, g_gparry_dmg,
+    LOG("[sora] gparry: live %s %d (parry window GFR 0..%d, stagger hit %d f54 %#x, cycle %d, %s)\n", key, v, g_gparry_win, g_gparry_dmg,
         g_gparry_f54, g_gparry_cyc, gparry_on() ? "on" : "off");
     return true;
 }
