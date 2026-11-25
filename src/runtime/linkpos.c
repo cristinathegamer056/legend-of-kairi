@@ -109,7 +109,7 @@ static int env_int(const char *name, int def) {
     return e && *e ? atoi(e) : def;
 }
 
-static bool in_guest(uint64_t a) { return a >= GUEST_LO && a + 16 <= GUEST_HI; }
+static bool in_guest(uint64_t a) { return a >= GUEST_LO && a <= GUEST_HI - 16; }  // (mgelem: no a + 16 overflow, 0xffff... was "in")
 
 // How many of the n bytes at a can be read (committed, readable pages), so the dump never faults past the actor's heap.
 // (s81 fps hunt) A cache of the guest's 64 KB commit chunks seen committed: VirtualQuery on the 12.5 GB guest
@@ -121,7 +121,7 @@ static bool in_guest(uint64_t a) { return a >= GUEST_LO && a + 16 <= GUEST_HI; }
                      // VirtualQuery of the 3 GB run above it = 45 ms; copied enemy swings ran at 13-20 fps. Bitmap = 400 KB.)
 static volatile LONG64 g_rd_bits[((GUEST_HI - GUEST_LO) >> RD_CHUNK) / 64];
 static bool rd_cached(uint64_t a, size_t n) {
-    if (a < GUEST_LO || a + n > GUEST_HI || !n) return false;
+    if (a < GUEST_LO || a >= GUEST_HI || !n || n > GUEST_HI - a) return false;  // (mgelem: no a + n overflow)
     for (uint64_t c = (a - GUEST_LO) >> RD_CHUNK, e = (a + n - 1 - GUEST_LO) >> RD_CHUNK; c <= e; c++)
         if (!(g_rd_bits[c / 64] >> (c % 64) & 1)) return false;
     return true;
@@ -4647,7 +4647,7 @@ int linkpos_fire_burst(const float p[3]) {
 #define ER_SLOTS 128
 static int g_er_base = -1, g_er_ptr, g_er_off, g_er_slot = -1;  // (cached: base 0 actor / 1 damage manager, pointer or embedded, offset, vtable slot)
 static int er_slot_of(uint64_t p, uint64_t actor) {  // the react slot in p's vtable, -1 = p is not a reaction object of this actor
-    if (!in_guest(p) || readable(p, 0x18) != 0x18 || *(const uint64_t *)(uintptr_t)(p + 0x10) != actor) return -1;
+    if (!in_guest(p) || (p & 7) || readable(p, 0x18) != 0x18 || *(const uint64_t *)(uintptr_t)(p + 0x10) != actor) return -1;
     uint64_t vt = *(const uint64_t *)(uintptr_t)p;
     if (!in_guest(vt) || readable(vt, 8 * ER_SLOTS) != 8 * ER_SLOTS) return -1;
     if (g_er_slot >= 0) return *(const uint64_t *)(uintptr_t)(vt + 8 * (uint64_t)g_er_slot) == ELEM_REACT ? g_er_slot : -1;
