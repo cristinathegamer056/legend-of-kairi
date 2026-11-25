@@ -40,7 +40,7 @@ typedef struct { int munny; int time_s; int lv[3]; int hp[3], hp_max[3], mp[3], 
                  uint32_t db_party_have;  // (s220 members) bit c = character c may be offered on the Party rows (installed bake: sora_party.h party_have_mask)
                  int db_party_none;       // (s233) 1 = the Party rows offer "None" (PCH_NONE) after the characters (the game sets it; 0 = the s220 rows)
                  int eq_base_str, eq_base_mag;  // eq_base_* = Sora's Str / Mag without the Keyblade (0 / 0 = use st[0])
-                 int wpn_on, wpn_use, wpn_atk, wpn_life, wpn_life_max; char wpn_name[32];
+                 int wpn_on, wpn_use, wpn_atk, wpn_life, wpn_life_max; char wpn_name[32], wpn_actor[48];  // (botwpic: wpn_actor)
                  // (eqtabs) the BotW Weapons tab: bw_base = Sora's base form (the tab exists), bw_n pouch weapons he can swing
                  int bw_base, bw_n; uint64_t bw_item[CP_BW_MAX]; int bw_atk[CP_BW_MAX], bw_life[CP_BW_MAX], bw_life_max[CP_BW_MAX];
                  uint8_t bw_eq[CP_BW_MAX]; char bw_name[CP_BW_MAX][24], bw_actor[CP_BW_MAX][32];

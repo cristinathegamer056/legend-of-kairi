@@ -281,9 +281,13 @@ static const uint8_t *find4(const uint8_t *p, const uint8_t *end, const char *ma
 }
 unsigned char *items_icon(int i, int *w, int *h) {
     const GameItem *it = items_at(i);
-    if (!it) return NULL;
+    return it ? items_icon_actor(it->actor, w, h) : NULL;
+}
+// (botwpic) the same picture by the item's actor name (Weapon_Sword_001, Armor_001_Head, ...): RGBA8 straight alpha, NULL if none
+unsigned char *items_icon_actor(const char *actor, int *w, int *h) {
+    if (!actor || !*actor || strlen(actor) > 64) return NULL;
     char path[128];
-    snprintf(path, sizeof path, "UI/StockItem/%s.sbitemico", it->actor);
+    snprintf(path, sizeof path, "UI/StockItem/%s.sbitemico", actor);
     size_t zn = 0, n = 0;
     uint8_t *z = fs_game_file(path, &zn), *d = z ? yaz0_unpack(z, zn, &n) : NULL, *out = NULL;
     free(z);

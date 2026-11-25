@@ -188,9 +188,10 @@ static void camp_vals(CpVals *v) {
         WpnCur wc;
         bool base = !IN_VALOR && !IN_WISDOM && !IN_LIMIT && !IN_MASTER && !IN_FINAL && !IN_ANTI && !IN_MICKEY && (!IN_ROXAS || (g_wpn_rox && wpn_rox_exe()));  // (s137 roxwpn: Roxas too, with the s137 exe)
         v->wpn_on = base && wpn_equipped(&wc), v->wpn_use = g_wpn_use != 0;
-        v->wpn_name[0] = 0, v->wpn_atk = v->wpn_life = v->wpn_life_max = 0;
+        v->wpn_name[0] = 0, v->wpn_actor[0] = 0, v->wpn_atk = v->wpn_life = v->wpn_life_max = 0;
         if (v->wpn_on) {
             snprintf(v->wpn_name, sizeof v->wpn_name, "%s", wc.def->name);
+            snprintf(v->wpn_actor, sizeof v->wpn_actor, "%s", wc.def->actor);  // (botwpic)
             v->wpn_atk = wc.def->power + wc.atk_up, v->wpn_life = wc.life, v->wpn_life_max = wc.life_max;
         }
         v->bw_base = base && g_wpn_on, v->bw_n = 0;  // (eqtabs) the BotW Weapons tab: the pouch weapons he can swing
@@ -246,7 +247,24 @@ static void camp_pic(CsOut *o) {
     }
     int kb, a;
     float r[4];
-    if (!ready || !o || o->n >= o->cap || !cp_eq_pic(&CAMP.page, &kb, r) || (a = cp_eq_pic_alpha(&CAMP.page)) <= 0 || !ready()) return;
+    if (!o || o->n >= o->cap) return;
+    if (g_botwpic && !cp_eq_pic(&CAMP.page, &kb, r)) {  // (botwpic) a BotW weapon / shield / armor piece: its own pouch picture
+        static int (*icon)(const char *);
+        static int looked;
+        if (!looked) {
+            looked = 1, icon = (int (*)(const char *))(void *)GetProcAddress(GetModuleHandleA(NULL), "sora_hud_botw_icon");
+            LOG("[sora] camp: %s\n", icon ? "exe sora_hud_botw_icon found (BotW item pictures)" : "sora_hud_botw_icon not in this exe: no BotW item pictures");
+        }
+        char actor[48];
+        if (!icon || !cp_eq_botw_pic(&CAMP.page, &CAMP.v, actor, sizeof actor, r) || (a = cp_eq_pic_alpha(&CAMP.page)) <= 0) return;
+        if (icon(actor) == 1 && cp_pic_quad(&o->q[o->n], 0, r[0], r[1], r[2], r[3], (uint8_t)(a > 255 ? 255 : a))) {
+            SoraHudQuad *q = &o->q[o->n++];
+            q->tex = 4;  // (exe texture 15: the picture, u / v 0..1)
+            q->u[0] = q->u[2] = 0, q->u[1] = q->u[3] = 1, q->v[0] = q->v[1] = 0, q->v[2] = q->v[3] = 1;
+        }
+        return;
+    }
+    if (!ready || !cp_eq_pic(&CAMP.page, &kb, r) || (a = cp_eq_pic_alpha(&CAMP.page)) <= 0 || !ready()) return;
     if (cp_pic_quad(&o->q[o->n], kb, r[0], r[1], r[2], r[3], (uint8_t)(a > 255 ? 255 : a))) o->n++;
 }
 
@@ -363,6 +381,7 @@ static bool camp_frame(uint64_t present) {
             for (int j = 0; j < cv->bw_n; j++) cv->bw_eq[j] = j == k;
             cv->wpn_on = 1;
             snprintf(cv->wpn_name, sizeof cv->wpn_name, "%s", cv->bw_name[k]);
+            snprintf(cv->wpn_actor, sizeof cv->wpn_actor, "%s", cv->bw_actor[k]);  // (botwpic)
             cv->wpn_atk = cv->bw_atk[k], cv->wpn_life = cv->bw_life[k], cv->wpn_life_max = cv->bw_life_max[k];
         }
         LOG("[sora] camp: Weapons slot -> %s\n", g_wpn_use ? "BotW weapon" : "Keyblade");

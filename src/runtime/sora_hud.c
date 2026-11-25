@@ -109,7 +109,8 @@ static inline void mod_update_set(const VkWriteDescriptorSet *w) {
 }
 #include "sora_hud.h"
 #include "sora_hud_label.h"  // (mp Task 7: hud_label_origin)
-#include "sora_path.h"  // (Deck port: D:/SoraBotW -> SORA_ROOT)
+#include "sora_path.h"
+#include "items.h"  // (botwpic: items_icon_actor)  // (Deck port: D:/SoraBotW -> SORA_ROOT)
 
 VkImageView vk_frame_view(void);
 VkExtent2D vk_frame_extent(void);
@@ -598,6 +599,32 @@ static uint32_t g_ip_w, g_ip_h, g_ip_off;
 static int g_ip_state;  // 0 not tried, 1 ready, -1 off / missing / bad
 // (s120) the DLL asks before it emits tex 3 quads (an old exe has no such export = no pictures; the camp sheet would show instead)
 bool sora_hud_itempic_ready(void) { return g_ip_state == 1; }
+
+// ------------------------------------------------------------------ (botwpic) a BotW item picture in the Equipment page
+// The KH2 Equipment page's picture slot shows a BotW weapon / shield / armor piece as its own pouch picture
+// (UI/StockItem/<actor>.sbitemico, items.c items_icon_actor). One picture at a time: the DLL asks sora_hud_botw_icon(actor)
+// each frame it wants one; a new name is decoded on the asking thread (one small Yaz0 file), the render thread uploads it
+// into texture 15 on its next camp draw (vk_upload_cmd), and from then the DLL's SoraHudQuad.tex == 4 quads (u / v 0..1 over
+// the whole picture) draw it.
+//   sora_hud_botw_icon: 1 = that picture is in texture 15 (draw it), 0 = decoded, not uploaded yet, -1 = no picture for it
+static pthread_mutex_t g_bi_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct { char want[72], have[72], up[72]; uint8_t *px; int w, h, pend, failed; int tw, th; } BI;
+int sora_hud_botw_icon(const char *actor) {
+    if (!actor || !*actor || strlen(actor) >= sizeof BI.want) return -1;
+    pthread_mutex_lock(&g_bi_lock);
+    int r = !strcmp(actor, BI.have) ? 1 : !strcmp(actor, BI.want) ? (BI.failed ? -1 : 0) : 2;
+    pthread_mutex_unlock(&g_bi_lock);
+    if (r != 2) return r;
+    int w = 0, h = 0;
+    uint8_t *px = items_icon_actor(actor, &w, &h);
+    pthread_mutex_lock(&g_bi_lock);
+    free(BI.px);
+    BI.px = px, BI.w = w, BI.h = h, BI.pend = px != NULL, BI.failed = px == NULL;
+    snprintf(BI.want, sizeof BI.want, "%s", actor);
+    pthread_mutex_unlock(&g_bi_lock);
+    LOG("[sora-hud] botwpic: %s -> %s (%dx%d)\n", actor, px ? "decoded" : "no picture", w, h);
+    return px ? 0 : -1;
+}
 static bool itempic_load(void) {
     const char *p = getenv("SAVAGEWIND_SORA_ITEMPIC");
     if (p && !strcmp(p, "0")) { LOG("[sora-hud] itempic off (SAVAGEWIND_SORA_ITEMPIC=0)\n"); return false; }
@@ -1891,11 +1918,11 @@ static struct {
     VkPipeline cpipe[3];  // (s78 camp) normal / add / subtract
     VkPipeline pipe_l, cpipe_l[3];  // (s250 hdr) the same for the mod's HDR layer (vk_frame_sora_layer; RGBA16F)
     VkSampler sampler;
-    VkImage tex[15];  // 0-1 gauge, 2-3 menu, 4 lock-on reticle, 5 the dream picker's labels (s54), 6 the level-up text (s55),
+    VkImage tex[16];  // 0-1 gauge, 2-3 menu, 4 lock-on reticle, 5 the dream picker's labels (s54), 6 the level-up text (s55),
                       // 7-8 Donald's / Goofy's faces (s57 party), 9-10 the camp sheet / sys font (s78 camp), 11 Roxas' face (s111),
                       // 12 Mickey's face (s116), 13 the Keyblade picture atlas (s120), 14 the summon faces (s139)
-    VmaAllocation tex_mem[15];
-    VkImageView tex_view[15];
+    VmaAllocation tex_mem[16];
+    VkImageView tex_view[16];
     uint32_t ntex;
     uint64_t frames;
 } G;
@@ -2048,7 +2075,55 @@ bool sora_draw_project(const float w[3], float *sx, float *sy);  // (sora_draw.c
 // 384: KH2's pixel aspect, 16:9 = x -85..597), its own vertex array, a batch per texture / blend change
 static CVtx g_cvtx[6 * CQ_MAX];
 // menu = the pause menu's quads (sora_hud_quads_shown + the log); false = sora_hud_label's
+static bool bi_drawable(void) { return G.tex_view[15] != VK_NULL_HANDLE && BI.tw > 0 && BI.have[0]; }
+// (render thread, camp_draw) the pending picture into texture 15; a new size makes a new image (the old one: deferred destroy)
+static void bi_upload(void) {
+    pthread_mutex_lock(&g_bi_lock);
+    uint8_t *px = BI.pend ? BI.px : NULL;
+    int w = BI.w, h = BI.h;
+    char name[72];
+    snprintf(name, sizeof name, "%s", BI.want);
+    if (px) BI.px = NULL, BI.pend = 0;
+    pthread_mutex_unlock(&g_bi_lock);
+    if (!px) return;
+    VkCommandBuffer ucb = vk_upload_cmd();
+    if (G.tex[15] && (w != BI.tw || h != BI.th)) {
+        vk_defer_view(G.tex_view[15]), vk_defer_image(G.tex[15], G.tex_mem[15]);
+        G.tex[15] = VK_NULL_HANDLE, G.tex_view[15] = VK_NULL_HANDLE, BI.tw = BI.th = 0;
+    }
+    if (!G.tex[15]) {
+        VkImageCreateInfo ic = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = VK_FORMAT_R8G8B8A8_UNORM,
+                                .extent = {(uint32_t)w, (uint32_t)h, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+                                .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        if (vmaCreateImage(g_vk.vma, &ic, &ai, &G.tex[15], &G.tex_mem[15], NULL) != VK_SUCCESS) {
+            LOG("[sora-hud] botwpic: could not make a %dx%d image for %s\n", w, h, name);
+            G.tex[15] = VK_NULL_HANDLE, free(px);
+            return;
+        }
+        vk_image_init_layout(ucb, G.tex[15], VK_IMAGE_ASPECT_COLOR_BIT);
+        VkImageViewCreateInfo vc = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = G.tex[15], .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                                    .format = VK_FORMAT_R8G8B8A8_UNORM, .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+        if (vkCreateImageView(g_vk.dev, &vc, NULL, &G.tex_view[15]) != VK_SUCCESS) {
+            LOG("[sora-hud] botwpic: could not make the image view for %s\n", name);
+            vk_defer_image(G.tex[15], G.tex_mem[15]), G.tex[15] = VK_NULL_HANDLE, G.tex_view[15] = VK_NULL_HANDLE, free(px);
+            return;
+        }
+    }
+    vk_full_barrier(ucb);  // (the last frame's reads of the old picture before the copy)
+    VkSpan s = vk_transient_copy(px, (uint64_t)w * h * 4, 16);
+    free(px);
+    VkBufferImageCopy rg = {.bufferOffset = s.off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {(uint32_t)w, (uint32_t)h, 1}};
+    rec_CmdCopyBufferToImage(ucb, s.buf, G.tex[15], VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+    vk_full_barrier(ucb);
+    BI.tw = w, BI.th = h;
+    pthread_mutex_lock(&g_bi_lock);
+    snprintf(BI.have, sizeof BI.have, "%s", name);
+    pthread_mutex_unlock(&g_bi_lock);
+    LOG("[sora-hud] botwpic: %s uploaded (%dx%d)\n", name, w, h);
+}
 static void camp_draw(const SoraHudQuad *q, int n, VkExtent2D ext, float vx, float vy, float vw, float vh, bool menu) {
+    bi_upload();  // (botwpic) a new BotW picture into texture 15 before the quads use it
     static VkFormat cfmt;
     const bool lay = vk_frame_sora_layer();  // (s250 hdr: the mod's HDR layer; false = the window image, as before)
     if (lay) {
@@ -2069,11 +2144,13 @@ static void camp_draw(const SoraHudQuad *q, int n, VkExtent2D ext, float vx, flo
     int nb = 0, nv = 0;
     for (int i = 0; i < n; i++, q++) {
         if (q->tex == 3 && g_ip_state != 1) continue;  // (s120 itempic: no atlas = the picture quad is skipped)
-        int solid = q->tex == 2, tex = q->tex == 1 ? 10 : q->tex == 3 ? 13 : 9, blend = q->blend <= 2 ? q->blend : 0;
+        if (q->tex == 4 && !bi_drawable()) continue;  // (botwpic: no BotW picture uploaded yet)
+        int solid = q->tex == 2, tex = q->tex == 1 ? 10 : q->tex == 3 ? 13 : q->tex == 4 ? 15 : 9, blend = q->blend <= 2 ? q->blend : 0;
         if (!nb || bt[nb - 1].tex != tex || bt[nb - 1].solid != solid || bt[nb - 1].blend != blend)
             bt[nb].first = nv, bt[nb].n = 0, bt[nb].tex = tex, bt[nb].solid = solid, bt[nb].blend = blend, nb++;
         float iu, iv;
         if (tex == 13) iu = 1.0f / (float)g_ip_w, iv = 1.0f / (float)g_ip_h;  // (s120 itempic: u / v in atlas texels)
+        else if (tex == 15) iu = iv = 1.0f;  // (botwpic: u / v 0..1 over the whole picture)
         else { const CpImg *im = &g_cpimg[tex - 9]; iu = 1.0f / (float)im->lw, iv = 1.0f / (float)im->lh; }
         CVtx c[4];
         for (int k = 0; k < 4; k++) {

@@ -393,6 +393,34 @@ static int cp_eq_pic(const CampPage *p, int *kb_idx, float rect[4]) {
     rect[0] = 351, rect[1] = 78, rect[2] = 122, rect[3] = 122;  // (s120 review) square: the atlas cell is square (was 152 x 110 = squashed)
     return 1;
 }
+// (botwpic) the picture slot for a BotW item (cp_eq_pic said no): the actor name of what the right panel shows - state 2: the
+// Weapons row's BotW weapon, the Shield row's shield, an armor row's worn piece; picker: the highlighted BotW weapon / shield /
+// armor piece (None = no picture). Same rects as the Keyblade picture. 1 = a picture is wanted (actor filled), else 0.
+static int cp_eq_botw_pic(const CampPage *p, const CpVals *v, char *actor, size_t cap, float rect[4]) {
+    const char *a = NULL;
+    actor[0] = 0;
+    if (!g_eqlook || p->page != 4 || p->sub == 0) return 0;
+    int slot = p->eq_slot;
+    if (p->sub == 2) {
+        int k = p->eq_pick;
+        if (k == CP_EQ_WPN) a = v->wpn_actor;
+        else if (k >= CP_EQ_BW && k < CP_EQ_BW + v->bw_n && k < CP_EQ_BW + CP_BW_MAX) a = v->bw_actor[k - CP_EQ_BW];
+        else if (slot == CP_EQ_SHD && k >= CP_EQ_SH && k < CP_EQ_SH + v->sh_n && k < CP_EQ_SH + CP_SH_MAX) a = v->sh_actor[k - CP_EQ_SH];
+        else if (slot >= CP_EQ_ARM && slot < CP_EQ_ARM + 3 && k >= CP_EQ_AR && k < CP_EQ_AR + v->ar_n[slot - CP_EQ_ARM] && k < CP_EQ_AR + CP_AR_MAX)
+            a = v->ar_actor[slot - CP_EQ_ARM][k - CP_EQ_AR];
+        rect[0] = 382, rect[1] = 80, rect[2] = 115, rect[3] = 115;
+    } else {
+        if (slot == KB_MAIN && p->eq_wpnrow) a = v->wpn_actor;
+        else if (slot == CP_EQ_SHD) a = v->sh_cur >= 0 && v->sh_cur < v->sh_n && v->sh_cur < CP_SH_MAX ? v->sh_actor[v->sh_cur] : NULL;
+        else if (slot >= CP_EQ_ARM && slot < CP_EQ_ARM + 3 && v->ar_on)
+            for (int k = 0; k < v->ar_n[slot - CP_EQ_ARM] && k < CP_AR_MAX && !a; k++)
+                if (v->ar_eq[slot - CP_EQ_ARM][k]) a = v->ar_actor[slot - CP_EQ_ARM][k];
+        rect[0] = 351, rect[1] = 78, rect[2] = 122, rect[3] = 122;
+    }
+    if (!a || !*a) return 0;
+    snprintf(actor, cap, "%s", a);
+    return 1;
+}
 // (s120 review) the picture's alpha 0..255 [G]: it follows the panel window (root 4's first node): the start anim fades it in
 // over CP_EQ_PIC_FADE frames, the end anim (page switch / close) fades it out; 0 when the page tree is not drawn.
 #define CP_EQ_PIC_FADE 8

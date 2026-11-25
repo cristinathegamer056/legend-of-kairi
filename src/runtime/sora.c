@@ -5346,6 +5346,7 @@ static void live_poll(const float p[3], uint64_t present) {
             }
             else if (!strcmp(key, "wpnfake")) g_wpn_fake = (int)v, LOG("[sora] live: wpnfake %d (%s)\n", g_wpn_fake, g_wpn_fake > 0 && g_wpn_fake <= WPN_N ? WPN_TAB[g_wpn_fake - 1].name : "off: the real equipped weapon");  // (s128)
             else if (!strcmp(key, "eqshield")) g_eqshield = v != 0, LOG("[sora] live: eqshield %d (Equipment Shield row %s)\n", g_eqshield, g_eqshield ? "on" : "off");
+            else if (!strcmp(key, "botwpic")) g_botwpic = v != 0, LOG("[sora] live: botwpic %d (BotW item pictures in the Equipment page %s)\n", g_botwpic, g_botwpic ? "on" : "off");
             else if (!strcmp(key, "eqarmor")) g_eqarmor = v != 0, LOG("[sora] live: eqarmor %d (Equipment Armor rows: %s)\n", g_eqarmor, g_eqarmor ? "pick / take off pieces" : "show only (s120)");
             else if (!strcmp(key, "eqtabs")) g_eqtabs = v != 0, LOG("[sora] live: eqtabs %d (Equipment picker: %s)\n", g_eqtabs, g_eqtabs ? "Keyblades / BotW Weapons tabs, L1 / R1" : "one list (s128)");
             else if (!strcmp(key, "eqlook")) g_eqlook = v != 0, LOG("[sora] live: eqlook %d (Equipment page: %s)\n", g_eqlook, g_eqlook ? "vanilla KH2 look" : "the old Customize-style page");
