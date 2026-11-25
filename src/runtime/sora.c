@@ -3561,19 +3561,34 @@ static void mg_other(const char *why) {
 // guard-piercing attack at the end of a combo with Attack." The exact code conditions are not traced: Counterguard (press
 // during Guard) is the text's own; Retaliating's press window and the three combo ones are GUESS (recon/S106_HELPER_COMBOABIL2.md).
 // Live "set t0 0" = off. Each entry plays only through ptya_ability_ok (equipped, base Sora, motion + hits baked).
-static int g_t0 = 1;
+// (t0sq, user: "retaliation slash and upper slash require pressing square ... they are mapped to the circle button") The
+// msgdump "Attack" above was a button glyph: Retaliating / Upper / Horizontal Slash and Finishing Leap read {09:de}, the
+// glyph KH2 uses for Square ("Use {09:db} to jump continuously and {09:de} in midair to glide!", sys.bar); only
+// Counterguard's text spells "Attack". With t0sq (default 1) those four fire from Square (BTN_ROLL): Square while a
+// combo runs (S.special SP_ATTACK) or in Retaliating's knock-back window becomes that frame's attack press (no Guard /
+// roll); in a combo it plays the ability the GUESS rules below allow, else nothing (no plain swing). A plain Attack
+// press no longer turns into them. Live "set t0sq 0" = the s106 rules (Attack, Upper / Horizontal Slash on the 2nd hit).
+static int g_t0 = 1, g_t0sq = 1;
 static const KhPtya *t0_entry(int id) {
     if (!g_t0 || PTYA != kh_ptya) return NULL;
     int i = ptya_index(id);
     return i >= 0 && ptya_ability_ok(&PTYA[i]) ? &PTYA[i] : NULL;
 }
-// a press while Guard plays (Counterguard, id 39) / while getting up from a knock-back with no ragdoll left (Retaliating, id 40)
-static const KhPtya *t0_reaction(void) {
+static bool t0_retal_win(void) {  // getting up from a knock-back with no ragdoll left (Retaliating Slash's window)
+    return S.special == SP_DAMAGE && S.motion >= MOT_AIR_FLINCH_FRONT && S.motion <= MOT_BLOW_BACK + 1 && linkpos_link_ragdoll() <= 0;
+}
+// a press while Guard plays (Counterguard, id 39: Attack) / in Retaliating's window (id 40: Square with t0sq; sq = the
+// press came from Square)
+static const KhPtya *t0_reaction(bool sq) {
     if (!g_t0 || PTYA != kh_ptya) return NULL;
-    if (S.special == SP_GUARD && S.motion == MOT_GUARD_REFLECT) return t0_entry(39);  // (review: only after a real block, not any guard)
-    if (S.special == SP_DAMAGE && S.motion >= MOT_AIR_FLINCH_FRONT && S.motion <= MOT_BLOW_BACK + 1 && linkpos_link_ragdoll() <= 0)
-        return t0_entry(40);
+    if (!sq && S.special == SP_GUARD && S.motion == MOT_GUARD_REFLECT) return t0_entry(39);  // (review: only after a real block, not any guard)
+    if (sq == (g_t0sq != 0) && t0_retal_win()) return t0_entry(40);
     return NULL;
+}
+// (t0sq) this frame's Square press is a Type 0 ability's: true = the caller makes it the attack press
+static bool t0_square(void) {
+    if (!g_t0 || !g_t0sq || PTYA != kh_ptya || berserk_on()) return false;
+    return S.special == SP_ATTACK || (t0_retal_win() && t0_entry(40));
 }
 static float t0_near(const Target *t, int n) {  // surface distance of the nearest target, -1 = none
     float best = -1;
@@ -3586,12 +3601,26 @@ static float t0_near(const Target *t, int n) {  // surface distance of the neare
 }
 // GUESS rules, applied to the pick: Upper Slash = the 2nd ground swing, Horizontal Slash = the 2nd air swing (a target within
 // the Type 2 reach), Finishing Leap = the plain ground finisher when the nearest target is 120..650 cm away (a leap closes it).
-static const KhPtya *t0_override(const KhPtya *e, bool air, const Target *t, int n) {
-    if (!e || !g_t0 || PTYA != kh_ptya || berserk_on()) return e;
+// (t0sq) with Square (sq): Upper / Horizontal Slash on any non-finisher step of the ground / air combo (target within
+// 180 / 260 cm), Finishing Leap on the ground finisher step (target within 650 cm); none of them = NULL (no swing). A
+// plain Attack press (!sq) keeps the pick.
+static const KhPtya *t0_override(const KhPtya *e, bool air, const Target *t, int n, bool sq) {
+    if (!e || !g_t0 || PTYA != kh_ptya || berserk_on()) return sq ? NULL : e;
+    if (g_t0sq && !sq) return e;
     float d = t0_near(t, n);
     const KhPtya *o = NULL;
     // (review: only over a plain swing: not jump-to-target / wall entries or another ability's pick)
     bool plain = e->ability == 0 && (air || e->jump <= 0) && e->id != 1;
+    if (sq) {
+        bool fin = (e->flag & PTYA_FINISHER) || e->id == 3;
+        if (plain && !air && !fin && d >= 0 && d < 180) o = t0_entry(12);
+        else if (plain && air && !fin && d >= 0 && d < 260) o = t0_entry(38);
+        else if (plain && !air && fin && d >= 0 && d < 650) o = t0_entry(37);
+        if (o) LOG("[combo] Square: ptya id %d -> %d (motion %d -> %d, hit %d, nearest target %.0f cm)\n", e->id, o->id, e->motion, o->motion, S.d74, d);
+        else LOG("[combo] Square: no Type 0 ability here (ptya id %d, %s %s, hit %d, nearest target %.0f cm)\n", e->id,
+                 air ? "air" : "ground", fin ? "finisher step" : "combo step", S.d74, d);
+        return o;
+    }
     if (!plain) return e;
     if (!air && !(e->flag & PTYA_FINISHER) && S.d74 == 2 && d >= 0 && d < 180) o = t0_entry(12);
     else if (air && !(e->flag & PTYA_FINISHER) && S.d74 == 2 && d >= 0 && d < 260) o = t0_entry(38);
@@ -5321,6 +5350,7 @@ static void live_poll(const float p[3], uint64_t present) {
         } else if (sscanf(ln, "set %15s %d", key, &v) == 2 && strcmp(key, "stop")) {
             if (!strcmp(key, "statelog")) g_statelog = v != 0;  // (s188: the once-a-second "[sora] state" line)
             else if (mtest_set_key(key, v)) {}  // (s201: "set mtest 0|1", "set mtestlog 0|1")
+            else if (!strcmp(key, "t0sq")) g_t0sq = v != 0, LOG("[sora] live: t0sq %d (Retaliating / Upper / Horizontal Slash, Finishing Leap on %s)\n", g_t0sq, g_t0sq ? "Square" : "Attack");
             else if (!strcmp(key, "combo")) g_combo_master = v != 0;
             else if (!strcmp(key, "berserk")) g_berserk = v != 0, LOG("[sora] live: berserk %d (Berserk Charge: endless combo + Str+2 during MP Charge)\n", g_berserk);
             else if (!strcmp(key, "abilfx")) { g_af_on = v != 0; LOG("[sora] live: abilfx %d (KH2 fx + SE of the combo-ability attacks; fx.bin %s)\n", g_af_on, sora_fx_id("abil_fx_44") >= 0 ? "has abil_fx" : "WITHOUT abil_fx (fx_s107.bin not installed)"); }
@@ -7925,6 +7955,8 @@ static void sora_mod_frame_body(void) {
     if (!(held & BTN_JUMP) || S.act != ACT_JUMP) S.glide_armed = false;
     if (S.glide_armed && S.air >= S.apex) glide_start(p, z_up, sspeed);
     ma_air_dodge(press, sdir, sspeed, z_up, p);  // (s89 b4-master: B again in the air in Master = KH2's Aerial Dodge)
+    bool t0sq = (press & BTN_ROLL) && !(press & BTN_ATTACK) && t0_square();  // (t0sq: Square = a Type 0 ability's press)
+    if (t0sq) press = (press & ~BTN_ROLL) | BTN_ATTACK, LOG("[combo] Square press: Type 0 ability try (motion %d clock %.1f)\n", S.motion, S.clock);
     bool guard_took = guard_press(press, sspeed, is_free, p);  // (s88: Square with the stick neutral = Guard)
     if (!guard_took && (press & BTN_ROLL) && S.act == ACT_IDLE && S.takeoff <= 0 && !S.air_frames && is_free && mot_of(MOT_ROLL) &&
         (!fm_in_form() || IN_LIMIT) && roll_learned() && stam_pay("Dodge Roll", g_rollstam)) {  // (s69: Valor has no Dodge Roll; its bake has no roll slot. s89: Limit's own A180, growth Dodge Roll. s97: 1/8 wheel)
@@ -7985,7 +8017,7 @@ static void sora_mod_frame_body(void) {
         bool restart = !new_combo && !((bits & (RB_ALLOW_FINISHER | RB_ALLOW_COMBO)) && cont);
         bool once = g_air_once && air && (new_combo || restart) && S.air_done;
         bool wall = wall_ahead(p, S.face);
-        const KhPtya *e = !once ? t0_reaction() : NULL;  // (s106: Counterguard / Retaliating Slash)
+        const KhPtya *e = !once ? t0_reaction(t0sq) : NULL;  // (s106: Counterguard / Retaliating Slash)
         if (e) new_combo = true, S.d74 = S.d75 = 1, S.hit = false;
         else {
             // (s110 mkhit) Mickey's ground combo is hops: a press in the hop of a ground combo still picks from the GROUND entries
@@ -7994,7 +8026,7 @@ static void sora_mod_frame_body(void) {
                 if (new_combo) g_mk_gcombo = !air;
                 sel_air = air && !(g_mk_gcombo && !new_combo);
             }
-            e = !once && combo_gate(bits, is_free) ? t0_override(ptya_select_t(bits, sel_air, tg, ntg, wall), sel_air, tg, ntg) : NULL;
+            e = !once && combo_gate(bits, is_free) ? t0_override(ptya_select_t(bits, sel_air, tg, ntg, wall), sel_air, tg, ntg, t0sq) : NULL;
             if (e && IN_MICKEY && g_mkhit && !sel_air) e = mk_ground_fix(e);
         }
         if (e && g_combolog && (new_combo || e->jump > 0)) combo_plan_log(air, e);  // (s105) once per combo
