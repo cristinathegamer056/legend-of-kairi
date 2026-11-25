@@ -28,11 +28,12 @@ static int g_guard_inv = 1;
 // (gparry) two-tier guard (user's design): a block within the first g_gparry_win GFR of the Guard motion = a PARRY (KH2's
 // reflect motion 42 + Counterguard as before, AND the attacker staggers: the nearest live enemy in front within 4 u takes a
 // g_gparry_dmg hit of reaction size g_gparry_f54, BotW medium 0x11 = GUESS that it staggers); a block later in the Guard
-// motion = a REGULAR block (spark, clang, invulnerable frames; no reflect motion, no Counterguard). With gparry on the
+// motion = a REGULAR block (spark, clang, invulnerable frames, the reflect motion; no Counterguard, no stagger). With gparry on the
 // block window runs to the end of the Guard motion (KH2's own closes at GFR ~37 of 60; later hits used to land).
 // Beam reflects are unchanged (no stagger). Env SAVAGEWIND_SORA_GUARD_PARRY (default 0), live gparry / gparrywin /
 // gparrydmg / gparryf54. Logs '[sora] gparry: ...'.
-static int g_gparry = -1, g_gparry_win = 14, g_gparry_dmg = 1, g_gparry_f54 = 0x11;
+static int g_gparry = -1, g_gparry_win = 24, g_gparry_dmg = 1, g_gparry_f54 = 0x11;
+static bool g_gparry_reg;  // the last block was a regular one: no Counterguard on its reflect motion
 static bool gparry_on(void) {
     if (g_gparry < 0) g_gparry = env_f("SAVAGEWIND_SORA_GUARD_PARRY", 0) != 0;
     return g_gparry > 0;
@@ -181,8 +182,12 @@ static void guard_block(const float p[3], float to_u, int dmg, const char *how, 
     if (se >= 0) sora_sfx_play_at(se, 1.0f, c);
     // (gparry) a melee hit on the Guard motion: parry (early) or regular block (late); beams and blocks during the reflect as before
     bool tier = gparry_on() && strcmp(how, "beam reflect") && S.motion == MOT_GUARD;
-    if (tier && S.clock > g_gparry_win) {
-        LOG("[sora] gparry: REGULAR block (guard clock %.1f > %d GFR, damage %d, %s): guard pose kept, no reflect / Counterguard\n",
+    // (gparry test 1: the user wants a reaction on every block) the regular block plays the reflect motion too, without the
+    // Counterguard offer (g_gparry_reg, read by t0_reaction) and without the stagger
+    g_gparry_reg = tier && S.clock > g_gparry_win;
+    if (g_gparry_reg) {
+        if (mot_of(MOT_GUARD_REFLECT)) play(MOT_GUARD_REFLECT), S.special = SP_GUARD;
+        LOG("[sora] gparry: REGULAR block (guard clock %.1f > %d GFR, damage %d, %s): reflect motion, no Counterguard / stagger\n",
             S.clock, g_gparry_win, dmg, how);
         return;
     }

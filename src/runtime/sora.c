@@ -3570,7 +3570,7 @@ static const KhPtya *t0_entry(int id) {
 // a press while Guard plays (Counterguard, id 39) / while getting up from a knock-back with no ragdoll left (Retaliating, id 40)
 static const KhPtya *t0_reaction(void) {
     if (!g_t0 || PTYA != kh_ptya) return NULL;
-    if (S.special == SP_GUARD && S.motion == MOT_GUARD_REFLECT) return t0_entry(39);  // (review: only after a real block, not any guard)
+    if (S.special == SP_GUARD && S.motion == MOT_GUARD_REFLECT && !g_gparry_reg) return t0_entry(39);  // (review: only after a real block, not any guard)
     if (S.special == SP_DAMAGE && S.motion >= MOT_AIR_FLINCH_FRONT && S.motion <= MOT_BLOW_BACK + 1 && linkpos_link_ragdoll() <= 0)
         return t0_entry(40);
     return NULL;
