@@ -27,12 +27,16 @@ static int g_guard = 1;  // live "set guard 0/1" (0 = old behaviour: Square alwa
 static int g_guard_inv = 1;
 // (gparry) two-tier guard (user's design): a block within the first g_gparry_win GFR of the Guard motion = a PARRY (KH2's
 // reflect motion 42 + Counterguard as before, AND the attacker staggers: the nearest live enemy in front within 4 u takes a
-// g_gparry_dmg hit of reaction size g_gparry_f54, default 7 = BotW Shock stagger; gparrycycle 1 tries a list); a block later in the Guard
+// g_gparry_dmg hit of reaction size g_gparry_f54, default 6 = BotW repelled (Rebound); gparrycycle 1 tries a list); a block later in the Guard
 // motion = a REGULAR block (spark, clang, invulnerable frames, the reflect motion; no Counterguard, no stagger). With gparry on the
 // block window runs to the end of the Guard motion (KH2's own closes at GFR ~37 of 60; later hits used to land).
 // Beam reflects are unchanged (no stagger). Env SAVAGEWIND_SORA_GUARD_PARRY (default 0), live gparry / gparrywin /
 // gparrydmg / gparryf54. Logs '[sora] gparry: ...'.
-static int g_gparry = -1, g_gparry_win = 24, g_gparry_dmg = 1, g_gparry_f54 = 7;  // (7 = BotW's Shock: upright stagger, sora_airhold.h)
+// (gparry option B) the parry's reaction = BotW's own parried-enemy one: f54 = the reaction type EnemyDefaultReaction
+// switches on (1.9.0 0x7100849394, vtable 0x7101c54140, factory crc 0x0a5b6fa2 -> 0x7100b73878): 6 -> child
+// '弾かれ' (repelled; Bokoblin_Red.baiprog: Shock, AS 'Rebound'), 7 / 0x13 -> 'ショック' (AS 'Miss'), 8 -> '超ショック'
+// (WeaponIdx 0: drops the weapon), 9 / 0xb / 0xe -> 'ガードブレイク'.
+static int g_gparry = -1, g_gparry_win = 24, g_gparry_dmg = 1, g_gparry_f54 = 6;
 // (gparry test A: find BotW's parried-enemy reaction) gparrycycle 1 = each parry uses the next f54 of this list, logged
 // '[sora] gparry: parry #N used f54 X' so the user can name the parry that looked like Link's
 static const int GPARRY_CYC[] = {7, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 0x12, 0x13, 0x18, 0x19, 0x1a, 0x1c};
