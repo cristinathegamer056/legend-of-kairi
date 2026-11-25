@@ -2791,7 +2791,10 @@ static void hurt_scale(Cpu *c) {
 static void dmg_add_player_hook(Cpu *c) {
     int drop = fall_drop();
     int32_t dmg = (int32_t)c->x[2], f50 = (int32_t)c->x[5], f54 = (int32_t)c->x[6];
-    if (g_guard_set && g_vel_frame_id - g_guard_frame <= 3 && dmg > 0 &&
+    // (gparry reflect) with Link's isGuardJust bit raised (parrybits 32) BotW's own shield guard catches some melee swings
+    // first and sends Link a damage-0 hit of reaction 0xd (log: Link+0xc40 gained 0x4000, then addDamage damage 0 f54 0xd):
+    // its shield knockback. While guarding, that one is dropped and counted as a block too (the mod plays its own).
+    if (g_guard_set && g_vel_frame_id - g_guard_frame <= 3 && (dmg > 0 || f54 == 0xd) &&
         !(f54 == 0x20 || f50 == 0x15 || (f50 == 0xf && (f54 == 0x19 || f54 == 0x1a)))) {  // (not a fall)
         // (s119) guard_set(2) = Mickey mode: a LARGE hit (f54 0x15 explosion / 0x16 / 0xa: the kinds BotW's player hit
         // handler FUN_7100bd59c8 reacts to without a life loss, DAMAGE_ARGS_RECON.md) keeps its type with damage 0, so BotW
