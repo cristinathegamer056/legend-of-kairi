@@ -1252,6 +1252,7 @@ static void sl_slot_tick_(bool paused) {
     if (!SLS.polled) LOG("[sora] levels: watching %s/<0-%d>/game_data.sav (slot %d now)\n", sl_root(), SL_SLOTS - 1, SLS.slot);
     SLS.polled = true;
 }
+static void sl_init(void);
 static void sl_slot_tick(void) { sl_slot_tick_(false); }
 static void sl_slot_tick_paused(void) { sl_init(); sl_slot_tick_(true); }  // (dbgsave: sora.c's paused branch)
 
