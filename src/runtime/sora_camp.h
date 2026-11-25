@@ -47,6 +47,43 @@ static void camp_load(void) {
     LOG("[sora] camp: %s loaded (%ld bytes)\n", path, n);
 }
 
+// (armor rows, user: "Its supposed to have the head, chest, and leg") the Armor rows from the pouch: the equipped items of
+// pouch type 4 / 5 / 6 (Head / Upper / Lower) that sora_armor_tab.h knows. armor_worn (the drawn Armor_* actors of the last
+// 1 s, s120) comes back empty while the menu is open; the pouch's equipped flags do not depend on drawing. Always 3 rows
+// (Head, Body, Legs); an empty slot = "None", Defense 0. -> 3, or -1 when the pouch cannot be read.
+static int armor_pouch_worn(char out_name[3][24], int out_def[3]) {
+    uint64_t got = sora_sites()->pmdm_got;
+    const SoraArmor *by[3] = {0};
+    if (!got || !rd_ok(got, 8)) return -1;
+    uint64_t pp = *(const uint64_t *)(uintptr_t)got;
+    if (!rd_ok(pp, 8)) return -1;
+    uint64_t mgr = *(const uint64_t *)(uintptr_t)pp;
+    if (!rd_ok(mgr + 0x68, 0x18) || *(const int32_t *)(uintptr_t)(mgr + 0x7c) != 8) return -1;
+    uint64_t head = mgr + 0x68, nd = *(const uint64_t *)(uintptr_t)(head + 8);
+    for (int k = 0; k < 1000 && nd && nd != head; k++) {
+        uint64_t it = nd - 8;
+        if (!rd_ok(it, 0x90)) break;
+        nd = *(const uint64_t *)(uintptr_t)(nd + 8);
+        int ty = *(const int32_t *)(uintptr_t)(it + 0x18);
+        if (ty < 4 || ty > 6 || !*(const uint8_t *)(uintptr_t)(it + 0x24)) continue;
+        uint64_t sp = *(const uint64_t *)(uintptr_t)(it + 0x30);
+        char a[40];
+        int i;
+        if (!rd_ok(sp, 1)) continue;
+        for (i = 0; i < (int)sizeof a - 1 && rd_ok(sp + (uint64_t)i, 1) && ((const char *)(uintptr_t)sp)[i]; i++) a[i] = ((const char *)(uintptr_t)sp)[i];
+        a[i] = 0;
+        const SoraArmor *d = i ? armor_find(a) : NULL;
+        if (d && d->slot < 3 && !by[d->slot]) by[d->slot] = d;
+        else if (!d) LOG("[armor] pouch: worn %s (type %d) not in the armor table\n", a, ty);
+    }
+    for (int s = 0; s < 3; s++) {
+        snprintf(out_name[s], 24, "%s", by[s] ? by[s]->name : "None");
+        out_def[s] = by[s] ? by[s]->def : 0;
+    }
+    LOG("[armor] pouch rows: %s / %s / %s\n", out_name[0], out_name[1], out_name[2]);
+    return 3;
+}
+
 // the page's values, snapshotted at open (cp_tick rebuilds the tree on a row change from them)
 static void camp_vals(CpVals *v) {
     memset(v, 0, sizeof *v);
@@ -97,7 +134,8 @@ static void camp_vals(CpVals *v) {
     v->db_party_none = 1;  // (s233: the Party rows offer "None" after the characters)
     for (int r = 0; r < CP_DB_ROWS; r++) v->db_v[r] = dbm_state(r);  // (s146: by backend row)  // (s140 dbgmenu: the Debug page)
     v->kb_own = ul_kb_own_mask();  // (s89 kb: the picker lists the owned ones)
-    v->arm_n = armor_worn(v->arm_name, v->arm_def);  // (s120 eqlook: the Armor rows; 0 = old exe / nothing named worn)
+    v->arm_n = armor_pouch_worn(v->arm_name, v->arm_def);  // (armor rows: Head / Body / Legs from the pouch, always 3)
+    if (v->arm_n < 0) v->arm_n = armor_worn(v->arm_name, v->arm_def);  // (s120 eqlook fallback: the drawn Armor_* actors)
     {   // (s128 wpnmenu) Link's BotW weapon for the Weapons slot: only Sora's base form (not a Drive Form, Roxas or Mickey)
         WpnCur wc;
         bool base = !IN_VALOR && !IN_WISDOM && !IN_LIMIT && !IN_MASTER && !IN_FINAL && !IN_ANTI && !IN_MICKEY && (!IN_ROXAS || (g_wpn_rox && wpn_rox_exe()));  // (s137 roxwpn: Roxas too, with the s137 exe)
