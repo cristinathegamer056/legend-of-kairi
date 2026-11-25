@@ -466,6 +466,9 @@ static void dbm_init(void);                  // (s140 dbgmenu, sora_dbgmenu.h)
 static int dbm_suspend(void);
 static int g_dbm_newgame;  // (s142 review) set by sl_slot_saved's New Game branch, read + cleared by dbm_resume: the debug EXP is not put back after it
 static void dbm_resume(int was, bool is_load);
+static int g_dbm_save = 1;  // (dbgsave) the Debug Menu rows go with the BotW save (sora_dbgmenu.h dbm_save_str / dbm_slot_load); live dbmsave 0/1
+static int dbm_save_str(char *o, size_t cap);
+static void dbm_slot_load(const char *b, int slot);
 static void dbg_tick(void);
 static int dbg_suspend(const char *why);
 static void dbg_resume(int was, const char *why);
@@ -1015,12 +1018,14 @@ static bool sl_sidecar_write(int slot, uint32_t exp, uint32_t kills, const SlSto
     char roxs[80];  // (s111 roxload) auto mode only: a forced body (set char 1 / 2) says nothing about the story
     int rn = snprintf(roxs, sizeof roxs, "  \"wpnuse\": %d,\n", g_wpn_use != 0);  // (s128 wpnmenu) 1 = Link's BotW weapon, 0 = the Keyblade
     if (g_char == 0 && !g_dbm_sora && !g_dbm_mksora) snprintf(roxs + rn, sizeof roxs - rn, "  \"roxas\": %d,\n", rox_on_now());
+    char dms[200];  // (dbgsave) the Debug Menu rows
+    dbm_save_str(dms, sizeof dms);
     int n = snprintf(b, sizeof b,
                      "{\n  \"version\": 1,\n  \"what\": \"Sora in BotW: Sora's KH2 level for this BotW save slot (sora_mod.dll, "
                      "recon/S55_HELPER_LEVELS23.md)\",\n  \"slot\": %d,\n  \"exp\": %u,\n  \"lv\": %d,\n  \"kills\": %u,\n"
-                     "  \"drive\": %d,\n  \"abil_on\": %u,\n  \"abil_seen\": %u,\n  \"abil_on_hi\": %u,\n  \"abil_seen_hi\": %u,\n  \"chest_mask\": %u,\n  \"chest_mask_hi\": %u,\n  \"shortcuts\": %u,\n  \"keyblade\": %u,\n  \"keyblade2\": %u,\n  \"kb_owned\": %u,\n  \"valor\": %u,\n  \"wisdom\": %u,\n  \"limit\": %u,\n  \"master\": %u,\n  \"final\": %u,\n  \"anti\": %u,\n  \"summon\": %u,\n%s  \"dream\":\"%s\",\n  \"dream_giveup\": \"%s\",\n  \"story\": {\"ok\": %d, \"paraglider\": %d, "
+                     "  \"drive\": %d,\n  \"abil_on\": %u,\n  \"abil_seen\": %u,\n  \"abil_on_hi\": %u,\n  \"abil_seen_hi\": %u,\n  \"chest_mask\": %u,\n  \"chest_mask_hi\": %u,\n  \"shortcuts\": %u,\n  \"keyblade\": %u,\n  \"keyblade2\": %u,\n  \"kb_owned\": %u,\n  \"valor\": %u,\n  \"wisdom\": %u,\n  \"limit\": %u,\n  \"master\": %u,\n  \"final\": %u,\n  \"anti\": %u,\n  \"summon\": %u,\n%s%s  \"dream\":\"%s\",\n  \"dream_giveup\": \"%s\",\n  \"story\": {\"ok\": %d, \"paraglider\": %d, "
                      "\"beasts\": %d, \"towers\": %d, \"shrines\": %d},\n  \"saved\": \"%04d-%02d-%02d %02d:%02d:%02d\"\n}\n",
-                     slot, exp, sl_level_of(exp), kills, dg_points(), (uint32_t)ab_real_on(), (uint32_t)ab_real_seen(), (uint32_t)(ab_real_on() >> 32), (uint32_t)(ab_real_seen() >> 32), (uint32_t)CA.mask, (uint32_t)(CA.mask >> 32), cust_pack(SC.sc), kb_pack(KB.kb), kb_pack2(KB.kb), kb_own_fix(KB.own, KB.kb), vl_exp_get(), wl_exp_get(), ll_exp_get(), ml_exp_get(), fl_exp_get(), anti_pts_get(), su_exp_get(), roxs, sl_dream_str(dream_weapon), sl_dream_str(dream_giveup), st->ok,
+                     slot, exp, sl_level_of(exp), kills, dg_points(), (uint32_t)ab_real_on(), (uint32_t)ab_real_seen(), (uint32_t)(ab_real_on() >> 32), (uint32_t)(ab_real_seen() >> 32), (uint32_t)CA.mask, (uint32_t)(CA.mask >> 32), cust_pack(SC.sc), kb_pack(KB.kb), kb_pack2(KB.kb), kb_own_fix(KB.own, KB.kb), vl_exp_get(), wl_exp_get(), ll_exp_get(), ml_exp_get(), fl_exp_get(), anti_pts_get(), su_exp_get(), roxs, dms, sl_dream_str(dream_weapon), sl_dream_str(dream_giveup), st->ok,
                      st->glider, st->beasts, st->towers, st->shrines, now.wYear, now.wMonth, now.wDay, now.wHour,
                      now.wMinute, now.wSecond);
     if (n < 0 || n >= (int)sizeof b) { LOG("[sora] levels: sidecar text too long (%d), not written\n", n); return false; }  // (s89 review)
@@ -1132,6 +1137,7 @@ static void sl_slot_load(int slot, const char *why) {
     sl_persist_save();
     dbg_resume(dbg, "load");
     dbm_resume(dbm, true);
+    dbm_slot_load(side ? b : NULL, slot);  // (dbgsave) this save's Debug Menu rows
 }
 
 // BotW wrote slot N: the sidecar gets (exp, kills) = the state when the write began.

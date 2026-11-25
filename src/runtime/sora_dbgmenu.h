@@ -779,7 +779,9 @@ static void dbm_resume(int was, bool is_load) {
 
 static bool dbm_set_key(const char *key, int v) {
     if (strncmp(key, "dbm", 3)) return false;
-    if (!strcmp(key, "dbmlv")) dbm_set(0, v, "live set dbmlv");
+    if (!strcmp(key, "dbmsave")) g_dbm_save = v != 0, LOG("[dbgmenu] save with the BotW slot: %s (live set dbmsave)
+", g_dbm_save ? "ON" : "OFF");  // (dbgsave)
+    else if (!strcmp(key, "dbmlv")) dbm_set(0, v, "live set dbmlv");
     else if (!strcmp(key, "dbmkb")) dbm_set(1, v, "live set dbmkb");
     else if (!strcmp(key, "dbmforms")) dbm_set(2, v, "live set dbmforms");
     else if (!strcmp(key, "dbmsmn")) dbm_set(3, v, "live set dbmsmn");
@@ -810,4 +812,44 @@ static bool dbm_set_key(const char *key, int v) {
         return false;
     }
     return true;
+}
+
+// ---- (dbgsave) the Debug Menu rows go with the BotW save. sl_sidecar_write writes "dbgmenu": "v0,v1,..." (dbm_state per backend
+// row; Mickey Rescue's one-shot Now is written as its Any Enemy value), sl_slot_load puts them back after the slot's real values
+// are loaded (dbm_set: each row snapshots / layers exactly as when it is picked in the menu, so the sidecar's real values stay real).
+// No key (an older save / a new slot) = the rows stay as they are. g_dbm_save 0 (live key dbmsave 0) = neither written nor read.
+static int dbm_save_str(char *o, size_t cap) {
+    if (!g_dbm_save || cap < 24) return o && cap ? (o[0] = 0) : 0;
+    int n = snprintf(o, cap, "  \"dbgmenu\": \"");
+    for (int r = 0; r < DBM_NROWS && n < (int)cap - 8; r++)
+        n += snprintf(o + n, cap - (size_t)n, "%s%d", r ? "," : "", r == DBM_R_MICKEY ? DMK.any : dbm_state(r));
+    n += snprintf(o + n, cap - (size_t)n, "\",
+");
+    return n;
+}
+static void dbm_slot_load(const char *b, int slot) {
+    if (!g_dbm_save) return;
+    const char *p = b ? strstr(b, "\"dbgmenu\"") : NULL;
+    if (!p || !(p = strchr(p + 9, ':')) || !(p = strchr(p, '"'))) { LOG("[dbgmenu] slot %d: no saved Debug Menu rows, kept as they are
+", slot); return; }
+    p++;
+    int v[DBM_NROWS], n = 0;
+    while (n < DBM_NROWS && *p && *p != '"') {
+        char *e;
+        long x = strtol(p, &e, 10);
+        if (e == p) break;
+        v[n++] = (int)x, p = e;
+        if (*p == ',') p++;
+    }
+    int ch = 0;
+    for (int r = 0; r < n; r++) {
+        int cur = r == DBM_R_MICKEY ? DMK.any : dbm_state(r);
+        if (cur == v[r]) continue;
+        int got = dbm_set(r, v[r], "BotW load: the slot's saved Debug Menu");
+        ch++;
+        if (got != v[r]) LOG("[dbgmenu] slot %d: row %d saved %d, now %d (refused)
+", slot, r, v[r], got);
+    }
+    LOG("[dbgmenu] slot %d: saved Debug Menu rows put back (%d rows read, %d changed)
+", slot, n, ch);
 }
