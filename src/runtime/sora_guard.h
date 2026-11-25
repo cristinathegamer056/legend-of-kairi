@@ -25,6 +25,28 @@ static int g_guard = 1;  // live "set guard 0/1" (0 = old behaviour: Square alwa
 // blocks), 1 = enemy hits only (an enemy within the target radius; lava / fire / a lone hazard with no enemy near still
 // lands), 2 = everything (PHH's +0xD70 reading). GUESS default 1: KH2's counter is general, BotW has hazards KH2 has not.
 static int g_guard_inv = 1;
+// (gparry) two-tier guard (user's design): a block within the first g_gparry_win GFR of the Guard motion = a PARRY (KH2's
+// reflect motion 42 + Counterguard as before, AND the attacker staggers: the nearest live enemy in front within 4 u takes a
+// g_gparry_dmg hit of reaction size g_gparry_f54, BotW medium 0x11 = GUESS that it staggers); a block later in the Guard
+// motion = a REGULAR block (spark, clang, invulnerable frames; no reflect motion, no Counterguard). With gparry on the
+// block window runs to the end of the Guard motion (KH2's own closes at GFR ~37 of 60; later hits used to land).
+// Beam reflects are unchanged (no stagger). Env SAVAGEWIND_SORA_GUARD_PARRY (default 0), live gparry / gparrywin /
+// gparrydmg / gparryf54. Logs '[sora] gparry: ...'.
+static int g_gparry = -1, g_gparry_win = 14, g_gparry_dmg = 1, g_gparry_f54 = 0x11;
+static bool gparry_on(void) {
+    if (g_gparry < 0) g_gparry = env_f("SAVAGEWIND_SORA_GUARD_PARRY", 0) != 0;
+    return g_gparry > 0;
+}
+static bool gparry_live(const char *key, int v) {
+    if (!strcmp(key, "gparry")) g_gparry = v != 0;
+    else if (!strcmp(key, "gparrywin")) g_gparry_win = v;
+    else if (!strcmp(key, "gparrydmg")) g_gparry_dmg = v;
+    else if (!strcmp(key, "gparryf54")) g_gparry_f54 = v;
+    else return false;
+    LOG("[sora] gparry: live %s %d (parry window GFR 0..%d, stagger hit %d f54 %#x, %s)\n", key, v, g_gparry_win, g_gparry_dmg,
+        g_gparry_f54, gparry_on() ? "on" : "off");
+    return true;
+}
 static struct {
     float inv;            // invulnerable KH frames left after a block
     int blocks_seen;      // linkpos_guard_blocks() last seen
@@ -110,6 +132,7 @@ static bool guard_window(void) {
     if (!guard_motion()) return false;
     const HitSlot *h = hit_slot(S.mot->slot, 0);
     int a = g_guard_from < GUARD_WIN_A ? g_guard_from : GUARD_WIN_A;
+    if (S.motion == MOT_GUARD && gparry_on()) return S.clock >= a;  // (gparry: the rest of the Guard motion = a regular block)
     if (!h) return S.motion == MOT_GUARD ? S.clock >= a && S.clock <= GUARD_WIN_B : S.motion == MOT_GUARD_REFLECT;
     for (int i = 0; i < h->nwin; i++) {
         int st = h->win[i].start;
@@ -156,9 +179,36 @@ static void guard_block(const float p[3], float to_u, int dmg, const char *how, 
     static int se = -2;
     if (se == -2) se = sora_sfx_id("wall_hit");  // GUESS: the Keyblade clang (se500 #10); KH2's guard hit se not found
     if (se >= 0) sora_sfx_play_at(se, 1.0f, c);
+    // (gparry) a melee hit on the Guard motion: parry (early) or regular block (late); beams and blocks during the reflect as before
+    bool tier = gparry_on() && strcmp(how, "beam reflect") && S.motion == MOT_GUARD;
+    if (tier && S.clock > g_gparry_win) {
+        LOG("[sora] gparry: REGULAR block (guard clock %.1f > %d GFR, damage %d, %s): guard pose kept, no reflect / Counterguard\n",
+            S.clock, g_gparry_win, dmg, how);
+        return;
+    }
     if (S.motion != MOT_GUARD_REFLECT && mot_of(MOT_GUARD_REFLECT)) play(MOT_GUARD_REFLECT), S.special = SP_GUARD;
     LOG("[sora] GUARD blocked a hit (damage %d, %s) at %.3f %.3f %.3f: reflect motion, %.0f invulnerable frames\n", dmg, how,
         p[0], p[1], p[2], G.inv);
+    if (tier) {  // the parry: the attacker = the nearest live enemy in front within 4 u (BotW's hit carries no attacker)
+        uint64_t a[64];
+        float e[64][3];
+        int32_t l[64];
+        int n = linkpos_enemies(a, e, l, 64), best = -1;
+        float bd = 16.0f;
+        for (int k = 0; k < n; k++) {
+            float dx = e[k][0] - p[0], dz = e[k][2] - p[2], d2 = dx * dx + dz * dz;
+            if (l[k] > 0 && d2 < bd && dx * sinf(S.face) + dz * cosf(S.face) >= 0) bd = d2, best = k;
+        }
+        if (best >= 0) {
+            linkpos_damage_enemy_ex(a[best], g_gparry_dmg, g_gparry_f54, 0);
+            float at[3] = {e[best][0], e[best][1] + 1.0f, e[best][2]};
+            sora_fx_event(kbfx_name("hit_finish"), at, S.face, to_u);
+        }
+        LOG("[sora] gparry: PARRY (guard clock %.1f <= %d GFR): %s\n", S.clock, g_gparry_win,
+            best >= 0 ? "attacker staggered (hit queued)" : "no live enemy in front within 4 u");
+        if (best >= 0) LOG("[sora] gparry: stagger %llx %.1f u away, %d damage, f54 %#x\n", (unsigned long long)a[best], sqrtf(bd),
+                           g_gparry_dmg, g_gparry_f54);
+    }
 }
 
 // (s133 review) Reflect cancelled while Link has the pad / a load: guard_frame only runs while Sora is driven, so drop the

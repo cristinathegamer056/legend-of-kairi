@@ -5321,6 +5321,7 @@ static void live_poll(const float p[3], uint64_t present) {
         } else if (sscanf(ln, "set %15s %d", key, &v) == 2 && strcmp(key, "stop")) {
             if (!strcmp(key, "statelog")) g_statelog = v != 0;  // (s188: the once-a-second "[sora] state" line)
             else if (mtest_set_key(key, v)) {}  // (s201: "set mtest 0|1", "set mtestlog 0|1")
+            else if (gparry_live(key, v)) {}  // (gparry: two-tier guard, sora_guard.h)
             else if (!strcmp(key, "combo")) g_combo_master = v != 0;
             else if (!strcmp(key, "berserk")) g_berserk = v != 0, LOG("[sora] live: berserk %d (Berserk Charge: endless combo + Str+2 during MP Charge)\n", g_berserk);
             else if (!strcmp(key, "abilfx")) { g_af_on = v != 0; LOG("[sora] live: abilfx %d (KH2 fx + SE of the combo-ability attacks; fx.bin %s)\n", g_af_on, sora_fx_id("abil_fx_44") >= 0 ? "has abil_fx" : "WITHOUT abil_fx (fx_s107.bin not installed)"); }
