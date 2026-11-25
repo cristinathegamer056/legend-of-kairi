@@ -329,7 +329,7 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
     if (slot == CP_EQ_SHD) {  // (eqshield) "Defense <shield's +Def> [ Status Def ]"; picker: "Defense cur > new [ new Status Def ]"
         int cd = cp_eq_sh_def(v, v->sh_cur);
         if (pick < 0) {
-            cp_eq_stat_line_(&pk[npk], pl1, 0, cd, v->st[0].def, 8);
+            cp_eq_stat_line_(&pk[npk], pl1, 0, v->st[0].def, cd, 8);  // (eqlayout mark_162334, user: the shield's Defense in the yellow total spot, Status Def in the brackets)
             snprintf(pk[npk].text, sizeof pk[npk].text, "Defense");
             npk++;
             pnl[0] = (CsDesc){ CP_SEQ_(287, 288, 289), .nkids = (uint8_t)npk, .kids = pk };
