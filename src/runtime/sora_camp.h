@@ -7,6 +7,7 @@
 #pragma once
 #include "sora_camp_page.h"
 #include "sora_camp_pic.h"  // (s120 itempic) the Equipment page's Keyblade picture quad
+#include "sora_shield_tab.h"  // (eqshield) the Shield row
 #include "sora_armor.h"     // (s120) Link's worn armor for the Equipment page's Armor rows
 
 #define CAMP_QUADS 2048
@@ -80,6 +81,42 @@ static int armor_pouch_list(int slot, uint64_t *item, uint8_t *def, uint8_t *eq,
 }
 // (eqarmor) every hit Sora takes: Link's life before / after, the KH2 Defense percent and the armor Defense worn, so a hit
 // with and without armor can be compared (user's choice: BotW keeps applying the armor; this log checks that it does).
+// (eqshield) the shield pouch: items of pouch type 3 that sora_shield_tab.h knows, in pouch order. *cur = the equipped one
+// (-1 = none). -> count.
+static int shield_pouch_list(CpVals *v, int *cur) {
+    uint64_t got = sora_sites()->pmdm_got;
+    *cur = -1;
+    if (!got || !rd_ok(got, 8)) return 0;
+    uint64_t pp = *(const uint64_t *)(uintptr_t)got;
+    if (!rd_ok(pp, 8)) return 0;
+    uint64_t mgr = *(const uint64_t *)(uintptr_t)pp;
+    if (!rd_ok(mgr + 0x68, 0x18) || *(const int32_t *)(uintptr_t)(mgr + 0x7c) != 8) return 0;
+    uint64_t head = mgr + 0x68, nd = *(const uint64_t *)(uintptr_t)(head + 8);
+    int n = 0;
+    for (int k = 0; k < 1000 && nd && nd != head && n < CP_SH_MAX; k++) {
+        uint64_t it = nd - 8;
+        if (!rd_ok(it, 0x90)) break;
+        nd = *(const uint64_t *)(uintptr_t)(nd + 8);
+        if (*(const int32_t *)(uintptr_t)(it + 0x18) != 3) continue;
+        uint64_t sp = *(const uint64_t *)(uintptr_t)(it + 0x30);
+        char a[40];
+        int i;
+        if (!rd_ok(sp, 1)) continue;
+        for (i = 0; i < (int)sizeof a - 1 && rd_ok(sp + (uint64_t)i, 1) && ((const char *)(uintptr_t)sp)[i]; i++) a[i] = ((const char *)(uintptr_t)sp)[i];
+        a[i] = 0;
+        const ShieldGuard *d = NULL;
+        for (int t = 0; t < SHIELD_GUARD_N; t++) if (!strcmp(SHIELD_GUARD[t].name, a)) d = &SHIELD_GUARD[t];
+        if (!d) { LOG("[sora] camp: Shield row: pouch shield %s not in the table\n", a); continue; }
+        v->sh_item[n] = it, v->sh_guard[n] = d->guard;
+        if (*(const uint32_t *)(uintptr_t)(it + 0x88) & SHIELD_GUARD_UP_FLAG) v->sh_guard[n] += (int)*(const uint32_t *)(uintptr_t)(it + 0x80);
+        // (CsDesc text = 23 chars: "Shield of the Mind's Eye" -> "Mind's Eye")
+        snprintf(v->sh_name[n], sizeof v->sh_name[n], "%s", strlen(d->disp) > 23 && !strncmp(d->disp, "Shield of the ", 14) ? d->disp + 14 : d->disp);
+        snprintf(v->sh_actor[n], sizeof v->sh_actor[n], "%s", d->name);
+        if (*(const uint8_t *)(uintptr_t)(it + 0x24)) *cur = n;
+        n++;
+    }
+    return n;
+}
 static void armor_hit_log(int pct) {
     static int last = -1;
     int life = linkpos_link_life();
@@ -182,6 +219,11 @@ static void camp_vals(CpVals *v) {
         }
         v->st[0].def += sum;  // (shown only: BotW applies the armor itself; sl_def_tick keeps the level Defense)
         LOG("[sora] camp: armor pickers: %d head, %d body, %d legs pieces; worn Defense %d (Status Def %d)\n", v->ar_n[0], v->ar_n[1], v->ar_n[2], sum, v->st[0].def);
+    }
+    v->sh_on = g_eqshield, v->sh_n = 0, v->sh_cur = -1;  // (eqshield) the Shield row
+    if (v->sh_on) {
+        v->sh_n = shield_pouch_list(v, &v->sh_cur);
+        LOG("[sora] camp: Shield row: %d pouch shield%s, equipped %s\n", v->sh_n, v->sh_n == 1 ? "" : "s", v->sh_cur >= 0 ? v->sh_name[v->sh_cur] : "none");
     }
     LOG("[sora] camp: armor rows %d%s%s%s%s%s%s\n", v->arm_n, v->arm_n > 0 ? " " : "", v->arm_n > 0 ? v->arm_name[0] : "",
         v->arm_n > 1 ? ", " : "", v->arm_n > 1 ? v->arm_name[1] : "", v->arm_n > 2 ? ", " : "", v->arm_n > 2 ? v->arm_name[2] : "");
@@ -325,6 +367,15 @@ static bool camp_frame(uint64_t present) {
         }
         LOG("[sora] camp: Weapons slot -> %s\n", g_wpn_use ? "BotW weapon" : "Keyblade");
         sl_persist_save();
+    }
+    if (out.sh_set && CAMP.v.sh_on) {  // (eqshield) equip the shield / take it off, at once (BotW's own calls, pouch type 3)
+        CpVals *cv = &CAMP.v;
+        int k = out.sh_idx;
+        if (k >= 0 && k < cv->sh_n) armor_equip_ask(3, cv->sh_item[k], cv->sh_actor[k]);
+        else armor_equip_ask(3, 0, NULL), k = -1;
+        wpn_equip_tick(true);
+        cv->sh_cur = k;
+        LOG("[sora] camp: Shield -> %s (Guard %d)\n", k >= 0 ? cv->sh_name[k] : "None", k >= 0 ? cv->sh_guard[k] : 0);
     }
     if (out.ar_set > 0 && out.ar_set <= 3 && CAMP.v.ar_on) {  // (eqarmor) wear the piece / take it off, at once (BotW's own calls)
         int a = out.ar_set - 1, k = out.ar_idx;

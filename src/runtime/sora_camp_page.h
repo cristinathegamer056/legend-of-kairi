@@ -30,6 +30,7 @@ static void cp_name_(CsDesc *d, int i) {
 // one Status page column set (slice 2): a value < 0 shows "--"
 typedef struct { int lv, exp, next, hp, hp_max, mp, mp_max, ap_used, ap_max, drive, bonus_lv, str, mag, def, res[4]; } CpStat;
 #define CP_BW_MAX 20  // (eqtabs) BotW's weapon pouch holds at most 20
+#define CP_SH_MAX 24  // (eqshield) shields listed (BotW's shield pouch holds at most 20)
 #define CP_AR_MAX 48  // (eqarmor) armor pieces listed per slot (Head / Body / Legs)
 typedef struct { int munny; int time_s; int lv[3]; int hp[3], hp_max[3], mp[3], mp_max[3]; CpStat st[3];
                  uint16_t ab_id[64]; int ab_n, ab_ap_max; abm_t ab_on; int sc[CUST_SLOTS]; int kb[KB_SLOTS]; uint32_t kb_own; int kb_forms;
@@ -46,7 +47,11 @@ typedef struct { int munny; int time_s; int lv[3]; int hp[3], hp_max[3], mp[3], 
                  // (eqarmor) ar_on = the armor rows pick; per slot (0 Head 1 Body 2 Legs) the pouch pieces of that type. With ar_on
                  // arm_n is 3 and arm_name / arm_def[slot] = the worn piece ("None", 0 when nothing)
                  int ar_on, ar_n[3]; uint64_t ar_item[3][CP_AR_MAX]; uint8_t ar_def[3][CP_AR_MAX], ar_eq[3][CP_AR_MAX];
-                 char ar_name[3][CP_AR_MAX][24], ar_actor[3][CP_AR_MAX][24]; } CpVals;  // (s128 wpnmenu) Link's BotW weapon: wpn_on = equipped + usable here (the picker's top entry), wpn_use = Sora swings it (g_wpn_use), wpn_atk = power + atk_up
+                 char ar_name[3][CP_AR_MAX][24], ar_actor[3][CP_AR_MAX][24];
+                 // (eqshield) sh_on = the Shield row exists; sh_n pouch shields (pouch order), sh_cur = the equipped one (-1 = none),
+                 // sh_guard = BotW Guard (sora_shield_tab.h + Shield Guard Up)
+                 int sh_on, sh_n, sh_cur; uint64_t sh_item[CP_SH_MAX]; int sh_guard[CP_SH_MAX];
+                 char sh_name[CP_SH_MAX][24], sh_actor[CP_SH_MAX][24]; } CpVals;  // (s128 wpnmenu) Link's BotW weapon: wpn_on = equipped + usable here (the picker's top entry), wpn_use = Sora swings it (g_wpn_use), wpn_atk = power + atk_up
 // ab_* = Sora's learned abilities (slice 3), sc = his shortcuts (slice 4), kb = his Keyblades (slice 5); 0 Sora 1 Donald 2 Goofy; munny / time_s < 0 = "--"
 // kb_own = the owned Keyblades (s89 kb: bit i = KB_TAB[i]; the picker adds KK + Star Seeker + the equipped ones)
 
@@ -66,7 +71,8 @@ typedef struct { int state, row, timer, held, layout_l2, layout_f, page, who, ne
 // kb_set: Keyblade slot kb_slot <- item id kb_id
 typedef struct { uint8_t db_set /* (s140) Debug page: BACKEND row + 1 changed */; int db_val; uint8_t eat, pulse_plus, pass_plus, draw, se, ab_set, sc_set, kb_set, wpn_set /* (s128) 1 = BotW weapon picked, 2 = a Keyblade picked in the Weapons slot */, kb_swap /* (s118) other slot + 1 */; uint16_t ab_id; abm_t ab_on; int sc_slot, sc_spell, kb_slot, kb_id;
                  int bw_pick;  // (eqtabs) 1 + the v->bw index picked in the BotW Weapons tab (equip it in BotW)
-                 int ar_set, ar_idx;  // (eqarmor) ar_set = armor slot + 1 picked; ar_idx = its v->ar index, -1 = None (take it off)
+                 int ar_set, ar_idx;
+                 int sh_set, sh_idx;  // (eqshield) sh_set 1 = the Shield picker chose; sh_idx = its v->sh index, -1 = None (take it off)  // (eqarmor) ar_set = armor slot + 1 picked; ar_idx = its v->ar index, -1 = None (take it off)
                  int log_row; const char *log; } CpOut;  // log_row -1 = none
 
 #define CP_ROWS 6
@@ -414,6 +420,16 @@ static void cp_equip_input_(CampPage *p, const CampSeq *s, uint64_t press, float
     if (p->sub == 1) {
         if (press & CP_BTN_B) { cp_cust_go_(p, s, v, 0, true); out->se = CP_SE_CANCEL; out->log = "equip list back"; return; }
         if (press & (CP_BTN_ZL | CP_BTN_ZR)) { out->se = CP_SE_ERROR; return; }
+        if ((press & CP_BTN_A) && p->eq_slot == CP_EQ_SHD) {  // (eqshield) the Shield picker, cursor on the equipped one
+            int l[CP_EQ_LMAX], n = cp_eq_plist(v, p->kb, p->eq_slot, l), e;
+            if (!cp_eq_has_sh(v)) { out->se = CP_SE_ERROR; out->log = "equip shield off"; return; }
+            p->eq_pick = v->sh_cur >= 0 ? CP_EQ_SH + v->sh_cur : CP_EQ_SHN;
+            e = cp_eq_pos(l, n, p->eq_pick);
+            p->eq_top = e < CP_EQ_VIS ? 0 : e - CP_EQ_VIS + 1;
+            cp_cust_go_(p, s, v, 2, false);
+            out->se = CP_SE_DECIDE; out->log = "equip shield picker";
+            return;
+        }
         if ((press & CP_BTN_A) && p->eq_slot >= CP_EQ_ARM && cp_eq_has_ar(v)) {  // (eqarmor) the slot's armor picker
             int l[CP_EQ_LMAX], n = cp_eq_plist(v, p->kb, p->eq_slot, l), e;
             p->eq_pick = cp_eq_ar_cur(v, p->eq_slot - CP_EQ_ARM);
@@ -445,6 +461,16 @@ static void cp_equip_input_(CampPage *p, const CampSeq *s, uint64_t press, float
         return;
     }
     if (press & CP_BTN_B) { cp_cust_go_(p, s, v, 1, false); out->se = CP_SE_CANCEL; out->log = "equip picker back"; return; }
+    if ((press & CP_BTN_A) && p->eq_slot == CP_EQ_SHD) {  // (eqshield) equip this shield / None = take it off
+        int k = p->eq_pick == CP_EQ_SHN ? -1 : p->eq_pick - CP_EQ_SH;
+        if (!cp_eq_has_sh(v) || k < -1 || k >= v->sh_n) { out->se = CP_SE_ERROR; out->log = "equip shield bad entry"; return; }
+        CpVals nv = *v;
+        nv.sh_cur = k;
+        out->sh_set = 1, out->sh_idx = k;
+        cp_cust_go_(p, s, &nv, 1, false);
+        out->se = CP_SE_DECIDE; out->log = k < 0 ? "equip shield off" : "equip shield";
+        return;
+    }
     if ((press & CP_BTN_A) && p->eq_slot >= CP_EQ_ARM && cp_eq_has_ar(v)) {  // (eqarmor) wear this piece / None = take it off
         int a = p->eq_slot - CP_EQ_ARM, k = p->eq_pick == CP_EQ_ARN ? -1 : p->eq_pick - CP_EQ_AR;
         if (a < 0 || a > 2 || k < -1 || k >= v->ar_n[a]) { out->se = CP_SE_ERROR; out->log = "equip armor bad entry"; return; }

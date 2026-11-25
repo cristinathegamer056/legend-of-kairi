@@ -44,7 +44,7 @@ static int cp_eq_has_wpn(const CpVals *v, int slot) { return g_eqlook && v->wpn_
 // g_eq_tab 0 = the owned Keyblades (no s128 top entry), 1 = the pouch weapons Sora can swing (CP_EQ_BW + v->bw index).
 // g_eq_tab is set when the picker opens (the kind in the hand) and by L / R. Live "set eqtabs 0" = the s128 list.
 #define CP_EQ_BW 2000
-#define CP_EQ_LMAX (KB_N + 1 + CP_BW_MAX + CP_AR_MAX + 1)
+#define CP_EQ_LMAX (KB_N + 1 + CP_BW_MAX + CP_AR_MAX + 1 + CP_SH_MAX + 1)
 // (eqarmor) user: "add Armor to the equipment menu" (+ "None" first to take a piece off; BotW keeps applying the armor's
 // Defense to the hits, the KH2 pages show level Def + armor). An armor row's picker lists CP_EQ_ARN (None) + CP_EQ_AR + its
 // v->ar index; picking one wears it in BotW (BotW's own quick-selector calls). Live "set eqarmor 0" = the s120 show-only rows.
@@ -52,6 +52,14 @@ static int cp_eq_has_wpn(const CpVals *v, int slot) { return g_eqlook && v->wpn_
 #define CP_EQ_ARN 4000
 #define CP_EQ_AR 4001
 static int cp_eq_has_ar(const CpVals *v) { return g_eqlook && g_eqarmor && v->ar_on; }
+// (eqshield) user: "add option to equip a shield in your equipment menu. Similar to how the armor is ... the 4th slot". The row
+// after the Armor rows shows Link's equipped BotW shield ("None" when none); A opens a picker: None (take it off) + the pouch
+// shields, 2nd column = BotW Guard; picking one equips it in BotW (BotW's own calls, pouch type 3). No Def bonus.
+#define CP_EQ_SHD 200            // eq_slot == CP_EQ_SHD = the Shield row (>= CP_EQ_ARM: the armor rows' look; its own branches first)
+#define CP_EQ_SHN 5000           // picker entry: None
+#define CP_EQ_SH 5001            // picker entry: + the v->sh index
+static int cp_eq_has_sh(const CpVals *v) { return g_eqlook && g_eqshield && v->sh_on; }
+static int cp_eq_sh_guard(const CpVals *v, int k) { return k >= 0 && k < v->sh_n ? v->sh_guard[k] : 0; }
 static int cp_eq_ar_cur(const CpVals *v, int a) {
     for (int k = 0; k < v->ar_n[a]; k++) if (v->ar_eq[a][k]) return CP_EQ_AR + k;
     return CP_EQ_ARN;
@@ -64,6 +72,12 @@ static int cp_eq_bw_cur(const CpVals *v) {  // the equipped pouch weapon's entry
 }
 static int cp_eq_plist(const CpVals *v, const int kb[KB_SLOTS], int slot, int out[CP_EQ_LMAX]) {
     int n = 0;
+    if (slot == CP_EQ_SHD) {  // (eqshield)
+        if (!cp_eq_has_sh(v)) return 0;
+        out[n++] = CP_EQ_SHN;
+        for (int k = 0; k < v->sh_n && k < CP_SH_MAX; k++) out[n++] = CP_EQ_SH + k;
+        return n;
+    }
     if (slot >= CP_EQ_ARM) {  // (eqarmor)
         int a = slot - CP_EQ_ARM;
         if (a < 0 || a > 2 || !cp_eq_has_ar(v)) return 0;
@@ -134,7 +148,7 @@ static int cp_build_equip_list_old(CsTree *t, const int kb[KB_SLOTS], const CpVa
 // [V] = VERIFIED from the exe tables / decompile, [G] = GUESS (a position / colour read off the reference photos).
 #define CP_EQ_KEY_ARMOR 600      // "Armor" tag (sys 0x0463)
 #define CP_EQ_KEY_ABILITY 601    // "Ability" label (sys 0x464c)
-#define CP_EQ_ROWS_MAX (KB_SLOTS + 3)
+#define CP_EQ_ROWS_MAX (KB_SLOTS + 4)  // (eqshield: + the Shield row)
 // the ability name of a Keyblade: the Abilities page's key, else keys 610.. (the 8 Keyblade abilities not in AB_TAB; names only)
 static int cp_eq_ab_key(int ab) {
     static const int ID[8] = {162, 163, 398, 412, 413, 422, 404, 541};
@@ -147,6 +161,7 @@ static int cp_eq_ab_key(int ab) {
 static int cp_eq_rows(const CpVals *v, int out[CP_EQ_ROWS_MAX]) {
     int n = cp_eq_vis(v, out);
     if (g_eqlook) for (int i = 0; i < v->arm_n && i < 3; i++) out[n++] = CP_EQ_ARM + i;
+    if (cp_eq_has_sh(v)) out[n++] = CP_EQ_SHD;  // (eqshield) the 4th slot
     return n;
 }
 // [V] FM tables: row ag 0x5bc0d0 {265 Weapons, 252 Armor} + 0x5bc0e0 {266 Valor, 267 Master, 268 Final}; tag ag 0x5bc0f0
@@ -226,23 +241,43 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
         int nk = 0;
         for (int i = 0; i < nv; i++) {
             int m = 0, s = vs[i];
-            if (s >= CP_EQ_ARM) rk[i][m++] = cp_eq_txt_(123, v->arm_name[s - CP_EQ_ARM], 0, CS_BOTTOM_LEFT, 0, 0);
+            if (s == CP_EQ_SHD) rk[i][m++] = cp_eq_txt_(123, v->sh_cur >= 0 ? v->sh_name[v->sh_cur] : "None", 0, CS_BOTTOM_LEFT, 0, 0);  // (eqshield)
+            else if (s >= CP_EQ_ARM) rk[i][m++] = cp_eq_txt_(123, v->arm_name[s - CP_EQ_ARM], 0, CS_BOTTOM_LEFT, 0, 0);
             else if (s == KB_MAIN && wrow) rk[i][m++] = cp_eq_txt_(123, v->wpn_name, 0, CS_BOTTOM_LEFT, 0, 0);  // (s128 wpnmenu)
             else rk[i][m++] = (CsDesc){ CP_SEQ_(-1, 123, -1), .msg_key = cp_eq_name_key(kb_slot_id(kb, s)), .anchor = CS_BOTTOM_LEFT };
             if (s == slot) { rk[i][m++] = sel_kids[0]; rk[i][m++] = sel_kids[1]; }
             kids[nk++] = (CsDesc){ .y = 26.0f * i, CP_SEQ_(-1, cp_eq_row_ag(s), -1), .nkids = (uint8_t)m, .kids = rk[i] };
-            if (s < CP_EQ_ARM || s == CP_EQ_ARM)  // the tag: every Keyblade row, the first armor row only (FUN_140358c50)
+            if (s < CP_EQ_ARM || s == CP_EQ_ARM || s == CP_EQ_SHD) {  // the tag: every Keyblade row, the first armor row only (FUN_140358c50); (eqshield) + "Shield"
                 kids[nk++] = (CsDesc){ .y = 26.0f * i, CP_SEQ_(-1, cp_eq_tag_ag(s), -1), .flags = CS_A_TEXT_IGNORE_SCALE, .anchor = CS_BOTTOM_LEFT,
-                                       .msg_key = s >= CP_EQ_ARM ? CP_EQ_KEY_ARMOR : cp_eq_row_key(s) };
+                                       .msg_key = s == CP_EQ_SHD ? 0 : s >= CP_EQ_ARM ? CP_EQ_KEY_ARMOR : cp_eq_row_key(s) };
+                if (s == CP_EQ_SHD) snprintf(kids[nk - 1].text, sizeof kids[nk - 1].text, "Shield");
+            }
         }
         win[0] = (CsDesc){ CP_SEQ_(227, 228, 229), .nkids = (uint8_t)nk, .kids = kids };
-        if (slot >= CP_EQ_ARM) snprintf(hlit, sizeof hlit, "Armor worn in BotW.");
+        if (slot == CP_EQ_SHD) snprintf(hlit, sizeof hlit, "Link's BotW shield.");  // (eqshield)
+        else if (slot >= CP_EQ_ARM) snprintf(hlit, sizeof hlit, "Armor worn in BotW.");
         else if (slot == KB_MAIN && wrow) snprintf(hlit, sizeof hlit, "Link's BotW weapon.");  // (s128 review: CsDesc.text is 24 bytes)  // (s128 wpnmenu)
         else { int ki = kb_index(kb_slot_id(kb, slot)); hk = ki >= 0 ? kb_text_key(ki) + 1 : cp_eq_row_key(slot) + 1; }  // (s120b ref0: the Keyblade's description)
     } else {  // ---- state 5 / 6: the picker (vanilla swaps the window and the panel ags) ----
-        cp_eq_title3_(title, slot >= CP_EQ_ARM ? CP_EQ_KEY_ARMOR : cp_eq_row_key(slot));
+        cp_eq_title3_(title, slot == CP_EQ_SHD ? 0 : slot >= CP_EQ_ARM ? CP_EQ_KEY_ARMOR : cp_eq_row_key(slot));
         nt = 3;
-        if (slot >= CP_EQ_ARM) {  // (eqarmor) None + the slot's pieces: name, Defense column (the form sub-weapon kind's ags: GUESS)
+        if (slot == CP_EQ_SHD) {  // (eqshield) None + the pouch shields, 2nd column = Guard
+            int l[CP_EQ_LMAX], n = cp_eq_plist(v, kb, slot, l);
+            title[2].msg_key = 0, snprintf(title[2].text, sizeof title[2].text, "Shield");
+            for (int e = top < 0 ? 0 : top; e < n && np < CP_EQ_VIS; e++, np++) {
+                int i = l[e], m = 0, k = i - CP_EQ_SH;
+                char gd[12] = "";
+                prk[np][m++] = cp_eq_txt_(123, i == CP_EQ_SHN ? "None" : v->sh_name[k], 0, CS_BOTTOM_LEFT, 0, 0);
+                if (i == pick) { prk[np][m++] = sel_kids[0]; prk[np][m++] = sel_kids[1]; }
+                pkids[np * 2] = (CsDesc){ .y = 26.0f * np, CP_SEQ_(-1, 221, -1), .nkids = (uint8_t)m, .kids = prk[np] };
+                if (i != CP_EQ_SHN) snprintf(gd, sizeof gd, "%d", v->sh_guard[k]);
+                pcol[np][0] = cp_eq_txt_(124, gd, 0, CS_BOTTOM_CENTER, 44.5f, 0);
+                pkids[np * 2 + 1] = (CsDesc){ .y = 26.0f * np, CP_SEQ_(-1, 222, -1), .nkids = 1, .kids = pcol[np] };
+            }
+            win[0] = (CsDesc){ CP_SEQ_(217, 218, 219), .nkids = (uint8_t)(np * 2), .kids = pkids };
+            if (pick == CP_EQ_SHN) snprintf(hlit, sizeof hlit, "Take the shield off.");
+            else snprintf(hlit, sizeof hlit, "Guard %d", cp_eq_sh_guard(v, pick - CP_EQ_SH));
+        } else if (slot >= CP_EQ_ARM) {  // (eqarmor) None + the slot's pieces: name, Defense column (the form sub-weapon kind's ags: GUESS)
             static const char *const SLOTN[3] = {"Head", "Body", "Legs"};
             int a = slot - CP_EQ_ARM, l[CP_EQ_LMAX], n = cp_eq_plist(v, kb, slot, l);
             title[2].msg_key = 0, snprintf(title[2].text, sizeof title[2].text, "%s", SLOTN[a < 0 ? 0 : a > 2 ? 2 : a]);
@@ -287,7 +322,20 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
     if (hlit[0]) snprintf(help[0].text, sizeof help[0].text, "%s", hlit);
     // ---- the right panel (state 2: ag 287-289 [V]; picker: kind panel ags) ----
     int main_id = kb_slot_id(kb, KB_MAIN), cur_id = slot >= CP_EQ_ARM ? 0 : kb_slot_id(kb, slot), npk = 0;
-    if (pick < 0 && slot >= CP_EQ_ARM) {  // [G] Armor: "Defense <piece> [ <sum worn> ]", no Ability line
+    if (slot == CP_EQ_SHD) {  // (eqshield) "Guard <shield> [ <shield> ]"; picker: "Guard cur > new [ new ]"
+        int cg = cp_eq_sh_guard(v, v->sh_cur);
+        if (pick < 0) {
+            cp_eq_stat_line_(&pk[npk], pl1, 0, cg, cg, 8);
+            snprintf(pk[npk].text, sizeof pk[npk].text, "Guard");
+            npk++;
+            pnl[0] = (CsDesc){ CP_SEQ_(287, 288, 289), .nkids = (uint8_t)npk, .kids = pk };
+        } else {
+            int nw = pick == CP_EQ_SHN ? 0 : cp_eq_sh_guard(v, pick - CP_EQ_SH);
+            cp_eq_cmp_lines_(&pk[0], pl3, 0, cg, nw, nw, 26);
+            snprintf(pk[0].text, sizeof pk[0].text, "Guard");
+            pnl[0] = (CsDesc){ CP_SEQ_(223, 224, 225), .nkids = 2, .kids = pk };
+        }
+    } else if (pick < 0 && slot >= CP_EQ_ARM) {  // [G] Armor: "Defense <piece> [ <sum worn> ]", no Ability line
         cp_eq_stat_line_(&pk[npk++], pl1, 69, v->arm_def[slot - CP_EQ_ARM], cp_eq_arm_total(v), 8);
         pnl[0] = (CsDesc){ CP_SEQ_(287, 288, 289), .nkids = (uint8_t)npk, .kids = pk };
     } else if (pick < 0 && slot == KB_MAIN && wrow) {  // (s128 wpnmenu) GUESS: "Attack  power [ base + power ]", "Durability  life [ max ]", no Ability line

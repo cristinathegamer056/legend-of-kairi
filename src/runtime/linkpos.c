@@ -3983,7 +3983,7 @@ static int pouch_equip_(uint64_t item, const char *name, bool armor_ok) {
     }
     char nm[64];
     int ty = found && readable(item, 0x90) == 0x90 ? *(const int32_t *)(uintptr_t)(item + 0x18) : -1;
-    if (!found || !(ty == 0 || (armor_ok && ty >= 4 && ty <= 6)) || !wpn_item_name(item, nm, sizeof nm) || strcmp(nm, name)) {
+    if (!found || !(ty == 0 || (armor_ok && ty >= 3 && ty <= 6)) || !wpn_item_name(item, nm, sizeof nm) || strcmp(nm, name)) {
         LOG("[linkpos] weapon equip: %s item %llx not in the pouch any more (found %d)\n", name, (unsigned long long)item, (int)found);
         return -3;
     }
@@ -4015,7 +4015,7 @@ int linkpos_pouch_unequip(int type) {
     uint64_t pinfo = SS->player_info_ptr, got = PMDM_GOT;
     uint64_t pp = in_guest(got) ? *(const uint64_t *)(uintptr_t)got : 0;
     uint64_t mgr = in_guest(pp) ? *(const uint64_t *)(uintptr_t)pp : 0;
-    if (!c || !f_un || !f_dn || !f_set || !f_pl || !pinfo || !(type == 0 || (type >= 4 && type <= 6)) || !dispatch_lookup(f_un) ||
+    if (!c || !f_un || !f_dn || !f_set || !f_pl || !pinfo || !(type == 0 || (type >= 3 && type <= 6)) || !dispatch_lookup(f_un) ||
         !dispatch_lookup(f_dn) || !dispatch_lookup(f_set) || !dispatch_lookup(f_pl)) {
         LOG("[linkpos] pouch unequip %d refused (%s)\n", type, !f_un || !f_set ? "no site for this game version" : !c ? (g_in_frame ? "no guest cpu" : "outside linkpos_frame") : "bad type / no function");
         return -1;

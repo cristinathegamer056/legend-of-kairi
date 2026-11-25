@@ -21,6 +21,7 @@
 enum { KB_MAIN, KB_VALOR, KB_MASTER, KB_FINAL, KB_SLOTS };
 static int g_mfkb = 1;
 static int g_eqarmor = 1;  // (eqarmor, on by default) 1 = the Equipment page's Head / Body / Legs rows open a picker (sora_camp_equip.h), live "set eqarmor"
+static int g_eqshield = 1;  // (eqshield, on by default) 1 = the Equipment page has a Shield row after the Armor rows (sora_camp_equip.h), live "set eqshield"
 static int g_eqtabs = 1;  // (eqtabs, on by default) 1 = the Equipment picker has a Keyblades and a BotW Weapons tab (sora_camp_equip.h), live "set eqtabs"
 static int g_eqlook = 1;  // (s120) 1 = the vanilla KH2 Equipment look (sora_camp_equip.h), live "set eqlook 0" = the old page
 static int g_eq2x = 97, g_eq2y = 58, g_eqtx = 51, g_eqvx = 22, g_eqky = 0, g_eqpx = 75, g_eqpy = 55, g_eqax = 0, g_eqhy = 334, g_eqhx = 141, g_eqpt = 86, g_eqpc = -53;  // (s120b) Equipment panel text tuning (sora_camp_equip.h)
