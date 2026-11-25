@@ -1203,13 +1203,17 @@ static void sl_slot_done(int slot, const char *why) {
 
 // Once per tick: the exe's slot events (in order), then the mtime poll once a second (both exes; on the new one it only
 // finishes a write whose "written out" event never came).
-static void sl_slot_tick(void) {
+// (dbgsave) paused = called from BotW's pause too (sora.c): a pause-menu Save is written into the sidecar at once (before, it waited
+// for the unpause, so closing the game from the pause menu lost the sidecar of that save). A Load's read is left in the queue
+// (not consumed) for the next unpaused tick, so loads still happen where they always did.
+static void sl_slot_tick_(bool paused) {
     uint64_t now = GetTickCount64();
     if (SLX.save_ev) {
         uint64_t seq = SLS.seq;
         int slot, kind;
         char dir[1024];
         while (SLX.save_ev(&seq, &slot, &kind, dir, sizeof dir)) {
+            if (paused && kind == 0 && slot >= 0 && slot < SL_SLOTS && !SLS.f[slot].pend) break;  // (a load: the next unpaused tick)
             SLS.seq = seq;
             if (slot < 0 || slot >= SL_SLOTS) continue;
             char *cut = strrchr(dir, '/');
@@ -1248,6 +1252,8 @@ static void sl_slot_tick(void) {
     if (!SLS.polled) LOG("[sora] levels: watching %s/<0-%d>/game_data.sav (slot %d now)\n", sl_root(), SL_SLOTS - 1, SLS.slot);
     SLS.polled = true;
 }
+static void sl_slot_tick(void) { sl_slot_tick_(false); }
+static void sl_slot_tick_paused(void) { sl_init(); sl_slot_tick_(true); }  // (dbgsave: sora.c's paused branch)
 
 static void sl_init(void) {
     if (SL.init) return;

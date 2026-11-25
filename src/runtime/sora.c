@@ -6943,6 +6943,7 @@ static void sora_mod_frame_body(void) {
         g_nd_pause++;
         g_note_fl |= t0 ? SORA_MELTY_FRAME_PAUSED : SORA_MELTY_FRAME_LOADING;  // (s209: BotW's pause / no world frame)
         skt_quiet();
+        if (t0) sl_slot_tick_paused();  // (dbgsave) a pause-menu Save writes the sidecar now, not at the unpause
         sv_tab_tick(GetTickCount64());  // (s131) the save point's System tab jump runs while BotW's menu is up
         float pp[3];
         if (t0 && linkpos_link_pos(pp)) live_poll(pp, vk_frame_counter());  // (menu tests: new input while paused)
