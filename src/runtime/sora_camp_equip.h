@@ -340,7 +340,7 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
             pnl[0] = (CsDesc){ CP_SEQ_(223, 224, 225), .nkids = 2, .kids = pk };
         }
     } else if (pick < 0 && slot >= CP_EQ_ARM) {  // [G] Armor: "Defense <piece> [ <sum worn> ]", no Ability line
-        cp_eq_stat_line_(&pk[npk++], pl1, 69, v->arm_def[slot - CP_EQ_ARM], cp_eq_arm_total(v), 8);
+        cp_eq_stat_line_(&pk[npk++], pl1, 69, cp_eq_arm_total(v), v->arm_def[slot - CP_EQ_ARM], 8);  // (eqlayout mark_163020, user: the piece's Defense in yellow, the worn total in the brackets - as the Shield row)
         pnl[0] = (CsDesc){ CP_SEQ_(287, 288, 289), .nkids = (uint8_t)npk, .kids = pk };
     } else if (pick < 0 && slot == KB_MAIN && wrow) {  // (s128 wpnmenu) GUESS: "Attack  power [ base + power ]", "Durability  life [ max ]", no Ability line
         cp_eq_stat_line_(&pk[npk], pl1, 0, v->wpn_atk, v->wpn_atk, 8);  // (s128 review: [ Attack ] alone, not + level Str)
