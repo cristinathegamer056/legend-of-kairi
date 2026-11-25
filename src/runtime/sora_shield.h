@@ -7,17 +7,41 @@
 // Logs "[shield] ...".
 #pragma once
 
-typedef struct { const char *name; int guard; } ShieldGuard;
+typedef struct { const char *name, *disp; int guard; } ShieldGuard;  // actor, English name (Msg_USen ActorType/WeaponShield), Guard
 static const ShieldGuard SHIELD_GUARD[] = {
-    {"Weapon_Shield_001", 2},  {"Weapon_Shield_002", 16}, {"Weapon_Shield_003", 40}, {"Weapon_Shield_004", 3},
-    {"Weapon_Shield_005", 10}, {"Weapon_Shield_006", 25}, {"Weapon_Shield_007", 15}, {"Weapon_Shield_008", 22},
-    {"Weapon_Shield_009", 35}, {"Weapon_Shield_013", 18}, {"Weapon_Shield_014", 30}, {"Weapon_Shield_015", 42},
-    {"Weapon_Shield_016", 30}, {"Weapon_Shield_017", 44}, {"Weapon_Shield_018", 62}, {"Weapon_Shield_021", 3},
-    {"Weapon_Shield_022", 55}, {"Weapon_Shield_023", 30}, {"Weapon_Shield_025", 18}, {"Weapon_Shield_026", 20},
-    {"Weapon_Shield_030", 90}, {"Weapon_Shield_031", 3},  {"Weapon_Shield_032", 3},  {"Weapon_Shield_033", 70},
-    {"Weapon_Shield_034", 3},  {"Weapon_Shield_035", 4},  {"Weapon_Shield_036", 35}, {"Weapon_Shield_037", 48},
-    {"Weapon_Shield_038", 70}, {"Weapon_Shield_040", 1},  {"Weapon_Shield_041", 16}, {"Weapon_Shield_042", 14},
-    {"Weapon_Shield_057", 65},
+    {"Weapon_Shield_001", "Wooden Shield", 2},
+    {"Weapon_Shield_002", "Soldier's Shield", 16},
+    {"Weapon_Shield_003", "Knight's Shield", 40},
+    {"Weapon_Shield_004", "Boko Shield", 3},
+    {"Weapon_Shield_005", "Spiked Boko Shield", 10},
+    {"Weapon_Shield_006", "Dragonbone Boko Shield", 25},
+    {"Weapon_Shield_007", "Lizal Shield", 15},
+    {"Weapon_Shield_008", "Reinforced Lizal Shield", 22},
+    {"Weapon_Shield_009", "Steel Lizal Shield", 35},
+    {"Weapon_Shield_013", "Guardian Shield", 18},
+    {"Weapon_Shield_014", "Guardian Shield+", 30},
+    {"Weapon_Shield_015", "Guardian Shield++", 42},
+    {"Weapon_Shield_016", "Lynel Shield", 30},
+    {"Weapon_Shield_017", "Mighty Lynel Shield", 44},
+    {"Weapon_Shield_018", "Savage Lynel Shield", 62},
+    {"Weapon_Shield_021", "Rusty Shield", 3},
+    {"Weapon_Shield_022", "Royal Shield", 55},
+    {"Weapon_Shield_023", "Forest Dweller's Shield", 30},
+    {"Weapon_Shield_025", "Silver Shield", 18},
+    {"Weapon_Shield_026", "Gerudo Shield", 20},
+    {"Weapon_Shield_030", "Hylian Shield", 90},
+    {"Weapon_Shield_031", "Hunter's Shield", 3},
+    {"Weapon_Shield_032", "Fisherman's Shield", 3},
+    {"Weapon_Shield_033", "Royal Guard's Shield", 70},
+    {"Weapon_Shield_034", "Emblazoned Shield", 3},
+    {"Weapon_Shield_035", "Traveler's Shield", 4},
+    {"Weapon_Shield_036", "Radiant Shield", 35},
+    {"Weapon_Shield_037", "Daybreaker", 48},
+    {"Weapon_Shield_038", "Ancient Shield", 70},
+    {"Weapon_Shield_040", "Pot Lid", 1},
+    {"Weapon_Shield_041", "Shield of the Mind's Eye", 16},
+    {"Weapon_Shield_042", "Kite Shield", 14},
+    {"Weapon_Shield_057", "Hero's Shield", 65},
 };
 #define SHIELD_GUARD_UP_FLAG 0x100u  // GUESS (see above)
 

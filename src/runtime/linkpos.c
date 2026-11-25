@@ -1900,18 +1900,21 @@ int linkpos_weapon_info(char *actor, int cap, int *life, int *atk_up) {
     if (atk_up) *atk_up = (*(const uint32_t *)(uintptr_t)(it + 0x88) & 1) ? (int)*(const uint32_t *)(uintptr_t)(it + 0x80) : 0;
     return 1;
 }
-// (shielddef) Link's equipped shield: the PouchItem of type 3 (shield) among the equipped slots that start at
-// WPN_SLOTS_OFF (slot 0 = the sword, wpn_item). GUESS: 4 slots (sword / bow / arrow / shield) and the modifier pair as
-// the weapon's (+0x80 value, +0x88 flags); the caller logs them. -> 1 with the actor name, 0 = no shield equipped.
+// (shielddef) Link's equipped shield: the pouch item of type 3 (shield) with its equipped flag (+0x24) set, found by
+// walking PauseMenuDataMgr's item list (mgr+0x68, as linkpos_weapon_equip / the DLL's pouch lists). The modifier pair
+// as the weapon's (+0x80 value, +0x88 flags; the caller logs them). -> 1 with the actor name, 0 = no shield equipped.
 int linkpos_shield_info(char *actor, int cap, int *mod_value, int *mod_flags) {
     uint64_t got = SS->pmdm_got;
     uint64_t pp = in_guest(got) ? *(const uint64_t *)(uintptr_t)got : 0;
     uint64_t mgr = in_guest(pp) ? *(const uint64_t *)(uintptr_t)pp : 0;
-    if (!in_guest(mgr)) return 0;
-    for (int i = 0; i < 4; i++) {
-        uint64_t it = *(const uint64_t *)(uintptr_t)(mgr + WPN_SLOTS_OFF + 8 * i);
+    if (!in_guest(mgr) || readable(mgr + 0x68, 0x18) != 0x18 || *(const int32_t *)(uintptr_t)(mgr + 0x7c) != 8) return 0;
+    uint64_t head = mgr + 0x68, n = *(const uint64_t *)(uintptr_t)(head + 8);
+    for (int k = 0; k < 500 && in_guest(n) && n != head; k++) {
+        uint64_t it = n - 8;
         char nm[64];
-        if (!in_guest(it) || *(const int32_t *)(uintptr_t)(it + 0x18) != 3 || !wpn_item_name(it, nm, sizeof nm)) continue;
+        n = *(const uint64_t *)(uintptr_t)(n + 8);
+        if (readable(it, 0x90) != 0x90 || *(const int32_t *)(uintptr_t)(it + 0x18) != 3 || !*(const uint8_t *)(uintptr_t)(it + 0x24) ||
+            !wpn_item_name(it, nm, sizeof nm)) continue;
         if (actor && cap > 0) snprintf(actor, (size_t)cap, "%s", nm);
         if (mod_value) *mod_value = (int)*(const uint32_t *)(uintptr_t)(it + 0x80);
         if (mod_flags) *mod_flags = (int)*(const uint32_t *)(uintptr_t)(it + 0x88);
