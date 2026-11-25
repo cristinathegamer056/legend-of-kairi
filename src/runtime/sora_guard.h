@@ -27,10 +27,10 @@ static int g_guard = 1;  // live "set guard 0/1" (0 = old behaviour: Square alwa
 static int g_guard_inv = 1;
 // (gparry) two-tier guard (user's design): a block within the first g_gparry_win GFR of the Guard motion = a PARRY (KH2's
 // reflect motion 42 + Counterguard as before, AND the attacker staggers: the nearest live enemy in front within 4 u takes a
-// g_gparry_dmg hit of reaction size g_gparry_f54, default 6 = BotW repelled (Rebound); gparrycycle 1 tries a list); a block later in the Guard
+// g_gparry_dmg hit of reaction size g_gparry_f54, default 6 = BotW repelled (Rebound)); a block later in the Guard
 // motion = a REGULAR block (spark, clang, invulnerable frames, the reflect motion; no Counterguard, no stagger). With gparry on the
 // block window runs to the end of the Guard motion (KH2's own closes at GFR ~37 of 60; later hits used to land).
-// Beam reflects are unchanged (no stagger). Env SAVAGEWIND_SORA_GUARD_PARRY (default 0), live gparry / gparrywin /
+// Beam reflects are unchanged (no stagger). Env SAVAGEWIND_SORA_GUARD_PARRY (default 1), live gparry / gparrywin /
 // gparrydmg / gparryf54. Logs '[sora] gparry: ...'.
 // (gparry option B) the parry's reaction = BotW's own parried-enemy one: f54 = the reaction type EnemyDefaultReaction
 // switches on (1.9.0 0x7100849394, vtable 0x7101c54140, factory crc 0x0a5b6fa2 -> 0x7100b73878): 6 -> child
@@ -42,13 +42,9 @@ static int g_gparry = -1, g_gparry_win = 24, g_gparry_dmg = 1, g_gparry_f54 = 6;
 // repelled reaction), whatever its timing; projectiles go through Link's guard bits (parrylink / parrybits: BotW's own
 // shield parry sends them back). gparrymelee 0 = the timed two-tier guard (gparrywin) again.
 static int g_gparry_melee_basic = 1;
-// (gparry test A: find BotW's parried-enemy reaction) gparrycycle 1 = each parry uses the next f54 of this list, logged
-// '[sora] gparry: parry #N used f54 X' so the user can name the parry that looked like Link's
-static const int GPARRY_CYC[] = {7, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 0x12, 0x13, 0x18, 0x19, 0x1a, 0x1c};
-static int g_gparry_cyc = 0, g_gparry_n = 0;
 static bool g_gparry_reg;  // the last block was a regular one: no Counterguard on its reflect motion
 static bool gparry_on(void) {
-    if (g_gparry < 0) g_gparry = env_f("SAVAGEWIND_SORA_GUARD_PARRY", 0) != 0;
+    if (g_gparry < 0) g_gparry = env_f("SAVAGEWIND_SORA_GUARD_PARRY", 1) != 0;
     return g_gparry > 0;
 }
 static bool gparry_live(const char *key, int v) {
@@ -57,10 +53,9 @@ static bool gparry_live(const char *key, int v) {
     else if (!strcmp(key, "gparrymelee")) g_gparry_melee_basic = v != 0;
     else if (!strcmp(key, "gparrydmg")) g_gparry_dmg = v;
     else if (!strcmp(key, "gparryf54")) g_gparry_f54 = v;
-    else if (!strcmp(key, "gparrycycle")) g_gparry_cyc = v != 0, g_gparry_n = 0;
     else return false;
-    LOG("[sora] gparry: live %s %d (parry window GFR 0..%d, stagger hit %d f54 %#x, cycle %d, %s)\n", key, v, g_gparry_win, g_gparry_dmg,
-        g_gparry_f54, g_gparry_cyc, gparry_on() ? "on" : "off");
+    LOG("[sora] gparry: live %s %d (parry window GFR 0..%d, stagger hit %d f54 %#x, %s)\n", key, v, g_gparry_win, g_gparry_dmg,
+        g_gparry_f54, gparry_on() ? "on" : "off");
     return true;
 }
 static struct {
@@ -228,10 +223,7 @@ static void guard_block(const float p[3], float to_u, int dmg, const char *how, 
             if (l[k] > 0 && d2 < bd && dx * sinf(S.face) + dz * cosf(S.face) >= 0) bd = d2, best = k;
         }
         if (best >= 0) {
-            int nc = (int)(sizeof GPARRY_CYC / sizeof *GPARRY_CYC), f = g_gparry_cyc ? GPARRY_CYC[g_gparry_n % nc] : g_gparry_f54;
-            g_gparry_n++;
-            linkpos_damage_enemy_ex(a[best], g_gparry_dmg, f, 0);
-            LOG("[sora] gparry: parry #%d used f54 %d (%#x)%s\n", g_gparry_n, f, f, g_gparry_cyc ? " (cycle)" : "");
+            linkpos_damage_enemy_ex(a[best], g_gparry_dmg, g_gparry_f54, 0);
             float at[3] = {e[best][0], e[best][1] + 1.0f, e[best][2]};
             sora_fx_event(kbfx_name("hit_finish"), at, S.face, to_u);
         }
