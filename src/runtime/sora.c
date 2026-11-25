@@ -838,6 +838,9 @@ static bool contact_in_enemy(const float c[3]) {  // a BG ray contact inside a l
 #include "linkpos_break.h"
 enum { BRKHIT_BLADE, BRKHIT_FINISH, BRKHIT_FIRE, BRKHIT_ICE, BRKHIT_THUNDER };
 static int g_brk_on = 1, g_brk_ltn = 1;
+// (mgelem) Sora's spells carry their BotW element: Thunder = electric (f40 3, BotW's shock) on top of the airhold pop, which
+// sent none (ahlf40 0). Live "set mgelem 0/1". Donald's Thunder is not changed.
+static int g_mgelem = 1;
 static float g_brk_k = 1.0f, g_brk_r = 0.45f, g_brk_h = 1.0f;  // (k; the box cylinder: radius / height, u)
 static LinkposBreakablesFn g_brk_list_fn;
 static LinkposBreakHitFn g_brk_hit_fn;
@@ -3015,6 +3018,7 @@ static void spell_hit(SpellObj *o, uint64_t actor, const float epos[3], int powe
     float to_u = 0.01f * g_k;
     int f40 = KH_SPELLS[o->kind].f40;
     if (o->kind == SPELL_THUNDER) ah_thunder_dmg(actor, &f54, &f40);  // (s55/s57 airhold: KH2 pop, no BotW ragdoll / shock)
+    if (o->kind == SPELL_THUNDER && g_mgelem) f40 = 3;  // (mgelem) BotW's electric element after the airhold pop: the enemy is shocked
     f54 = ah_f54(actor, epos, f54, to_u);  // (s55 airhold)
     linkpos_damage_enemy_ex(actor, d, f54, f40);
     {  // (s55 airhold) the spells' atkp rows, Lv1 (S55_HELPER_AIRHOLD.md 1.2): Thunder 250 = blow (30, 0), its finisher
@@ -5411,6 +5415,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "brk")) g_brk_on = v != 0;          // (s55 breakables)
             else if (!strcmp(key, "brkk")) g_brk_k = v / 100.0f;
             else if (!strcmp(key, "brkltn")) g_brk_ltn = v != 0;
+            else if (!strcmp(key, "mgelem")) g_mgelem = v != 0;       // (mgelem)
             else if (!strcmp(key, "tree")) g_tree_on = v != 0;        // (s122 world)
             else if (!strcmp(key, "treek")) g_tree_k = v;
             else if (!strcmp(key, "treefin")) g_tree_fin = v;
