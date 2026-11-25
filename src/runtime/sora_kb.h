@@ -24,9 +24,9 @@ static int g_eqarmor = 1;  // (eqarmor, on by default) 1 = the Equipment page's 
 static int g_eqshield = 1;  // (eqshield, on by default) 1 = the Equipment page has a Shield row after the Armor rows (sora_camp_equip.h), live "set eqshield"
 static int g_eqtabs = 1;  // (eqtabs, on by default) 1 = the Equipment picker has a Keyblades and a BotW Weapons tab (sora_camp_equip.h), live "set eqtabs"
 static int g_eqlook = 1;  // (s120) 1 = the vanilla KH2 Equipment look (sora_camp_equip.h), live "set eqlook 0" = the old page
-static int g_eq2x = 97, g_eq2y = 58, g_eqtx = 63, g_eqvx = 31, g_eqky = 0, g_eqpx = 75, g_eqpy = 55, g_eqax = 0, g_eqhy = 334, g_eqhx = 141, g_eqpt = 86, g_eqpc = -53;  // (s120b) Equipment panel text tuning (sora_camp_equip.h)
+static int g_eq2x = 97, g_eq2y = 58, g_eqtx = 63, g_eqvx = 33, g_eqky = 0, g_eqpx = 75, g_eqpy = 55, g_eqax = 0, g_eqhy = 334, g_eqhx = 141, g_eqpt = 86, g_eqpc = -53;  // (s120b) Equipment panel text tuning (sora_camp_equip.h)
 static int g_eqcx = 12, g_eqcy = -2, g_eqcol = 2;  // (eqlayout) picker: cur > new row x shift / its numbers' y, the 2nd column's x (was 44.5: ran into the scroll arrows; 2 = the middle of its box, mark_161026)
-// (eqlayout mark_161447) slot-list stat lines: the yellow total (g_eqtx) 51 -> 63, off the label ("Strength19"); the bracketed value (g_eqvx) centered at 31
+// (eqlayout mark_161447) slot-list stat lines: the yellow total (g_eqtx) 51 -> 63, off the label ("Strength19"); the bracketed value (g_eqvx, right-aligned) 22 -> 33 = between the brackets
 // the slot of the 2nd blade in a Drive Form (sora.c form ids: 3 Master, 4 Final; anything else = Valor's), -1 form = none
 static int kb_sub_slot(int form) { return g_mfkb && form == 3 ? KB_MASTER : g_mfkb && form == 4 ? KB_FINAL : KB_VALOR; }
 // the form slot's Keyblade id (auto 0 -> Valor's)

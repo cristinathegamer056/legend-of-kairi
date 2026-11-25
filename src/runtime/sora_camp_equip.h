@@ -193,7 +193,7 @@ static CsDesc cp_eq_txt_(int ag, const char *lit, int key, int anchor, float x, 
 static void cp_eq_stat_line_(CsDesc *line, CsDesc kids[2], int key, int val, int total, float y) {
     kids[0] = (CsDesc){ .x = (float)g_eqtx, .y = (float)g_eqky, CP_SEQ2_(-1, 124, -1), .flags = CS_A_TEXT_TX | CS_A_TEXT_IGNORE_SCALE, .anchor = CS_BOTTOM_CENTER };
     snprintf(kids[0].text, sizeof kids[0].text, "%d", total);
-    kids[1] = (CsDesc){ .x = (float)g_eqvx, .y = (float)g_eqky, CP_SEQ2_(-1, 123, -1), .flags = CS_A_TEXT_TX | CS_A_TEXT_IGNORE_SCALE, .anchor = CS_BOTTOM_CENTER };  // (eqlayout mark_161447: centered between the brackets, was right-aligned at 22)
+    kids[1] = (CsDesc){ .x = (float)g_eqvx, .y = (float)g_eqky, CP_SEQ2_(-1, 123, -1), .flags = CS_A_TEXT_TX | CS_A_TEXT_IGNORE_SCALE, .anchor = CS_BOTTOM_RIGHT };  // (eqlayout: right-aligned at g_eqvx 33 = the middle of the brackets; CENTER put it ~270 px left, mark_161813)
     snprintf(kids[1].text, sizeof kids[1].text, "%d", val);
     *line = (CsDesc){ .x = -95 + g_eq2x, .y = y + g_eq2y, CP_SEQ2_(-1, 32, -1), .msg_key = key, .anchor = CS_BOTTOM_LEFT,
                       .flags = CS_A_TEXT_IGNORE_SCALE | CS_A_TEXT_TX, .nkids = 2, .kids = kids };
