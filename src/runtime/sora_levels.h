@@ -1634,6 +1634,7 @@ static void sl_died_tick(void) {
 // attacker = the nearest enemy within 20 m (GUESS: BotW's hit carries no attacker for us). Exe export
 // linkpos_hurt_scale_set(pct) applies it in the player addDamage hook (old exe: no effect). Live khdef 0 = off.
 static int sl_khdef = 1;
+static int shield_def_bonus(void);  // (shielddef, sora_shield.h: Link's equipped shield Guard / 10)
 static void armor_hit_log(int pct);  // (eqarmor, sora_camp.h)
 static void sl_def_tick(void) {
     static void (*set)(int);
@@ -1671,7 +1672,7 @@ static void sl_def_tick(void) {
             if (lv > 99) lv = 99;
             const SlLvpm2 *e = &SL_LVPM2[lv - 1];
             int lo = e->min_str > 1 ? e->min_str : 1, hi = e->max_str > lo ? e->max_str : lo;
-            int v = e->str - SL_LV[sl_lv() - 1].def, v0 = e->str;
+            int v = e->str - (SL_LV[sl_lv() - 1].def + shield_def_bonus()), v0 = e->str;
             v = v < lo ? lo : v > hi ? hi : v, v0 = v0 < lo ? lo : v0 > hi ? hi : v0;
             pct = (100 * v + v0 - 1) / v0;
             pct = (pct * SL_DIFF_TAKEN[dif] + 99) / 100;
@@ -1682,8 +1683,8 @@ static void sl_def_tick(void) {
     armor_hit_log(pct);
     if (pct != said) {
         said = pct;
-        LOG("[sora] khdef: incoming x%d%% (nearest enemy KH LV%d, Sora LV %d Def %d, diff %d)\n", pct, lv, sl_lv(),
-            SL_LV[sl_lv() - 1].def, dif);
+        LOG("[sora] khdef: incoming x%d%% (nearest enemy KH LV%d, Sora LV %d Def %d + shield %d, diff %d)\n", pct, lv, sl_lv(),
+            SL_LV[sl_lv() - 1].def, shield_def_bonus(), dif);
     }
 }
 static void sl_tick(void) {

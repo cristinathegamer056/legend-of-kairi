@@ -1,0 +1,63 @@
+// (shielddef, user: "implement the defense stats from shields to Sora") Link's equipped BotW shield raises Sora's KH2
+// Defense by its Guard / 10 (user's pick; KH2's Def runs 2 at LV1 to 53 at LV99, so the Hylian Shield's 90 = +9, a
+// KH2-armor-sized step). No durability wear (user's pick). The Def feeds sl_def_tick's KH2 damage formula and the Status
+// page. Guard = the actor pack's bgparamlist WeaponCommon.GuardPower (romfs Actor/Pack/Weapon_Shield_*.sbactorpack,
+// BotW 1.9.0, all 33 shields). A shield's "Shield Guard Up" bonus: the pouch modifier (+0x80 value) counts when flag
+// 0x100 is set (GUESS: BotW's AddGuard bit; logged). Env SAVAGEWIND_SORA_SHIELD_DEF (default 1), live "set shielddef 0/1".
+// Logs "[shield] ...".
+#pragma once
+
+typedef struct { const char *name; int guard; } ShieldGuard;
+static const ShieldGuard SHIELD_GUARD[] = {
+    {"Weapon_Shield_001", 2},  {"Weapon_Shield_002", 16}, {"Weapon_Shield_003", 40}, {"Weapon_Shield_004", 3},
+    {"Weapon_Shield_005", 10}, {"Weapon_Shield_006", 25}, {"Weapon_Shield_007", 15}, {"Weapon_Shield_008", 22},
+    {"Weapon_Shield_009", 35}, {"Weapon_Shield_013", 18}, {"Weapon_Shield_014", 30}, {"Weapon_Shield_015", 42},
+    {"Weapon_Shield_016", 30}, {"Weapon_Shield_017", 44}, {"Weapon_Shield_018", 62}, {"Weapon_Shield_021", 3},
+    {"Weapon_Shield_022", 55}, {"Weapon_Shield_023", 30}, {"Weapon_Shield_025", 18}, {"Weapon_Shield_026", 20},
+    {"Weapon_Shield_030", 90}, {"Weapon_Shield_031", 3},  {"Weapon_Shield_032", 3},  {"Weapon_Shield_033", 70},
+    {"Weapon_Shield_034", 3},  {"Weapon_Shield_035", 4},  {"Weapon_Shield_036", 35}, {"Weapon_Shield_037", 48},
+    {"Weapon_Shield_038", 70}, {"Weapon_Shield_040", 1},  {"Weapon_Shield_041", 16}, {"Weapon_Shield_042", 14},
+    {"Weapon_Shield_057", 65},
+};
+#define SHIELD_GUARD_UP_FLAG 0x100u  // GUESS (see above)
+
+static int g_shield_def = -1;
+static struct { int (*info)(char *, int, int *, int *); bool bound; uint64_t next_ms; int bonus, guard; char name[64]; } SHD;
+
+static bool shield_def_on(void) {
+    if (g_shield_def < 0) g_shield_def = env_f("SAVAGEWIND_SORA_SHIELD_DEF", 1) != 0;
+    return g_shield_def > 0;
+}
+// Sora's Def bonus from Link's equipped shield (re-read every 500 ms; 0 = off / no shield / old exe)
+static int shield_def_bonus(void) {
+    if (!shield_def_on()) return 0;
+    if (!SHD.bound) {
+        SHD.bound = true;
+        SHD.info = (int (*)(char *, int, int *, int *))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_shield_info");
+        LOG("[shield] exe export linkpos_shield_info: %s\n", SHD.info ? "found" : "NOT in this exe (shield Def off)");
+    }
+    if (!SHD.info) return 0;
+    uint64_t now = GetTickCount64();
+    if (now < SHD.next_ms) return SHD.bonus;
+    SHD.next_ms = now + 500;
+    char nm[64] = "";
+    int mv = 0, mf = 0, guard = 0;
+    if (SHD.info(nm, (int)sizeof nm, &mv, &mf)) {
+        for (size_t i = 0; i < sizeof SHIELD_GUARD / sizeof *SHIELD_GUARD; i++)
+            if (!strcmp(SHIELD_GUARD[i].name, nm)) guard = SHIELD_GUARD[i].guard;
+        if (mf & SHIELD_GUARD_UP_FLAG) guard += mv;
+    } else nm[0] = 0;
+    int bonus = guard / 10;
+    if (strcmp(nm, SHD.name) || bonus != SHD.bonus) {
+        LOG("[shield] equipped %s: Guard %d (modifier value %d flags %#x) -> Def +%d\n", nm[0] ? nm : "(none)", guard, mv, mf, bonus);
+        snprintf(SHD.name, sizeof SHD.name, "%s", nm);
+    }
+    SHD.bonus = bonus, SHD.guard = guard;
+    return bonus;
+}
+static bool shield_live(const char *key, int v) {
+    if (strcmp(key, "shielddef")) return false;
+    g_shield_def = v != 0, SHD.next_ms = 0;
+    LOG("[shield] live: shielddef %d\n", g_shield_def);
+    return true;
+}

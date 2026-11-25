@@ -1900,6 +1900,25 @@ int linkpos_weapon_info(char *actor, int cap, int *life, int *atk_up) {
     if (atk_up) *atk_up = (*(const uint32_t *)(uintptr_t)(it + 0x88) & 1) ? (int)*(const uint32_t *)(uintptr_t)(it + 0x80) : 0;
     return 1;
 }
+// (shielddef) Link's equipped shield: the PouchItem of type 3 (shield) among the equipped slots that start at
+// WPN_SLOTS_OFF (slot 0 = the sword, wpn_item). GUESS: 4 slots (sword / bow / arrow / shield) and the modifier pair as
+// the weapon's (+0x80 value, +0x88 flags); the caller logs them. -> 1 with the actor name, 0 = no shield equipped.
+int linkpos_shield_info(char *actor, int cap, int *mod_value, int *mod_flags) {
+    uint64_t got = SS->pmdm_got;
+    uint64_t pp = in_guest(got) ? *(const uint64_t *)(uintptr_t)got : 0;
+    uint64_t mgr = in_guest(pp) ? *(const uint64_t *)(uintptr_t)pp : 0;
+    if (!in_guest(mgr)) return 0;
+    for (int i = 0; i < 4; i++) {
+        uint64_t it = *(const uint64_t *)(uintptr_t)(mgr + WPN_SLOTS_OFF + 8 * i);
+        char nm[64];
+        if (!in_guest(it) || *(const int32_t *)(uintptr_t)(it + 0x18) != 3 || !wpn_item_name(it, nm, sizeof nm)) continue;
+        if (actor && cap > 0) snprintf(actor, (size_t)cap, "%s", nm);
+        if (mod_value) *mod_value = (int)*(const uint32_t *)(uintptr_t)(it + 0x80);
+        if (mod_flags) *mod_flags = (int)*(const uint32_t *)(uintptr_t)(it + 0x88);
+        return 1;
+    }
+    return 0;
+}
 // (s131) off[8]: off[0..3] as below + off[4] = scale (BotW PlayerEqScale; <= 0 = 1), off[5..7] = the model-space point
 // (metres, unscaled) that sits on Sora's grip. For the 3 monster arms (Stal arm models run along model +X, knob at the
 // origin, recon/S130_HELPER_STALARM.md); every other weapon sends 1, 0 0 0 (= the s128-s130 behaviour).

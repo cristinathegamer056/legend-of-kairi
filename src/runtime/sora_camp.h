@@ -161,7 +161,7 @@ static void camp_vals(CpVals *v) {
     v->st[0] = (CpStat){lv, (int)SL.exp, cp_next_left(lv, SL.exp, sl_next(lv)), v->hp[0], v->hp_max[0], v->mp[0],
                         v->mp_max[0], ab_used(AB.on), 2 + s->ap,  // (s82 slice 3: AP used)
                        
-                        dg_max(), bonus, sl_str_of(s) + SL_KEY_STR, sl_mag_of(s) + SL_KEY_MAG, s->def, {0, 0, 0, 0}};
+                        dg_max(), bonus, sl_str_of(s) + SL_KEY_STR, sl_mag_of(s) + SL_KEY_MAG, s->def + shield_def_bonus(), {0, 0, 0, 0}};  // (shielddef: + the shield)
     for (int i = 1; i < 3; i++)  // party table has no Str / Mag / Def / AP yet -> "--"
         v->st[i] = (CpStat){lv, -1, -1, v->hp[i], v->hp_max[i], v->mp[i], v->mp_max[i], -1, -1, -1, -1, -1, -1, -1, {0, 0, 0, 0}};
     v->eq_base_str = sl_str_of(s), v->eq_base_mag = sl_mag_of(s);  // (s120 eqlook) the Equipment panel's [ total ] = base + the main Keyblade
