@@ -93,8 +93,13 @@ static int (*p_refl_n)(void);
 // (shield wear if Link has a shield equipped). Live "set parrylink 0/1" (default 1; 0 = never touch Link's flags).
 #define LINK_GUARD_FLAGS 0xc40
 #define LINK_GUARD_BITS 0x30u
+// (gparry reflect, user: the guard should also bounce projectiles back) which of Link's guard bits the guard raises: 0x30
+// both (s92), 0x10 isGuard only, 0x20 isGuardJust only. Raising isGuard let Link's shield absorb melee swings before the
+// mod's block saw them (guardhold test 3: Link+0xc40 gained 0x4000); test whether one bit alone reflects projectiles
+// and leaves melee to the mod. Live 'set parrybits 0x..' (decimal: 16 / 32 / 48). Logs a 0x4000 rise ('shield took').
+static uint32_t g_parry_bits = LINK_GUARD_BITS;
 static int g_parry_link = 1;
-static struct { uint64_t actor; uint32_t own; int windows, relost; bool logged; } PL;
+static struct { uint64_t actor; uint32_t own, last; int windows, relost; bool logged; } PL;
 static void parry_link_clear(const char *why) {
     if (PL.own && PL.actor && rd_ok(PL.actor + LINK_GUARD_FLAGS, 4)) {
         uint32_t *f = (uint32_t *)(uintptr_t)(PL.actor + LINK_GUARD_FLAGS);
@@ -109,7 +114,9 @@ static void parry_link_frame(bool on) {
     if (!a || !rd_ok(a + LINK_GUARD_FLAGS, 4)) return;
     uint32_t *f = (uint32_t *)(uintptr_t)(a + LINK_GUARD_FLAGS), v = *f;
     if (PL.own & ~v) PL.relost++;                       // one of our bits was cleared by BotW since last frame
-    PL.own |= LINK_GUARD_BITS & ~(v & ~PL.own);         // bits Link set himself stay his
+    if ((v & 0x4000u) && !(PL.last & 0x4000u)) LOG("[sora] parrylink: Link's shield took a hit (Link+0xc40 %#x, ours %#x)\n", v, PL.own);
+    PL.last = v;
+    PL.own |= g_parry_bits & ~(v & ~PL.own);         // bits Link set himself stay his
     PL.actor = a, *f = v | PL.own;
     if (!PL.logged) {
         PL.logged = true, PL.windows++;

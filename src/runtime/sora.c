@@ -5537,6 +5537,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "formse")) g_formse_on = v != 0, LOG("[sora] formse %d (form motions play the form's own mset SE triggers; 0 = the base Sora's)\n", v);
             else if (!strcmp(key, "kbpop")) g_kbpop = v != 0, LOG("[sora] kbpop %d (Keyblade obtained panel; 0 = log line only)\n", v);
             else if (!strcmp(key, "parry")) g_parry = v != 0, LOG("[sora] parry %s\n", v ? "on (Guard sends Guardian beams back)" : "off (beams explode on Sora)");
+            else if (!strcmp(key, "parrybits")) { parry_link_clear("parrybits"); g_parry_bits = (uint32_t)v & LINK_GUARD_BITS; LOG("[sora] parrybits %#x (Link guard bits the guard raises)\n", g_parry_bits); }  // (gparry reflect, sora_guard.h)
             else if (!strcmp(key, "parrylink")) { g_parry_link = v != 0; if (!g_parry_link) parry_link_clear("parrylink 0"); LOG("[sora] parrylink %s\n", v ? "on (Guard window raises Link's isGuard/isGuardJust: BotW reflects the beam)" : "off (Link's guard flags untouched)"); }
             else if (!strcmp(key, "parryfront")) g_parry_front = v, LOG("[sora] parryfront %d (0 none, 1 beam flies at his front, 2 nearest enemy in front)\n", v);
             else if (!strcmp(key, "parryrad")) g_parry_rad = v, LOG("[sora] parryrad %d cm\n", v);
