@@ -35,6 +35,7 @@
     X(fire_ignite,             0x7000fddd24ull, 0x70010f1ab4ull)    \
     X(fire_spark,              0x70012f24a0ull, 0x7001406600ull)    \
     X(fire_burst,              0x7001318da4ull, 0x700142cf04ull)    \
+    X(elem_react,              0x7000a73ec4ull, 0x7000b873d4ull)    \
     X(tgt_update,              0x7000690228ull, 0x70007a3758ull)    \
     X(tgt_update_caller,       0x700046a780ull, 0x700057dcb0ull)    \
     X(ai_get_name,             0x7000f6227cull, 0x700107600cull)    \

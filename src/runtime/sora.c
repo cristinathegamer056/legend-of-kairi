@@ -838,8 +838,8 @@ static bool contact_in_enemy(const float c[3]) {  // a BG ray contact inside a l
 #include "linkpos_break.h"
 enum { BRKHIT_BLADE, BRKHIT_FINISH, BRKHIT_FIRE, BRKHIT_ICE, BRKHIT_THUNDER };
 static int g_brk_on = 1, g_brk_ltn = 1;
-// (mgelem) Sora's spells carry their BotW element: Thunder = electric (f40 3, BotW's shock) on top of the airhold pop, which
-// sent none (ahlf40 0). Live "set mgelem 0/1". Donald's Thunder is not changed.
+// (mgelem) Sora's Blizzard / Thunder hits also send BotW's own ice / electric reaction (exe linkpos_enemy_element: freeze /
+// shock, as an Ice / Shock Arrow; enemies that cannot freeze / be shocked ignore it). Live "set mgelem 0/1". Donald unchanged.
 static int g_mgelem = 1;
 static float g_brk_k = 1.0f, g_brk_r = 0.45f, g_brk_h = 1.0f;  // (k; the box cylinder: radius / height, u)
 static LinkposBreakablesFn g_brk_list_fn;
@@ -3018,9 +3018,19 @@ static void spell_hit(SpellObj *o, uint64_t actor, const float epos[3], int powe
     float to_u = 0.01f * g_k;
     int f40 = KH_SPELLS[o->kind].f40;
     if (o->kind == SPELL_THUNDER) ah_thunder_dmg(actor, &f54, &f40);  // (s55/s57 airhold: KH2 pop, no BotW ragdoll / shock)
-    if (o->kind == SPELL_THUNDER && g_mgelem) f40 = 3;  // (mgelem) BotW's electric element after the airhold pop: the enemy is shocked
     f54 = ah_f54(actor, epos, f54, to_u);  // (s55 airhold)
     linkpos_damage_enemy_ex(actor, d, f54, f40);
+    if (g_mgelem && (o->kind == SPELL_BLIZZARD || o->kind == SPELL_THUNDER)) {  // (mgelem) BotW's own freeze / shock reaction
+        static int (*elem)(uint64_t, int);
+        static bool looked;
+        if (!looked) {
+            looked = true, elem = (int (*)(uint64_t, int))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_enemy_element");
+            if (!elem) LOG("[sora] mgelem: this exe has no linkpos_enemy_element (NEEDS EXE RELINK): no freeze / shock\n");
+        }
+        int el = o->kind == SPELL_BLIZZARD ? 3 : 4, r = elem ? elem(actor, el) : -1;
+        LOG("[sora] mgelem: %s hit %llx -> BotW %s reaction %s\n", KH_SPELLS[o->kind].name, (unsigned long long)actor,
+            el == 3 ? "freeze" : "shock", r > 0 ? "sent" : r == 0 ? "not possible (no reaction object)" : "refused");
+    }
     {  // (s55 airhold) the spells' atkp rows, Lv1 (S55_HELPER_AIRHOLD.md 1.2): Thunder 250 = blow (30, 0), its finisher
        // code +1 = (45, 0); Fire 502 ticks = blow (6, 0), the last hit react 3; Blizzard 248 = react 3, strength 50
         int react = 3, kb1 = 0, kb2 = 0;

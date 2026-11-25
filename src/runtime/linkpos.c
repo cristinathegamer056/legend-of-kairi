@@ -4632,6 +4632,73 @@ int linkpos_fire_burst(const float p[3]) {
     return r;
 }
 
+// ------------------------------------------------------------------ (mgelem) Sora's Blizzard / Thunder as BotW ice / shock
+// BotW's arrows do NOT carry the element through addDamage (log mgelem test 1: Fire / Ice / Shock Arrows all rode a2 2 /
+// f50 3 / f40 1); the element reaches the enemy through its element-reaction object, whose virtual react(this, el)
+// (1.9.0 0x7100b873d4, 1.8.2 f_7000a73ec4 = the s59 "enemies' fire reaction") does: el 2 fire (DamageParam Burnable
+// +0x9e8 -> chemical burning), 3 ice (Iceable +0xb88 -> chemical frozen + vfunc +0x98 = BotW's freeze), 4 electric
+// (+0xca8 -> vfunc +0x90 = BotW's shock). Its this+0x10 = the actor. GUESS: it is the damage manager's second base
+// (dm + 8, dm = actor+0x840: dm+0x18 = the actor), else a scan of the actor's first 0x1000 bytes finds it; its vtable slot
+// = the one holding the base react (found once, then called through the vtable: per-class overrides kept).
+// Guest call inside linkpos_frame only (fire_cpu). 1 = sent, 0 = no reaction object, -1 refused.
+#define ELEM_REACT (SS->elem_react)
+static int g_er_off = -1, g_er_slot = -1;  // (the actor offset of the object pointer: -2 = dm + 8; the vtable slot)
+static uint64_t er_obj(uint64_t a) {
+    uint64_t dm = *(const uint64_t *)(uintptr_t)(a + ACTOR_DAMAGE_MGR);
+    if (g_er_off == -2 || g_er_off == -1) {
+        if (in_guest(dm) && *(const uint64_t *)(uintptr_t)(dm + 8 + 0x10) == a) return dm + 8;
+        if (g_er_off == -2) return 0;
+    }
+    if (g_er_off >= 0) {
+        uint64_t p = *(const uint64_t *)(uintptr_t)(a + (uint64_t)g_er_off);
+        return in_guest(p) && *(const uint64_t *)(uintptr_t)(p + 0x10) == a ? p : 0;
+    }
+    for (int o = 0; o < 0x1000; o += 8) {  // (first use: an object with this+0x10 = the actor whose vtable holds the base react)
+        uint64_t p = *(const uint64_t *)(uintptr_t)(a + (uint64_t)o);
+        if (!in_guest(p) || readable(p, 0x18) != 0x18 || *(const uint64_t *)(uintptr_t)(p + 0x10) != a) continue;
+        uint64_t vt = *(const uint64_t *)(uintptr_t)p;
+        if (!in_guest(vt) || readable(vt, 8 * 96) != 8 * 96) continue;
+        for (int k = 0; k < 96; k++)
+            if (*(const uint64_t *)(uintptr_t)(vt + 8 * (uint64_t)k) == ELEM_REACT) {
+                LOG("[linkpos] mgelem: reaction object at actor+%#x (%llx, vtable %llx slot %d)\n", o, (unsigned long long)p, (unsigned long long)vt, k);
+                return p;
+            }
+    }
+    return 0;
+}
+int linkpos_enemy_element(uint64_t actor, int el) {
+    if (!in_guest(actor) || !fire_actor_ok(actor)) return -1;
+    Cpu *c = fire_cpu("element", ELEM_REACT);
+    if (!c) return -1;
+    uint64_t p = er_obj(actor);
+    const char *nm = actor_name(actor);
+    if (!p) {
+        static int n;
+        if (n++ < 8) LOG("[linkpos] mgelem: %s %llx: no element-reaction object found (dm %llx)\n", nm ? nm : "?", (unsigned long long)actor,
+                         (unsigned long long)*(const uint64_t *)(uintptr_t)(actor + ACTOR_DAMAGE_MGR));
+        return 0;
+    }
+    uint64_t vt = *(const uint64_t *)(uintptr_t)p, fn = 0;
+    if (g_er_slot < 0 && in_guest(vt))
+        for (int k = 0; k < 96 && g_er_slot < 0; k++)
+            if (*(const uint64_t *)(uintptr_t)(vt + 8 * (uint64_t)k) == ELEM_REACT) g_er_slot = k;
+    if (g_er_slot >= 0 && in_guest(vt)) fn = *(const uint64_t *)(uintptr_t)(vt + 8 * (uint64_t)g_er_slot);
+    if (!in_guest(fn) || !dispatch_lookup(fn)) fn = ELEM_REACT;  // (slot not known yet: the base one)
+    if (g_er_off == -1) {
+        uint64_t dm = *(const uint64_t *)(uintptr_t)(actor + ACTOR_DAMAGE_MGR);
+        if (p == dm + 8) g_er_off = -2;
+        else for (int o = 0; o < 0x1000; o += 8) if (*(const uint64_t *)(uintptr_t)(actor + (uint64_t)o) == p) { g_er_off = o; break; }
+        LOG("[linkpos] mgelem: reaction object = %s (offset %d, slot %d)\n", g_er_off == -2 ? "damage manager + 8" : "an actor field", g_er_off, g_er_slot);
+    }
+    Cpu save = *c;
+    c->x[0] = p, c->x[1] = (uint64_t)(uint32_t)el;
+    guest_call(c, fn);
+    *c = save;
+    LOG("[linkpos] mgelem: %s %llx element %d (%s) sent (fn %llx)\n", nm ? nm : "?", (unsigned long long)actor, el,
+        el == 2 ? "fire" : el == 3 ? "ice" : el == 4 ? "electric" : "?", (unsigned long long)fn);
+    return 1;
+}
+
 // ------------------------------------------------------------------ redirect (s56: enemies go for Donald / Goofy)
 // recon/S55_HELPER_PARTY_COMBAT.md 2 (a), wip_s55_party_combat/botw_target/BOTW_ENEMY_TARGET.md. Every
 // uking::act::Enemy keeps a target record T at enemy+0xc48 (BaseProcLink to the target, its position +0xc60, its
