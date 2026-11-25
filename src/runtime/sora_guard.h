@@ -37,9 +37,10 @@ static int g_guard_inv = 1;
 // '弾かれ' (repelled; Bokoblin_Red.baiprog: Shock, AS 'Rebound'), 7 / 0x13 -> 'ショック' (AS 'Miss'), 8 -> '超ショック'
 // (WeaponIdx 0: drops the weapon), 9 / 0xb / 0xe -> 'ガードブレイク'.
 static int g_gparry = -1, g_gparry_win = 24, g_gparry_dmg = 1, g_gparry_f54 = 6;
-// (gparry, user: "Melee attacks do basic blocks, while projectiles are only perfect blocks") gparrymelee 1 (default) =
-// a melee hit on the guard is always the regular block, whatever its timing; projectiles go through Link's guard bits
-// (parrylink / parrybits: BotW's own shield parry sends them back). gparrymelee 0 = the timed parry (gparrywin) again.
+// (gparry, user: "for melee attacks, sora plays his block animation, the enemy recoils, and there is countergaurd")
+// gparrymelee 1 (default) = every melee hit on the guard is the parry (motion 42 + Counterguard + the attacker's
+// repelled reaction), whatever its timing; projectiles go through Link's guard bits (parrylink / parrybits: BotW's own
+// shield parry sends them back). gparrymelee 0 = the timed two-tier guard (gparrywin) again.
 static int g_gparry_melee_basic = 1;
 // (gparry test A: find BotW's parried-enemy reaction) gparrycycle 1 = each parry uses the next f54 of this list, logged
 // '[sora] gparry: parry #N used f54 X' so the user can name the parry that looked like Link's
@@ -206,7 +207,7 @@ static void guard_block(const float p[3], float to_u, int dmg, const char *how, 
     // (gparry test 1: the user wants a reaction on every block) the regular block plays the reflect motion too, without the
     // Counterguard offer (g_gparry_reg, read by t0_reaction) and without the stagger
     float gclk = S.clock;  // (the guard clock at the hit; play() below resets S.clock)
-    g_gparry_reg = tier && (g_gparry_melee_basic || gclk > g_gparry_win);  // (gparrymelee 1: every melee block is a basic one)
+    g_gparry_reg = tier && !g_gparry_melee_basic && gclk > g_gparry_win;  // (gparrymelee 1: every melee block is the parry)
     if (g_gparry_reg) {
         if (mot_of(MOT_GUARD_REFLECT)) play(MOT_GUARD_REFLECT), S.special = SP_GUARD;
         LOG("[sora] gparry: REGULAR block (guard clock %.1f > %d GFR, damage %d, %s): reflect motion, no Counterguard / stagger\n",
