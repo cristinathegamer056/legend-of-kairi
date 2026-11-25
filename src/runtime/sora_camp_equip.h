@@ -263,7 +263,7 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
     } else {  // ---- state 5 / 6: the picker (vanilla swaps the window and the panel ags) ----
         cp_eq_title3_(title, slot == CP_EQ_SHD ? 0 : slot >= CP_EQ_ARM ? CP_EQ_KEY_ARMOR : cp_eq_row_key(slot));
         nt = 3;
-        if (slot == CP_EQ_SHD) {  // (eqshield) None + the pouch shields, 2nd column = Guard
+        if (slot == CP_EQ_SHD) {  // (eqshield) None + the pouch shields, 2nd column = its Defense (Guard / 10; user: show Defense, not Guard)
             int l[CP_EQ_LMAX], n = cp_eq_plist(v, kb, slot, l);
             title[2].msg_key = 0, snprintf(title[2].text, sizeof title[2].text, "Shield");
             for (int e = top < 0 ? 0 : top; e < n && np < CP_EQ_VIS; e++, np++) {
@@ -272,13 +272,13 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
                 prk[np][m++] = cp_eq_txt_(123, i == CP_EQ_SHN ? "None" : v->sh_name[k], 0, CS_BOTTOM_LEFT, 0, 0);
                 if (i == pick) { prk[np][m++] = sel_kids[0]; prk[np][m++] = sel_kids[1]; }
                 pkids[np * 2] = (CsDesc){ .y = 26.0f * np, CP_SEQ_(-1, 221, -1), .nkids = (uint8_t)m, .kids = prk[np] };
-                if (i != CP_EQ_SHN) snprintf(gd, sizeof gd, "%d", v->sh_guard[k]);
+                if (i != CP_EQ_SHN) snprintf(gd, sizeof gd, "%d", cp_eq_sh_def(v, k));
                 pcol[np][0] = cp_eq_txt_(124, gd, 0, CS_BOTTOM_CENTER, 44.5f, 0);
                 pkids[np * 2 + 1] = (CsDesc){ .y = 26.0f * np, CP_SEQ_(-1, 222, -1), .nkids = 1, .kids = pcol[np] };
             }
             win[0] = (CsDesc){ CP_SEQ_(217, 218, 219), .nkids = (uint8_t)(np * 2), .kids = pkids };
             if (pick == CP_EQ_SHN) snprintf(hlit, sizeof hlit, "Take the shield off.");
-            else snprintf(hlit, sizeof hlit, "Guard %d: Defense +%d", cp_eq_sh_guard(v, pick - CP_EQ_SH), cp_eq_sh_def(v, pick - CP_EQ_SH));
+            else snprintf(hlit, sizeof hlit, "Defense +%d", cp_eq_sh_def(v, pick - CP_EQ_SH));
         } else if (slot >= CP_EQ_ARM) {  // (eqarmor) None + the slot's pieces: name, Defense column (the form sub-weapon kind's ags: GUESS)
             static const char *const SLOTN[3] = {"Head", "Body", "Legs"};
             int a = slot - CP_EQ_ARM, l[CP_EQ_LMAX], n = cp_eq_plist(v, kb, slot, l);
