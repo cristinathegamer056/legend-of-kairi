@@ -13,7 +13,7 @@
 #define CP_EQ_KEY_TITLE 10          // "Equipment"
 #define CP_EQ_KEY_MEMBER_HELP 20    // "Equip weapons and armor."
 #define CP_EQ_KEY_ROW 162           // + 2 * slot: Weapons / Valor, + 1 = the row's help
-#define CP_EQ_VIS 9                 // (s89 kb) visible picker rows (GUESS: the Abilities list's 9)
+#define CP_EQ_VIS 8                 // (s89 kb) visible picker rows (eqlayout: 8 - the window's scroll arrows sit by rows 1 and 8; 9 hung below it)
 // (s91 mfkb) the visible slot rows: Weapons + Valor always, Master / Final when that Drive Form is unlocked (v->kb_forms bit 0 /
 // 1: sora_unlock.h ul_form_unlocked; vanilla KH2 lists a form's sub-weapon row once it is obtained, S85_EQUIP_PAGE.md kind 6)
 // and live "set mfkb" is on. -> count, out = the slots. Text: 440.. = Master / Final row + help (camp_text_s91_mfkb.txt)
@@ -211,10 +211,12 @@ static void cp_eq_cmp_lines_(CsDesc out[2], CsDesc kids[4], int key, int cur, in
     out[0] = (CsDesc){ .x = -77 + g_eqpx, .y = y + g_eqpy, CP_SEQ2_(-1, 37, -1), .msg_key = key, .anchor = CS_BOTTOM_LEFT,
                        .flags = CS_A_TEXT_IGNORE_SCALE | CS_A_TEXT_TX, .nkids = 1, .kids = kids };
     snprintf(b, sizeof b, "%d", cur);
-    kids[1] = cp_eq_txt_(123, b, 0, CS_BOTTOM_RIGHT, (float)g_eqpc + g_eqax, 0);  // (s120d mark_165345_3: 9 drew it ~62 right of the arrow)
+    kids[1] = cp_eq_txt_(123, b, 0, CS_BOTTOM_RIGHT, (float)g_eqpc + g_eqax, (float)g_eqcy);  // (s120d mark_165345_3: 9 drew it ~62 right of the arrow)
     snprintf(b, sizeof b, "%d", nw);
-    kids[2] = cp_eq_txt_(ag, b, 0, CS_BOTTOM_LEFT, 14 + g_eqax, 0);
-    out[1] = (CsDesc){ .x = -131 + g_eqpx + 46, .y = y + g_eqpy + 2, CP_SEQ2_(-1, 38, -1), .anchor = CS_BOTTOM_LEFT, .flags = CS_A_TEXT_IGNORE_SCALE, .nkids = 2, .kids = kids + 1 };
+    kids[2] = cp_eq_txt_(ag, b, 0, CS_BOTTOM_LEFT, 14 + g_eqax, (float)g_eqcy);
+    // (eqlayout, user: "Below, centered") the cur > new row moves right toward the bracketed total (g_eqcx; its sprite holds the
+    // orange line too, so it can only go as far as the panel lets the line) and its numbers sit a little above the line (g_eqcy)
+    out[1] = (CsDesc){ .x = -131 + g_eqpx + 46 + g_eqcx, .y = y + g_eqpy + 2, CP_SEQ2_(-1, 38, -1), .anchor = CS_BOTTOM_LEFT, .flags = CS_A_TEXT_IGNORE_SCALE, .nkids = 2, .kids = kids + 1 };
 }
 // the header tabs: Equipment > Sora [> Weapons / Valor ..] (state 5 / 6 = ref1's three tabs)
 static void cp_eq_title3_(CsDesc title[3], int third_key) {
@@ -273,7 +275,7 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
                 if (i == pick) { prk[np][m++] = sel_kids[0]; prk[np][m++] = sel_kids[1]; }
                 pkids[np * 2] = (CsDesc){ .y = 26.0f * np, CP_SEQ_(-1, 221, -1), .nkids = (uint8_t)m, .kids = prk[np] };
                 if (i != CP_EQ_SHN) snprintf(gd, sizeof gd, "%d", cp_eq_sh_def(v, k));
-                pcol[np][0] = cp_eq_txt_(124, gd, 0, CS_BOTTOM_CENTER, 44.5f, 0);
+                pcol[np][0] = cp_eq_txt_(124, gd, 0, CS_BOTTOM_CENTER, (float)g_eqcol, 0);
                 pkids[np * 2 + 1] = (CsDesc){ .y = 26.0f * np, CP_SEQ_(-1, 222, -1), .nkids = 1, .kids = pcol[np] };
             }
             win[0] = (CsDesc){ CP_SEQ_(217, 218, 219), .nkids = (uint8_t)(np * 2), .kids = pkids };
@@ -290,7 +292,7 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
                 if (i == pick) { prk[np][m++] = sel_kids[0]; prk[np][m++] = sel_kids[1]; }
                 pkids[np * 2] = (CsDesc){ .y = 26.0f * np, CP_SEQ_(-1, 221, -1), .nkids = (uint8_t)m, .kids = prk[np] };
                 snprintf(df, sizeof df, "%d", i == CP_EQ_ARN ? 0 : v->ar_def[a][k]);
-                pcol[np][0] = cp_eq_txt_(124, i == CP_EQ_ARN ? "" : df, 0, CS_BOTTOM_CENTER, 44.5f, 0);
+                pcol[np][0] = cp_eq_txt_(124, i == CP_EQ_ARN ? "" : df, 0, CS_BOTTOM_CENTER, (float)g_eqcol, 0);
                 pkids[np * 2 + 1] = (CsDesc){ .y = 26.0f * np, CP_SEQ_(-1, 222, -1), .nkids = 1, .kids = pcol[np] };
             }
             win[0] = (CsDesc){ CP_SEQ_(217, 218, 219), .nkids = (uint8_t)(np * 2), .kids = pkids };
@@ -309,8 +311,8 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
             if (i >= CP_EQ_WPN) {  // 2nd column = the Attack number (GUESS; a Keyblade shows its ability)
                 char at[12];
                 snprintf(at, sizeof at, "%d", i >= CP_EQ_BW ? v->bw_atk[i - CP_EQ_BW] : v->wpn_atk);
-                pcol[np][0] = cp_eq_txt_(124, at, 0, CS_BOTTOM_CENTER, 44.5f, 0);
-            } else pcol[np][0] = (CsDesc){ .x = 44.5f, CP_SEQ_(-1, 124, -1), .msg_key = cp_eq_ab_key(KB_TAB[i].ability), .anchor = CS_BOTTOM_CENTER };
+                pcol[np][0] = cp_eq_txt_(124, at, 0, CS_BOTTOM_CENTER, (float)g_eqcol, 0);
+            } else pcol[np][0] = (CsDesc){ .x = (float)g_eqcol, CP_SEQ_(-1, 124, -1), .msg_key = cp_eq_ab_key(KB_TAB[i].ability), .anchor = CS_BOTTOM_CENTER };
             pkids[np * 2 + 1] = (CsDesc){ .y = 26.0f * np, CP_SEQ_(-1, sub ? 222 : 212, -1), .nkids = 1, .kids = pcol[np] };
         }
         win[0] = sub ? (CsDesc){ CP_SEQ_(217, 218, 219), .nkids = (uint8_t)(np * 2), .kids = pkids }

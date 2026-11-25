@@ -5332,10 +5332,10 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "kbswap")) g_kbswap = v != 0, LOG("[sora] live: kbswap %d (picking a Keyblade another slot holds %s)\n", g_kbswap, g_kbswap ? "swaps the two" : "= error SE (the old rule)");  // (s118)
             else if (!strcmp(key, "eq2x") || !strcmp(key, "eq2y") || !strcmp(key, "eqtx") || !strcmp(key, "eqvx") || !strcmp(key, "eqky") ||
                      !strcmp(key, "eqpx") || !strcmp(key, "eqpy") || !strcmp(key, "eqax") || !strcmp(key, "eqhx") || !strcmp(key, "eqhy") ||
-                     !strcmp(key, "eqpt") || !strcmp(key, "eqpc")) {  // (s120b panel tuning)
+                     !strcmp(key, "eqpt") || !strcmp(key, "eqpc") || !strcmp(key, "eqcx") || !strcmp(key, "eqcy") || !strcmp(key, "eqcol")) {  // (s120b panel tuning; eqlayout: eqcx / eqcy / eqcol)
                 int *k = !strcmp(key, "eq2x") ? &g_eq2x : !strcmp(key, "eq2y") ? &g_eq2y : !strcmp(key, "eqtx") ? &g_eqtx : !strcmp(key, "eqvx") ? &g_eqvx :
                          !strcmp(key, "eqky") ? &g_eqky : !strcmp(key, "eqpx") ? &g_eqpx : !strcmp(key, "eqpy") ? &g_eqpy : !strcmp(key, "eqax") ? &g_eqax :
-                         !strcmp(key, "eqhx") ? &g_eqhx : !strcmp(key, "eqpt") ? &g_eqpt : !strcmp(key, "eqpc") ? &g_eqpc : &g_eqhy;
+                         !strcmp(key, "eqhx") ? &g_eqhx : !strcmp(key, "eqpt") ? &g_eqpt : !strcmp(key, "eqpc") ? &g_eqpc : !strcmp(key, "eqcx") ? &g_eqcx : !strcmp(key, "eqcy") ? &g_eqcy : !strcmp(key, "eqcol") ? &g_eqcol : &g_eqhy;
                 *k = (int)v, LOG("[sora] live: %s %d (Equipment panel text)\n", key, *k);
             }
             else if (!strcmp(key, "wpn")) g_wpn_on = v != 0, LOG("[sora] live: wpn %d (%s)\n", g_wpn_on, g_wpn_on ? "Link's BotW weapon in Sora's hand when equipped" : "off: the Keyblade always");  // (s128)
