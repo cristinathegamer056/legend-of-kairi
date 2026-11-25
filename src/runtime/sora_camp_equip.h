@@ -54,12 +54,14 @@ static int cp_eq_has_wpn(const CpVals *v, int slot) { return g_eqlook && v->wpn_
 static int cp_eq_has_ar(const CpVals *v) { return g_eqlook && g_eqarmor && v->ar_on; }
 // (eqshield) user: "add option to equip a shield in your equipment menu. Similar to how the armor is ... the 4th slot". The row
 // after the Armor rows shows Link's equipped BotW shield ("None" when none); A opens a picker: None (take it off) + the pouch
-// shields, 2nd column = BotW Guard; picking one equips it in BotW (BotW's own calls, pouch type 3). No Def bonus.
+// shields, 2nd column = BotW Guard; picking one equips it in BotW (BotW's own calls, pouch type 3). Its Defense = Guard / 10
+// (user: "I want the value of defense from the shield to go towards Sora's defense stats"; sora_shield.h).
 #define CP_EQ_SHD 200            // eq_slot == CP_EQ_SHD = the Shield row (>= CP_EQ_ARM: the armor rows' look; its own branches first)
 #define CP_EQ_SHN 5000           // picker entry: None
 #define CP_EQ_SH 5001            // picker entry: + the v->sh index
 static int cp_eq_has_sh(const CpVals *v) { return g_eqlook && g_eqshield && v->sh_on; }
 static int cp_eq_sh_guard(const CpVals *v, int k) { return k >= 0 && k < v->sh_n ? v->sh_guard[k] : 0; }
+static int cp_eq_sh_def(const CpVals *v, int k) { return cp_eq_sh_guard(v, k) / 10; }  // (shielddef: Guard / 10)
 static int cp_eq_ar_cur(const CpVals *v, int a) {
     for (int k = 0; k < v->ar_n[a]; k++) if (v->ar_eq[a][k]) return CP_EQ_AR + k;
     return CP_EQ_ARN;
@@ -276,7 +278,7 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
             }
             win[0] = (CsDesc){ CP_SEQ_(217, 218, 219), .nkids = (uint8_t)(np * 2), .kids = pkids };
             if (pick == CP_EQ_SHN) snprintf(hlit, sizeof hlit, "Take the shield off.");
-            else snprintf(hlit, sizeof hlit, "Guard %d", cp_eq_sh_guard(v, pick - CP_EQ_SH));
+            else snprintf(hlit, sizeof hlit, "Guard %d: Defense +%d", cp_eq_sh_guard(v, pick - CP_EQ_SH), cp_eq_sh_def(v, pick - CP_EQ_SH));
         } else if (slot >= CP_EQ_ARM) {  // (eqarmor) None + the slot's pieces: name, Defense column (the form sub-weapon kind's ags: GUESS)
             static const char *const SLOTN[3] = {"Head", "Body", "Legs"};
             int a = slot - CP_EQ_ARM, l[CP_EQ_LMAX], n = cp_eq_plist(v, kb, slot, l);
@@ -322,17 +324,17 @@ static int cp_build_equip_look(CsTree *t, const int kb[KB_SLOTS], const CpVals *
     if (hlit[0]) snprintf(help[0].text, sizeof help[0].text, "%s", hlit);
     // ---- the right panel (state 2: ag 287-289 [V]; picker: kind panel ags) ----
     int main_id = kb_slot_id(kb, KB_MAIN), cur_id = slot >= CP_EQ_ARM ? 0 : kb_slot_id(kb, slot), npk = 0;
-    if (slot == CP_EQ_SHD) {  // (eqshield) "Guard <shield> [ <shield> ]"; picker: "Guard cur > new [ new ]"
-        int cg = cp_eq_sh_guard(v, v->sh_cur);
+    if (slot == CP_EQ_SHD) {  // (eqshield) "Defense <shield's +Def> [ Status Def ]"; picker: "Defense cur > new [ new Status Def ]"
+        int cd = cp_eq_sh_def(v, v->sh_cur);
         if (pick < 0) {
-            cp_eq_stat_line_(&pk[npk], pl1, 0, cg, cg, 8);
-            snprintf(pk[npk].text, sizeof pk[npk].text, "Guard");
+            cp_eq_stat_line_(&pk[npk], pl1, 0, cd, v->st[0].def, 8);
+            snprintf(pk[npk].text, sizeof pk[npk].text, "Defense");
             npk++;
             pnl[0] = (CsDesc){ CP_SEQ_(287, 288, 289), .nkids = (uint8_t)npk, .kids = pk };
         } else {
-            int nw = pick == CP_EQ_SHN ? 0 : cp_eq_sh_guard(v, pick - CP_EQ_SH);
-            cp_eq_cmp_lines_(&pk[0], pl3, 0, cg, nw, nw, 26);
-            snprintf(pk[0].text, sizeof pk[0].text, "Guard");
+            int nw = pick == CP_EQ_SHN ? 0 : cp_eq_sh_def(v, pick - CP_EQ_SH);
+            cp_eq_cmp_lines_(&pk[0], pl3, 0, cd, nw, v->st[0].def - cd + nw, 26);
+            snprintf(pk[0].text, sizeof pk[0].text, "Defense");
             pnl[0] = (CsDesc){ CP_SEQ_(223, 224, 225), .nkids = 2, .kids = pk };
         }
     } else if (pick < 0 && slot >= CP_EQ_ARM) {  // [G] Armor: "Defense <piece> [ <sum worn> ]", no Ability line

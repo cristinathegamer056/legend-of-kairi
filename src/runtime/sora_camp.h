@@ -374,8 +374,10 @@ static bool camp_frame(uint64_t present) {
         if (k >= 0 && k < cv->sh_n) armor_equip_ask(3, cv->sh_item[k], cv->sh_actor[k]);
         else armor_equip_ask(3, 0, NULL), k = -1;
         wpn_equip_tick(true);
+        SHD.next_ms = 0;  // (shielddef: shield_def_bonus re-reads the pouch now)
+        cv->st[0].def += cp_eq_sh_def(cv, k) - cp_eq_sh_def(cv, cv->sh_cur);
         cv->sh_cur = k;
-        LOG("[sora] camp: Shield -> %s (Guard %d)\n", k >= 0 ? cv->sh_name[k] : "None", k >= 0 ? cv->sh_guard[k] : 0);
+        LOG("[sora] camp: Shield -> %s (Guard %d, Def +%d, Status Def %d)\n", k >= 0 ? cv->sh_name[k] : "None", k >= 0 ? cv->sh_guard[k] : 0, cp_eq_sh_def(cv, k), cv->st[0].def);
     }
     if (out.ar_set > 0 && out.ar_set <= 3 && CAMP.v.ar_on) {  // (eqarmor) wear the piece / take it off, at once (BotW's own calls)
         int a = out.ar_set - 1, k = out.ar_idx;

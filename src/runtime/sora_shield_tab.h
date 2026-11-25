@@ -1,6 +1,6 @@
 // (eqshield) BotW 1.9.0's 33 shields: actor, English name (Msg_USen ActorType/WeaponShield), Guard = the actor pack's
 // bgparamlist WeaponCommon.GuardPower (romfs Actor/Pack/Weapon_Shield_*.sbactorpack). The KH2 Equipment page's Shield row
-// shows it (sora_camp_equip.h); it does not change Sora's Defense (user: no shield Def).
+// shows it (sora_camp_equip.h); sora_shield.h adds Guard / 10 to Sora's Defense.
 #pragma once
 typedef struct { const char *name, *disp; int guard; } ShieldGuard;  // actor, English name (Msg_USen ActorType/WeaponShield), Guard
 static const ShieldGuard SHIELD_GUARD[] = {

@@ -465,6 +465,7 @@ static void cp_equip_input_(CampPage *p, const CampSeq *s, uint64_t press, float
         int k = p->eq_pick == CP_EQ_SHN ? -1 : p->eq_pick - CP_EQ_SH;
         if (!cp_eq_has_sh(v) || k < -1 || k >= v->sh_n) { out->se = CP_SE_ERROR; out->log = "equip shield bad entry"; return; }
         CpVals nv = *v;
+        nv.st[0].def += cp_eq_sh_def(v, k) - cp_eq_sh_def(v, v->sh_cur);  // (shielddef)
         nv.sh_cur = k;
         out->sh_set = 1, out->sh_idx = k;
         cp_cust_go_(p, s, &nv, 1, false);
