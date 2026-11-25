@@ -779,8 +779,7 @@ static void dbm_resume(int was, bool is_load) {
 
 static bool dbm_set_key(const char *key, int v) {
     if (strncmp(key, "dbm", 3)) return false;
-    if (!strcmp(key, "dbmsave")) g_dbm_save = v != 0, LOG("[dbgmenu] save with the BotW slot: %s (live set dbmsave)
-", g_dbm_save ? "ON" : "OFF");  // (dbgsave)
+    if (!strcmp(key, "dbmsave")) g_dbm_save = v != 0, LOG("[dbgmenu] save with the BotW slot: %s (live set dbmsave)\n", g_dbm_save ? "ON" : "OFF");  // (dbgsave)
     else if (!strcmp(key, "dbmlv")) dbm_set(0, v, "live set dbmlv");
     else if (!strcmp(key, "dbmkb")) dbm_set(1, v, "live set dbmkb");
     else if (!strcmp(key, "dbmforms")) dbm_set(2, v, "live set dbmforms");
@@ -823,15 +822,13 @@ static int dbm_save_str(char *o, size_t cap) {
     int n = snprintf(o, cap, "  \"dbgmenu\": \"");
     for (int r = 0; r < DBM_NROWS && n < (int)cap - 8; r++)
         n += snprintf(o + n, cap - (size_t)n, "%s%d", r ? "," : "", r == DBM_R_MICKEY ? DMK.any : dbm_state(r));
-    n += snprintf(o + n, cap - (size_t)n, "\",
-");
+    n += snprintf(o + n, cap - (size_t)n, "\",\n");
     return n;
 }
 static void dbm_slot_load(const char *b, int slot) {
     if (!g_dbm_save) return;
     const char *p = b ? strstr(b, "\"dbgmenu\"") : NULL;
-    if (!p || !(p = strchr(p + 9, ':')) || !(p = strchr(p, '"'))) { LOG("[dbgmenu] slot %d: no saved Debug Menu rows, kept as they are
-", slot); return; }
+    if (!p || !(p = strchr(p + 9, ':')) || !(p = strchr(p, '"'))) { LOG("[dbgmenu] slot %d: no saved Debug Menu rows, kept as they are\n", slot); return; }
     p++;
     int v[DBM_NROWS], n = 0;
     while (n < DBM_NROWS && *p && *p != '"') {
@@ -847,9 +844,7 @@ static void dbm_slot_load(const char *b, int slot) {
         if (cur == v[r]) continue;
         int got = dbm_set(r, v[r], "BotW load: the slot's saved Debug Menu");
         ch++;
-        if (got != v[r]) LOG("[dbgmenu] slot %d: row %d saved %d, now %d (refused)
-", slot, r, v[r], got);
+        if (got != v[r]) LOG("[dbgmenu] slot %d: row %d saved %d, now %d (refused)\n", slot, r, v[r], got);
     }
-    LOG("[dbgmenu] slot %d: saved Debug Menu rows put back (%d rows read, %d changed)
-", slot, n, ch);
+    LOG("[dbgmenu] slot %d: saved Debug Menu rows put back (%d rows read, %d changed)\n", slot, n, ch);
 }
