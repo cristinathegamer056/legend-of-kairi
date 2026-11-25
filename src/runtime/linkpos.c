@@ -4637,30 +4637,48 @@ int linkpos_fire_burst(const float p[3]) {
 // f50 3 / f40 1); the element reaches the enemy through its element-reaction object, whose virtual react(this, el)
 // (1.9.0 0x7100b873d4, 1.8.2 f_7000a73ec4 = the s59 "enemies' fire reaction") does: el 2 fire (DamageParam Burnable
 // +0x9e8 -> chemical burning), 3 ice (Iceable +0xb88 -> chemical frozen + vfunc +0x98 = BotW's freeze), 4 electric
-// (+0xca8 -> vfunc +0x90 = BotW's shock). Its this+0x10 = the actor. GUESS: it is the damage manager's second base
-// (dm + 8, dm = actor+0x840: dm+0x18 = the actor), else a scan of the actor's first 0x1000 bytes finds it; its vtable slot
-// = the one holding the base react (found once, then called through the vtable: per-class overrides kept).
-// Guest call inside linkpos_frame only (fire_cpu). 1 = sent, 0 = no reaction object, -1 refused.
+// (+0xca8 -> vfunc +0x90 = BotW's shock). Its this+0x10 = the actor. Where an enemy keeps it is not known from the code, so
+// it is searched for (first hit, then cached): an object inside or pointed to from the actor's first 0x1000 bytes or the damage
+// manager's (actor+0x840) first 0x400 bytes, with this+0x10 = the actor AND a vtable holding the base react itself. Only such a
+// verified object is called (test 2 crash: dm + 8 also has +0x10 = the actor - the damage manager's own mActor - but is not it).
+// A class that overrides react is not matched (nothing sent). Guest call inside linkpos_frame only (fire_cpu).
+// 1 = sent, 0 = no reaction object, -1 refused.
 #define ELEM_REACT (SS->elem_react)
-static int g_er_off = -1, g_er_slot = -1;  // (the actor offset of the object pointer: -2 = dm + 8; the vtable slot)
+#define ER_SLOTS 128
+static int g_er_base = -1, g_er_ptr, g_er_off, g_er_slot = -1;  // (cached: base 0 actor / 1 damage manager, pointer or embedded, offset, vtable slot)
+static int er_slot_of(uint64_t p, uint64_t actor) {  // the react slot in p's vtable, -1 = p is not a reaction object of this actor
+    if (!in_guest(p) || readable(p, 0x18) != 0x18 || *(const uint64_t *)(uintptr_t)(p + 0x10) != actor) return -1;
+    uint64_t vt = *(const uint64_t *)(uintptr_t)p;
+    if (!in_guest(vt) || readable(vt, 8 * ER_SLOTS) != 8 * ER_SLOTS) return -1;
+    if (g_er_slot >= 0) return *(const uint64_t *)(uintptr_t)(vt + 8 * (uint64_t)g_er_slot) == ELEM_REACT ? g_er_slot : -1;
+    for (int k = 0; k < ER_SLOTS; k++)
+        if (*(const uint64_t *)(uintptr_t)(vt + 8 * (uint64_t)k) == ELEM_REACT) return k;
+    return -1;
+}
+static uint64_t er_at(uint64_t base, int ptr, int off) {
+    if (!in_guest(base)) return 0;
+    uint64_t q = base + (uint64_t)off;
+    if (!ptr) return q;
+    return readable(q, 8) == 8 ? *(const uint64_t *)(uintptr_t)q : 0;
+}
 static uint64_t er_obj(uint64_t a) {
-    uint64_t dm = *(const uint64_t *)(uintptr_t)(a + ACTOR_DAMAGE_MGR);
-    if (g_er_off == -2 || g_er_off == -1) {
-        if (in_guest(dm) && *(const uint64_t *)(uintptr_t)(dm + 8 + 0x10) == a) return dm + 8;
-        if (g_er_off == -2) return 0;
+    uint64_t dm = readable(a + ACTOR_DAMAGE_MGR, 8) == 8 ? *(const uint64_t *)(uintptr_t)(a + ACTOR_DAMAGE_MGR) : 0;
+    if (g_er_base >= 0) {
+        uint64_t p = er_at(g_er_base ? dm : a, g_er_ptr, g_er_off);
+        return er_slot_of(p, a) >= 0 ? p : 0;
     }
-    if (g_er_off >= 0) {
-        uint64_t p = *(const uint64_t *)(uintptr_t)(a + (uint64_t)g_er_off);
-        return in_guest(p) && *(const uint64_t *)(uintptr_t)(p + 0x10) == a ? p : 0;
-    }
-    for (int o = 0; o < 0x1000; o += 8) {  // (first use: an object with this+0x10 = the actor whose vtable holds the base react)
-        uint64_t p = *(const uint64_t *)(uintptr_t)(a + (uint64_t)o);
-        if (!in_guest(p) || readable(p, 0x18) != 0x18 || *(const uint64_t *)(uintptr_t)(p + 0x10) != a) continue;
-        uint64_t vt = *(const uint64_t *)(uintptr_t)p;
-        if (!in_guest(vt) || readable(vt, 8 * 96) != 8 * 96) continue;
-        for (int k = 0; k < 96; k++)
-            if (*(const uint64_t *)(uintptr_t)(vt + 8 * (uint64_t)k) == ELEM_REACT) {
-                LOG("[linkpos] mgelem: reaction object at actor+%#x (%llx, vtable %llx slot %d)\n", o, (unsigned long long)p, (unsigned long long)vt, k);
+    for (int base = 0; base < 2; base++) {
+        uint64_t b = base ? dm : a;
+        int lim = base ? 0x400 : 0x1000;
+        if (!in_guest(b) || readable(b, (size_t)lim) != (size_t)lim) continue;
+        for (int ptr = 1; ptr >= 0; ptr--)
+            for (int o = 0; o < lim; o += 8) {
+                uint64_t p = er_at(b, ptr, o);
+                int k = er_slot_of(p, a);
+                if (k < 0) continue;
+                g_er_base = base, g_er_ptr = ptr, g_er_off = o, g_er_slot = k;
+                LOG("[linkpos] mgelem: reaction object = %s %s+%#x (%llx, vtable %llx slot %d)\n", ptr ? "pointer at" : "inside",
+                    base ? "damage manager" : "actor", o, (unsigned long long)p, (unsigned long long)*(const uint64_t *)(uintptr_t)p, k);
                 return p;
             }
     }
@@ -4674,28 +4692,16 @@ int linkpos_enemy_element(uint64_t actor, int el) {
     const char *nm = actor_name(actor);
     if (!p) {
         static int n;
-        if (n++ < 8) LOG("[linkpos] mgelem: %s %llx: no element-reaction object found (dm %llx)\n", nm ? nm : "?", (unsigned long long)actor,
-                         (unsigned long long)*(const uint64_t *)(uintptr_t)(actor + ACTOR_DAMAGE_MGR));
+        if (n++ < 8) LOG("[linkpos] mgelem: %s %llx: no element-reaction object found (search %s)\n", nm ? nm : "?",
+                         (unsigned long long)actor, g_er_base >= 0 ? "cached" : "found nothing");
         return 0;
-    }
-    uint64_t vt = *(const uint64_t *)(uintptr_t)p, fn = 0;
-    if (g_er_slot < 0 && in_guest(vt))
-        for (int k = 0; k < 96 && g_er_slot < 0; k++)
-            if (*(const uint64_t *)(uintptr_t)(vt + 8 * (uint64_t)k) == ELEM_REACT) g_er_slot = k;
-    if (g_er_slot >= 0 && in_guest(vt)) fn = *(const uint64_t *)(uintptr_t)(vt + 8 * (uint64_t)g_er_slot);
-    if (!in_guest(fn) || !dispatch_lookup(fn)) fn = ELEM_REACT;  // (slot not known yet: the base one)
-    if (g_er_off == -1) {
-        uint64_t dm = *(const uint64_t *)(uintptr_t)(actor + ACTOR_DAMAGE_MGR);
-        if (p == dm + 8) g_er_off = -2;
-        else for (int o = 0; o < 0x1000; o += 8) if (*(const uint64_t *)(uintptr_t)(actor + (uint64_t)o) == p) { g_er_off = o; break; }
-        LOG("[linkpos] mgelem: reaction object = %s (offset %d, slot %d)\n", g_er_off == -2 ? "damage manager + 8" : "an actor field", g_er_off, g_er_slot);
     }
     Cpu save = *c;
     c->x[0] = p, c->x[1] = (uint64_t)(uint32_t)el;
-    guest_call(c, fn);
+    guest_call(c, ELEM_REACT);
     *c = save;
-    LOG("[linkpos] mgelem: %s %llx element %d (%s) sent (fn %llx)\n", nm ? nm : "?", (unsigned long long)actor, el,
-        el == 2 ? "fire" : el == 3 ? "ice" : el == 4 ? "electric" : "?", (unsigned long long)fn);
+    LOG("[linkpos] mgelem: %s %llx element %d (%s) sent\n", nm ? nm : "?", (unsigned long long)actor, el,
+        el == 2 ? "fire" : el == 3 ? "ice" : el == 4 ? "electric" : "?");
     return 1;
 }
 
