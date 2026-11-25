@@ -189,11 +189,12 @@ static void guard_block(const float p[3], float to_u, int dmg, const char *how, 
     bool tier = gparry_on() && strcmp(how, "beam reflect") && S.motion == MOT_GUARD;
     // (gparry test 1: the user wants a reaction on every block) the regular block plays the reflect motion too, without the
     // Counterguard offer (g_gparry_reg, read by t0_reaction) and without the stagger
-    g_gparry_reg = tier && S.clock > g_gparry_win;
+    float gclk = S.clock;  // (the guard clock at the hit; play() below resets S.clock)
+    g_gparry_reg = tier && gclk > g_gparry_win;
     if (g_gparry_reg) {
         if (mot_of(MOT_GUARD_REFLECT)) play(MOT_GUARD_REFLECT), S.special = SP_GUARD;
         LOG("[sora] gparry: REGULAR block (guard clock %.1f > %d GFR, damage %d, %s): reflect motion, no Counterguard / stagger\n",
-            S.clock, g_gparry_win, dmg, how);
+            gclk, g_gparry_win, dmg, how);
         return;
     }
     if (S.motion != MOT_GUARD_REFLECT && mot_of(MOT_GUARD_REFLECT)) play(MOT_GUARD_REFLECT), S.special = SP_GUARD;
@@ -217,7 +218,7 @@ static void guard_block(const float p[3], float to_u, int dmg, const char *how, 
             float at[3] = {e[best][0], e[best][1] + 1.0f, e[best][2]};
             sora_fx_event(kbfx_name("hit_finish"), at, S.face, to_u);
         }
-        LOG("[sora] gparry: PARRY (guard clock %.1f <= %d GFR): %s\n", S.clock, g_gparry_win,
+        LOG("[sora] gparry: PARRY (guard clock %.1f <= %d GFR): %s\n", gclk, g_gparry_win,
             best >= 0 ? "attacker staggered (hit queued)" : "no live enemy in front within 4 u");
         if (best >= 0) LOG("[sora] gparry: stagger %llx %.1f u away, %d damage\n", (unsigned long long)a[best], sqrtf(bd), g_gparry_dmg);
     }
