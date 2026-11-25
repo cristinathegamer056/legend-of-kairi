@@ -3601,7 +3601,7 @@ static float t0_near(const Target *t, int n) {  // surface distance of the neare
 }
 // GUESS rules, applied to the pick: Upper Slash = the 2nd ground swing, Horizontal Slash = the 2nd air swing (a target within
 // the Type 2 reach), Finishing Leap = the plain ground finisher when the nearest target is 120..650 cm away (a leap closes it).
-// (t0sq) with Square (sq): Upper / Horizontal Slash on any non-finisher step of the ground / air combo (target within
+// (t0sq) with Square (sq), in place of any pick: Upper / Horizontal Slash on a non-finisher step of the ground / air combo (target within
 // 180 / 260 cm), Finishing Leap on the ground finisher step (target within 650 cm); none of them = NULL (no swing). A
 // plain Attack press (!sq) keeps the pick.
 static const KhPtya *t0_override(const KhPtya *e, bool air, const Target *t, int n, bool sq) {
@@ -3611,11 +3611,13 @@ static const KhPtya *t0_override(const KhPtya *e, bool air, const Target *t, int
     const KhPtya *o = NULL;
     // (review: only over a plain swing: not jump-to-target / wall entries or another ability's pick)
     bool plain = e->ability == 0 && (air || e->jump <= 0) && e->id != 1;
-    if (sq) {
+    if (sq) {  // (t0sq test 2, user: "I can upper slash on an enemy multiple times until the combo ends") Square takes
+        // ANY step the combo would play next, whatever the pick: after an Upper Slash the enemy is up and the pick is the
+        // jump-to-target entry (ptya 33), which the plain test refused (every later Square of the combo did nothing)
         bool fin = (e->flag & PTYA_FINISHER) || e->id == 3;
-        if (plain && !air && !fin && d >= 0 && d < 180) o = t0_entry(12);
-        else if (plain && air && !fin && d >= 0 && d < 260) o = t0_entry(38);
-        else if (plain && !air && fin && d >= 0 && d < 650) o = t0_entry(37);
+        if (!air && !fin && d >= 0 && d < 180) o = t0_entry(12);
+        else if (air && !fin && d >= 0 && d < 260) o = t0_entry(38);
+        else if (!air && fin && d >= 0 && d < 650) o = t0_entry(37);
         if (o) LOG("[combo] Square: ptya id %d -> %d (motion %d -> %d, hit %d, nearest target %.0f cm)\n", e->id, o->id, e->motion, o->motion, S.d74, d);
         else LOG("[combo] Square: no Type 0 ability here (ptya id %d, %s %s, hit %d, nearest target %.0f cm)\n", e->id,
                  air ? "air" : "ground", fin ? "finisher step" : "combo step", S.d74, d);
