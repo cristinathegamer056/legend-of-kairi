@@ -216,7 +216,7 @@ static void test_wire(void) {
     CHECK(an > 0 && !net_unpack_kills(ab, an, &pl, &sq, &m));
     // old builds: the version byte did not change (no "update" log in a 0.1.4 / 7be3a1d game: v11), and the types are past NET_AREA,
     // the last one those builds know (their net_unpack_ex: "else return false" = a "bad" packet, skipped before any slot is touched)
-    CHECK(NET_VERSION == 11 && NET_KILLS > NET_AREA && NET_REACT > NET_AREA && b[2] == 11 && b[3] == 9);
+    CHECK(NET_VERSION == 12 && NET_KILLS > NET_AREA && NET_REACT > NET_AREA && b[2] == 12 && b[3] == 9);
 }
 
 // ---- several games through a fake channel (the real wire) ----

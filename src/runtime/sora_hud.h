@@ -159,6 +159,17 @@ void sora_hud_notice(const SoraHudQuad *q, int n);
 // (mp4) slots 0..3 (4 players), each stale after 3 presents; sora_hud_label = slot 0
 void sora_hud_label_slot(int slot, const float world[3], const SoraHudQuad *q, int n);
 bool sora_hud_itempic_ready(void);  // (s120) itempic.bin loaded: SoraHudQuad.tex 3 = the Keyblade picture atlas (u/v in its texels)
+// (s268, co-op item 3) friends on BotW's minimap: game thread, every frame they show (copied, <= 4; gone 3 presents after
+// the last call; n <= 0 / NULL = hide now). x / y = metres from Link in the minimap's own frame (x right, y down: the DLL
+// turns them with the camera, runtime/sora_hud_mm.h mm_turn); rgb 0xRRGGBB; a 0..1. Inside the disc = a 10 px dot with a
+// dark rim, off it = a small arrow on the rim. The exe places them with the window shape + HUD size and draws nothing in
+// menus / the full map / events / loads / the title / the pause menu. Needs camp.bin (its pipeline). Look it up by name.
+typedef struct { float x, y; uint32_t rgb; float a; } SoraHudMapDot;
+void sora_hud_minimap(const SoraHudMapDot *d, int n);
+// (s269, review s268 F2) what BotW's own minimap is doing (runtime/sora_hud_mmpane.h's SoraMmPane; o->size = sizeof first):
+// 1 = N_MiniMap_00 found, 0 = not (o still has the screen part), -1 = wrong size. Game thread only. Look it up by name.
+#include "sora_hud_mmpane.h"
+int sora_hud_minimap_pane(SoraMmPane *o);
 
 // Render thread: device.c present_locked, inside the window image's rendering, after sora_draw_present and before
 // menu_render. (vx, vy, vw, vh) = the game image's place in the window: the HUD is anchored to its bottom-right corner,

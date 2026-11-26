@@ -110,6 +110,15 @@ static inline void mod_update_set(const VkWriteDescriptorSet *w) {
 #include "sora_hud.h"
 #include "sora_hud_label.h"  // (mp Task 7: hud_label_origin)
 #include "sora_path.h"  // (Deck port: D:/SoraBotW -> SORA_ROOT)
+#include "sora_hud_mm.h"  // (s268: the minimap dots' math)
+#include "settings.h"     // (s268: g_settings.hud_size / hud_edges for the minimap's place)
+#include "framepace.h"    // (s268: menus / map / events / loads / title: no minimap dots)
+#include "sora_hud_mmpane.h"  // (s269: is BotW's minimap drawn: sora_hud_minimap_pane)
+#include "game_sites.h"       // (s269: g_site.screen_mgr)
+#include "kernel.h"           // (s269: HEAP_BASE / kernel_heap_size: the pane walk's bounds)
+#include "ui_layout.h"        // (s269: ui_layout_map_mode)
+float output_view_shape(void);  // (nvn/output_scale.c: > 1 wider than 16:9, < 1 taller)
+#include "items.h"  // (botwpic: items_icon_actor)
 
 VkImageView vk_frame_view(void);
 VkExtent2D vk_frame_extent(void);
@@ -199,6 +208,34 @@ void sora_hud_notice(const SoraHudQuad *q, int n) {
     if (n) memcpy(g_nt_in, q, sizeof g_nt_in[0] * (size_t)n);
     g_nt_n = n, g_nt_at = vk_frame_counter();
     pthread_mutex_unlock(&g_lock);
+}
+
+// (s268, co-op item 3) the friends' minimap dots (sora_hud.h): stale after 3 presents like the labels
+#define MM_MAX 4
+static SoraHudMapDot g_mm_in[MM_MAX];
+static int g_mm_n;
+static uint64_t g_mm_at;
+void sora_hud_minimap(const SoraHudMapDot *d, int n) {
+    if (!d || n < 0) n = 0;
+    if (n > MM_MAX) n = MM_MAX;
+    pthread_mutex_lock(&g_lock);
+    if (n) memcpy(g_mm_in, d, sizeof g_mm_in[0] * (size_t)n);
+    g_mm_n = n, g_mm_at = vk_frame_counter();
+    pthread_mutex_unlock(&g_lock);
+}
+
+// (s269, review s268 F2) is BotW's minimap drawn (sora_hud.h, sora_hud_mmpane.h): reads only, bounds-checked against the
+// guest heap, so a missing / half-built screen just answers 0. Called by the DLL on the game thread only (the cache).
+static MmpCache g_mmp;
+int sora_hud_minimap_pane(SoraMmPane *o) {
+    if (!o || o->size != sizeof *o) return -1;
+    uint64_t lo = HEAP_BASE, hi = HEAP_BASE + kernel_heap_size(), screen = 0;
+    uint64_t mgr = g_site.screen_mgr ? *(uint64_t *)(uintptr_t)g_site.screen_mgr : 0;
+    if (mgr >= GUEST_LO && mgr < GUEST_HI - 0x38 && *(uint32_t *)(uintptr_t)(mgr + 0x28) > 0x2a) {
+        uint64_t arr = *(uint64_t *)(uintptr_t)(mgr + 0x30);
+        if (arr >= GUEST_LO && arr < GUEST_HI - 8 * 0x2b) screen = *(uint64_t *)(uintptr_t)(arr + 8 * 0x2a);
+    }
+    return mmp_probe(&g_mmp, screen, screen ? ui_layout_map_mode(screen) : -1, lo, hi, o);
 }
 
 // (s93 meals) text over the command menu's sub rows: the DLL composes the quads (camp.bin's sys font glyphs, tex 1) in the
@@ -598,6 +635,39 @@ static uint32_t g_ip_w, g_ip_h, g_ip_off;
 static int g_ip_state;  // 0 not tried, 1 ready, -1 off / missing / bad
 // (s120) the DLL asks before it emits tex 3 quads (an old exe has no such export = no pictures; the camp sheet would show instead)
 bool sora_hud_itempic_ready(void) { return g_ip_state == 1; }
+
+// ------------------------------------------------------------------ (botwpic) a BotW item picture in the Equipment page
+// The KH2 Equipment page's picture slot shows a BotW weapon / shield / armor piece as its own pouch picture
+// (UI/StockItem/<actor>.sbitemico, items.c items_icon_actor). One picture at a time: the DLL asks sora_hud_botw_icon(actor)
+// each frame it wants one; a new name is decoded on the asking thread (one small Yaz0 file), the render thread uploads it
+// into texture 15 on its next camp draw (vk_upload_cmd), and from then the DLL's SoraHudQuad.tex == 4 quads (u / v 0..1 over
+// the whole picture) draw it.
+//   sora_hud_botw_icon: 1 = that picture is in texture 15 (draw it), 0 = decoded, not uploaded yet, -1 = no picture for it
+static pthread_mutex_t g_bi_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct { char want[72], have[72], up[72]; uint8_t *px; int w, h, pend, failed; int tw, th; } BI;
+static volatile int g_bi_asked;  // (s288 port) 0 until the DLL asks the first time (its botwpic key on): camp_draw's bi_upload returns at once
+int sora_hud_botw_icon(const char *actor) {
+    if (!actor || !*actor || strlen(actor) >= sizeof BI.want) return -1;
+    if (!g_bi_asked) __atomic_store_n(&g_bi_asked, 1, __ATOMIC_RELEASE);
+    pthread_mutex_lock(&g_bi_lock);
+    int r = !strcmp(actor, BI.have) ? 1 : !strcmp(actor, BI.want) ? (BI.failed ? -1 : 0) : 2;
+    if (r == 1 && BI.pend) {  // (s288 port) back to the picture in texture 15 while another one waits: drop that one, else the next
+        free(BI.px);          // camp draw would upload it under this frame's quad (one frame of the wrong picture)
+        BI.px = NULL, BI.pend = 0, BI.failed = 0;
+        snprintf(BI.want, sizeof BI.want, "%s", BI.have);
+    }
+    pthread_mutex_unlock(&g_bi_lock);
+    if (r != 2) return r;
+    int w = 0, h = 0;
+    uint8_t *px = items_icon_actor(actor, &w, &h);
+    pthread_mutex_lock(&g_bi_lock);
+    free(BI.px);
+    BI.px = px, BI.w = w, BI.h = h, BI.pend = px != NULL, BI.failed = px == NULL;
+    snprintf(BI.want, sizeof BI.want, "%s", actor);
+    pthread_mutex_unlock(&g_bi_lock);
+    LOG("[sora-hud] botwpic: %s -> %s (%dx%d)\n", actor, px ? "decoded" : "no picture", w, h);
+    return px ? 0 : -1;
+}
 static bool itempic_load(void) {
     const char *p = getenv("SAVAGEWIND_SORA_ITEMPIC");
     if (p && !strcmp(p, "0")) { LOG("[sora-hud] itempic off (SAVAGEWIND_SORA_ITEMPIC=0)\n"); return false; }
@@ -1210,12 +1280,22 @@ static void rc_draw(int nv) {  // nv = the visible top rows (the slot sits right
 
 // The pages (plan 4.4): the top page (title 18, rows 9 / 16 / 11; the selected row + icon frame 45, icon, cursor 20),
 // the Magic page one level right (60 / 57 / 59 / 58), or the shortcut page (65, rows 67 69 68 66) instead of the top.
+// The command menu frame's left side, in units from the image's left edge: 512 units centred, then KH2 PC's widescreen
+// shift of -85. (s277, the user on the Steam Deck: "move it slightly to the right") a picture narrower than 16:9 (the
+// Deck's 16:10) keeps the 16:9 distance from the left edge instead of sliding ~37 u (~70 px at 800p) further left;
+// 16:9 and wider are unchanged.
+static float menu_left_u(float vw, float vh) {
+    const float u169 = (vh * 16.0f / 9.0f / T.unit - 512.0f) * 0.5f - 85.0f;
+    float u = (vw / T.unit - 512.0f) * 0.5f - 85.0f;
+    return u < u169 ? u169 : u;
+}
+
 static void menu_draw(const SoraHudMenu *m, float vx, float vy, float vw, float vh) {
     static const int ICON[4] = {37, 41, 39, 44};  // Attack, Magic, Items, Drive (KH2 CmdIcon 0x25 0x29 0x27 0x2C)
     static const int SC_G[4] = {67, 69, 68, 66};
     float sox = T.ox, soy = T.oy;
     // the frame: 512 units wide centred in the image, then KH2 PC's widescreen menu shift of -85; 416 tall, bottom on the image's
-    T.ox = vx + ((vw / T.unit - 512.0f) * 0.5f - 85.0f + P.menu_dx) * T.unit;
+    T.ox = vx + (menu_left_u(vw, vh) + P.menu_dx) * T.unit;
     T.oy = vy + vh - (416.0f - P.menu_dy) * T.unit;
     batch_begin(2, 0, 0, 0);
     const float x = 28;
@@ -1318,7 +1398,7 @@ static void dream_draw(const SoraHudDream *d, float vx, float vy, float vw, floa
             dream_label(d->text[j], P.dream_x - dream_w(d->text[j], h) * 0.5f, top + j * pitch + (pitch - h) * 0.5f, h, 0x80E6E6E6);
     }
     if (nr) {  // the choices: the command menu's frame and slots (menu_draw's origin and row spacing)
-        T.ox = vx + ((vw / T.unit - 512.0f) * 0.5f - 85.0f + P.menu_dx) * T.unit;
+        T.ox = vx + (menu_left_u(vw, vh) + P.menu_dx) * T.unit;
         T.oy = vy + vh - (416.0f - P.menu_dy) * T.unit;
         const float x = 28;
         batch_begin(2, 0, 0, 0);
@@ -1891,11 +1971,11 @@ static struct {
     VkPipeline cpipe[3];  // (s78 camp) normal / add / subtract
     VkPipeline pipe_l, cpipe_l[3];  // (s250 hdr) the same for the mod's HDR layer (vk_frame_sora_layer; RGBA16F)
     VkSampler sampler;
-    VkImage tex[15];  // 0-1 gauge, 2-3 menu, 4 lock-on reticle, 5 the dream picker's labels (s54), 6 the level-up text (s55),
+    VkImage tex[16];  // 0-1 gauge, 2-3 menu, 4 lock-on reticle, 5 the dream picker's labels (s54), 6 the level-up text (s55),
                       // 7-8 Donald's / Goofy's faces (s57 party), 9-10 the camp sheet / sys font (s78 camp), 11 Roxas' face (s111),
                       // 12 Mickey's face (s116), 13 the Keyblade picture atlas (s120), 14 the summon faces (s139)
-    VmaAllocation tex_mem[15];
-    VkImageView tex_view[15];
+    VmaAllocation tex_mem[16];
+    VkImageView tex_view[16];
     uint32_t ntex;
     uint64_t frames;
 } G;
@@ -2048,32 +2128,89 @@ bool sora_draw_project(const float w[3], float *sx, float *sy);  // (sora_draw.c
 // 384: KH2's pixel aspect, 16:9 = x -85..597), its own vertex array, a batch per texture / blend change
 static CVtx g_cvtx[6 * CQ_MAX];
 // menu = the pause menu's quads (sora_hud_quads_shown + the log); false = sora_hud_label's
-static void camp_draw(const SoraHudQuad *q, int n, VkExtent2D ext, float vx, float vy, float vw, float vh, bool menu) {
+static bool bi_drawable(void) { return G.tex_view[15] != VK_NULL_HANDLE && BI.tw > 0 && BI.have[0]; }
+// (render thread, camp_draw) the pending picture into texture 15; a new size makes a new image (the old one: deferred destroy)
+static void bi_upload(void) {
+    if (!__atomic_load_n(&g_bi_asked, __ATOMIC_ACQUIRE)) return;  // (s288 port: botwpic never used = not even the lock, as before #62)
+    pthread_mutex_lock(&g_bi_lock);
+    uint8_t *px = BI.pend ? BI.px : NULL;
+    int w = BI.w, h = BI.h;
+    char name[72];
+    snprintf(name, sizeof name, "%s", BI.want);
+    if (px) BI.px = NULL, BI.pend = 0;
+    pthread_mutex_unlock(&g_bi_lock);
+    if (!px) return;
+    VkCommandBuffer ucb = vk_upload_cmd();
+    if (G.tex[15] && (w != BI.tw || h != BI.th)) {
+        vk_defer_view(G.tex_view[15]), vk_defer_image(G.tex[15], G.tex_mem[15]);
+        G.tex[15] = VK_NULL_HANDLE, G.tex_view[15] = VK_NULL_HANDLE, BI.tw = BI.th = 0;
+    }
+    if (!G.tex[15]) {
+        VkImageCreateInfo ic = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = VK_FORMAT_R8G8B8A8_UNORM,
+                                .extent = {(uint32_t)w, (uint32_t)h, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+                                .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT};
+        VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
+        if (vmaCreateImage(g_vk.vma, &ic, &ai, &G.tex[15], &G.tex_mem[15], NULL) != VK_SUCCESS) {
+            LOG("[sora-hud] botwpic: could not make a %dx%d image for %s\n", w, h, name);
+            G.tex[15] = VK_NULL_HANDLE, free(px);
+            return;
+        }
+        vk_image_init_layout(ucb, G.tex[15], VK_IMAGE_ASPECT_COLOR_BIT);
+        VkImageViewCreateInfo vc = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = G.tex[15], .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                                    .format = VK_FORMAT_R8G8B8A8_UNORM, .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+        if (vkCreateImageView(g_vk.dev, &vc, NULL, &G.tex_view[15]) != VK_SUCCESS) {
+            LOG("[sora-hud] botwpic: could not make the image view for %s\n", name);
+            vk_defer_image(G.tex[15], G.tex_mem[15]), G.tex[15] = VK_NULL_HANDLE, G.tex_view[15] = VK_NULL_HANDLE, free(px);
+            return;
+        }
+    }
+    vk_full_barrier(ucb);  // (the last frame's reads of the old picture before the copy)
+    VkSpan s = vk_transient_copy(px, (uint64_t)w * h * 4, 16);
+    free(px);
+    VkBufferImageCopy rg = {.bufferOffset = s.off, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .imageExtent = {(uint32_t)w, (uint32_t)h, 1}};
+    rec_CmdCopyBufferToImage(ucb, s.buf, G.tex[15], VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+    vk_full_barrier(ucb);
+    BI.tw = w, BI.th = h;
+    pthread_mutex_lock(&g_bi_lock);
+    snprintf(BI.have, sizeof BI.have, "%s", name);
+    pthread_mutex_unlock(&g_bi_lock);
+    LOG("[sora-hud] botwpic: %s uploaded (%dx%d)\n", name, w, h);
+}
+// the camp pipelines (normal / add / subtract) for this frame's target, made on first use; NULL = failed (G.failed set)
+static VkPipeline *camp_pipes(void) {
     static VkFormat cfmt;
     const bool lay = vk_frame_sora_layer();  // (s250 hdr: the mod's HDR layer; false = the window image, as before)
     if (lay) {
         if (!G.cpipe_l[0]) {
             for (int b = 0; b < 3; b++) G.cpipe_l[b] = make_camp_pipeline(vk_frame_sora_format(), b, true);
-            if (!G.cpipe_l[0] || !G.cpipe_l[1] || !G.cpipe_l[2]) { G.failed = true; LOG("[sora-hud] camp pipeline (HDR layer) failed\n"); return; }
+            if (!G.cpipe_l[0] || !G.cpipe_l[1] || !G.cpipe_l[2]) { G.failed = true; LOG("[sora-hud] camp pipeline (HDR layer) failed\n"); return NULL; }
             LOG("[sora-hud] camp pipelines for the HDR layer (format %d)\n", vk_frame_sora_format());
         }
     } else if (!G.cpipe[0] || cfmt != g_vk.sc_format) {
         cfmt = g_vk.sc_format;
         for (int b = 0; b < 3; b++) G.cpipe[b] = make_camp_pipeline(cfmt, b, false);
-        if (!G.cpipe[0] || !G.cpipe[1] || !G.cpipe[2]) { G.failed = true; LOG("[sora-hud] camp pipeline failed\n"); return; }
+        if (!G.cpipe[0] || !G.cpipe[1] || !G.cpipe[2]) { G.failed = true; LOG("[sora-hud] camp pipeline failed\n"); return NULL; }
     }
-    VkPipeline *cpipe = lay ? G.cpipe_l : G.cpipe;
+    return lay ? G.cpipe_l : G.cpipe;
+}
+
+static void camp_draw(const SoraHudQuad *q, int n, VkExtent2D ext, float vx, float vy, float vw, float vh, bool menu) {
+    bi_upload();  // (botwpic) a new BotW picture into texture 15 before the quads use it
+    VkPipeline *cpipe = camp_pipes();
+    if (!cpipe) return;
     if (vw <= 0 || vh <= 0) vx = vy = 0, vw = T.W, vh = T.H;
     float sy = vh / 416.0f, sx = sy * 416.0f / 384.0f, cx = vx + vw * 0.5f;
     static struct { int first, n, tex, solid, blend; } bt[CQ_MAX];
     int nb = 0, nv = 0;
     for (int i = 0; i < n; i++, q++) {
         if (q->tex == 3 && g_ip_state != 1) continue;  // (s120 itempic: no atlas = the picture quad is skipped)
-        int solid = q->tex == 2, tex = q->tex == 1 ? 10 : q->tex == 3 ? 13 : 9, blend = q->blend <= 2 ? q->blend : 0;
+        if (q->tex == 4 && !bi_drawable()) continue;  // (botwpic: no BotW picture uploaded yet)
+        int solid = q->tex == 2, tex = q->tex == 1 ? 10 : q->tex == 3 ? 13 : q->tex == 4 ? 15 : 9, blend = q->blend <= 2 ? q->blend : 0;
         if (!nb || bt[nb - 1].tex != tex || bt[nb - 1].solid != solid || bt[nb - 1].blend != blend)
             bt[nb].first = nv, bt[nb].n = 0, bt[nb].tex = tex, bt[nb].solid = solid, bt[nb].blend = blend, nb++;
         float iu, iv;
         if (tex == 13) iu = 1.0f / (float)g_ip_w, iv = 1.0f / (float)g_ip_h;  // (s120 itempic: u / v in atlas texels)
+        else if (tex == 15) iu = iv = 1.0f;  // (botwpic: u / v 0..1 over the whole picture)
         else { const CpImg *im = &g_cpimg[tex - 9]; iu = 1.0f / (float)im->lw, iv = 1.0f / (float)im->lh; }
         CVtx c[4];
         for (int k = 0; k < 4; k++) {
@@ -2123,6 +2260,74 @@ static void camp_draw(const SoraHudQuad *q, int n, VkExtent2D ext, float vx, flo
 static void notice_draw(const SoraHudQuad *q, int n, VkExtent2D ext, float vx, float vy, float vw, float vh) {
     if (n <= 0 || g_cp_state != 1) return;
     camp_draw(q, n, ext, vx, vy, vw, vh, false);
+}
+
+// (s268, co-op item 3) the friends on BotW's minimap: solid triangles (the camp pipeline's solid mode), a dark disc + the
+// colour disc for a friend on the map, a dark + a colour triangle on the rim for one off it (sora_hud_mm.h's numbers)
+#define MM_SEG 16
+static CVtx g_mm_vtx[MM_MAX * (2 * MM_SEG * 3)];
+static void mm_v(int *nv, float x, float y, const float c[4]) {
+    if (*nv >= (int)(sizeof g_mm_vtx / sizeof g_mm_vtx[0])) return;
+    g_mm_vtx[(*nv)++] = (CVtx){x / T.W * 2 - 1, y / T.H * 2 - 1, 0, 0, c[0], c[1], c[2], c[3], 0, 0, 0, 0};
+}
+static void mm_disc(int *nv, float x, float y, float r, const float c[4]) {
+    for (int i = 0; i < MM_SEG; i++) {
+        float a0 = 6.2831853f * (float)i / MM_SEG, a1 = 6.2831853f * (float)(i + 1) / MM_SEG;
+        mm_v(nv, x, y, c), mm_v(nv, x + r * cosf(a0), y + r * sinf(a0), c), mm_v(nv, x + r * cosf(a1), y + r * sinf(a1), c);
+    }
+}
+static void mm_arrow(int *nv, float x, float y, float ux, float uy, float len, float half, const float c[4]) {
+    float tx = x + ux * len * 0.5f, ty = y + uy * len * 0.5f, bx = x - ux * len * 0.5f, by = y - uy * len * 0.5f;
+    mm_v(nv, tx, ty, c), mm_v(nv, bx - uy * half, by + ux * half, c), mm_v(nv, bx + uy * half, by - ux * half, c);
+}
+static void mm_draw(const SoraHudMapDot *d, int n, VkExtent2D ext, float vx, float vy, float vw, float vh) {
+    if (n <= 0 || g_cp_state != 1) return;
+    if (framepace_menu_ui() || framepace_map_ui() || framepace_in_event() || framepace_loading_ui() || framepace_title_ui()) return;
+    if (vw <= 0 || vh <= 0) vx = vy = 0, vw = T.W, vh = T.H;
+    float shape = output_view_shape();
+    int hs = g_settings.hud_size;
+    if (hs <= 0) return;  // (s268 review F1: HUD size 0 = BotW's HUD hidden, the minimap with it)
+    MmGeo g = mm_geo(vx, vy, vw, vh, hs >= 50 && hs <= 150 ? (float)hs / 100.0f : 1.0f, g_settings.hud_edges && shape > 0 && shape < 1);
+    int nv = 0;
+    for (int i = 0; i < n; i++) {
+        if (!isfinite(d[i].x) || !isfinite(d[i].y) || !(d[i].a > 0)) continue;  // (s268 review F3: NaN / inf from a broken sender)
+        float a = d[i].a > 1 ? 1 : d[i].a;
+        float c[4] = {(float)(d[i].rgb >> 16 & 0xFF) / 255.0f, (float)(d[i].rgb >> 8 & 0xFF) / 255.0f, (float)(d[i].rgb & 0xFF) / 255.0f, a};
+        float k[4] = {0.06f, 0.06f, 0.06f, 0.85f * a};  // (the dark rim)
+        float px, py, ux, uy, u = g.ppm;
+        if (mm_place(&g, d[i].x, d[i].y, &px, &py, &ux, &uy)) {
+            mm_arrow(&nv, px, py, ux, uy, (MM_ARROW_LEN + 2 * MM_DOT_RIM) * u, (MM_ARROW_HALF + MM_DOT_RIM) * u, k);
+            mm_arrow(&nv, px, py, ux, uy, MM_ARROW_LEN * u, MM_ARROW_HALF * u, c);
+        } else {
+            mm_disc(&nv, px, py, MM_DOT_R * u, k);
+            mm_disc(&nv, px, py, (MM_DOT_R - MM_DOT_RIM) * u, c);
+        }
+    }
+    if (!nv) return;
+    VkPipeline *cpipe = camp_pipes();
+    if (!cpipe) return;
+    VkCommandBuffer cb = vk_cmd();
+    VkViewport vp = {0, 0, T.W, T.H, 0, 1};
+    VkRect2D sc = {{0, 0}, ext};
+    rec_CmdSetViewport(cb, 0, 1, &vp);
+    rec_CmdSetScissor(cb, 0, 1, &sc);
+    VkSpan vb = vk_transient_copy(g_mm_vtx, (uint64_t)nv * sizeof(CVtx), 16);
+    VkDeviceSize vo = vb.off;
+    rec_CmdBindVertexBuffers(cb, 0, 1, &vb.buf, &vo);
+    rec_CmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, cpipe[0]);
+    VkDescriptorSet set = vk_alloc_set(G.set_layout);
+    VkDescriptorImageInfo ii = {G.sampler, G.tex_view[9], VK_IMAGE_LAYOUT_GENERAL};  // (solid: not sampled, but the layout wants a set)
+    VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = set, .dstBinding = 0, .descriptorCount = 1,
+                              .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &ii};
+    mod_update_set(&w);
+    rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, G.layout, 0, 1, &set, 0, NULL);
+    float pc[4] = {1, 0, 0, 0};
+    rec_CmdPushConstants(cb, G.layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16, pc);
+    rec_CmdDraw(cb, (uint32_t)nv, 1, 0, 0);
+    vk_dyn_forget();
+    if (G.frames % 600 == 1)
+        LOG("[sora-hud] frame %llu: minimap %d friend(s), disc at %.0f %.0f r %.0f px (%.2f px/m, HUD size %d, shape %.2f)\n",
+            (unsigned long long)G.frames, n, g.cx, g.cy, g.r, g.ppm, hs, shape);
 }
 
 // (mp Task 7) the label: its quads moved from around 0, 0 onto the anchor's projection (render thread, after the HUD)
@@ -2190,12 +2395,15 @@ void sora_hud_present(float vx, float vy, float vw, float vh) {
     static SoraHudQuad nt[NT_MAX];  // (s183 kairi-diag) this present's notice quads (render thread only)
     int nt_n = vk_frame_counter() - g_nt_at > 3 ? 0 : g_nt_n;
     if (nt_n) memcpy(nt, g_nt_in, sizeof nt[0] * (size_t)nt_n);
+    SoraHudMapDot mm[MM_MAX];  // (s268) the friends' minimap dots
+    int mm_n = vk_frame_counter() - g_mm_at > 3 ? 0 : g_mm_n;
+    if (mm_n) memcpy(mm, g_mm_in, sizeof mm[0] * (size_t)mm_n);
     pthread_mutex_unlock(&g_lock);
     if (lv_drop) LVB.n = 0;                        // (s55 HUD: before any early return, so no taken request is lost)
     if (lv_ntake) lvup_start(lv_take, lv_ntake);
     if (!in.on) D.valid = false;
     if (en.max <= 0) E.valid = false;
-    if (!in.on && !m.on && !dm.on && !lk_kind && !LK[0].active && !LK[1].active && en.max <= 0 && dim_a <= 0 && !cq_any && !lb_any && !nt_n) return;
+    if (!in.on && !m.on && !dm.on && !lk_kind && !LK[0].active && !LK[1].active && en.max <= 0 && dim_a <= 0 && !cq_any && !lb_any && !nt_n && !mm_n) return;
     if (!g_state) {
         g_state = bake_load() ? 1 : -1;
         if (g_state == 1) g_cmd_state = cmd_load() ? 1 : -1;  // (the menu rides on the gauge's bake: one pipeline, one sampler)
@@ -2385,6 +2593,7 @@ void sora_hud_present(float vx, float vy, float vw, float vh) {
     if (dm.on) dream_draw(&dm, vx, vy, vw, vh);  // (s54 dream: the picker replaces the command menu while it is up)
     else if (m.on) menu_draw(&m, vx, vy, vw, vh);
     if (!g_nvtx) {
+        mm_draw(mm, mm_n, ext, vx, vy, vw, vh);  // (s268: over BotW's minimap, under the name plates)
         for (int k = 0; k < LB_SLOTS; k++) label_draw(lb[k], lb_n[k], lb_w[k], ext, vx, vy, vw, vh);
         notice_draw(nt, nt_n, ext, vx, vy, vw, vh);
         return;
@@ -2416,6 +2625,7 @@ void sora_hud_present(float vx, float vy, float vw, float vh) {
         rec_CmdDraw(cb, (uint32_t)b->n, 1, (uint32_t)b->first, 0);
     }
     vk_dyn_forget();  // (exec.c / the overlay menu: pipeline and dynamic state changed)
+    mm_draw(mm, mm_n, ext, vx, vy, vw, vh);  // (s268: over BotW's minimap, under the name plates)
     for (int k = 0; k < LB_SLOTS; k++) label_draw(lb[k], lb_n[k], lb_w[k], ext, vx, vy, vw, vh);  // (mp Task 7, mp4: over the HUD)
     notice_draw(nt, nt_n, ext, vx, vy, vw, vh);
     if (G.frames % 600 == 1)

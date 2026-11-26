@@ -16,13 +16,15 @@ static struct {
 static inline void pcap_begin(void) { PCAP.frame++; }
 static inline void pcap_weapon(int who, bool shown) { if (who >= 0 && who < NET_PARTY_N) PCAP.weapon[who] = shown; }
 // member `who` as drawn this frame. floor_y = the y his shadow got; blend: the 8-frame blend ran (from_slot / from_clock /
-// weight 0..1); sh = Goofy Bash's flying shield {x, y, z, yaw, KH clock} or NULL
-static inline void pcap_commit(int who, const float feet[3], float face, int slot, float clock, float floor_y, bool ghost,
+// weight 0..1); sh = Goofy Bash's flying shield {x, y, z, yaw, KH clock} or NULL; chr = (s267) the character standing in the
+// slot (sora_pchar.h PCH_*; < 0 = the slot's own member), sent as chr + 1
+static inline void pcap_commit(int who, int chr, const float feet[3], float face, int slot, float clock, float floor_y, bool ghost,
                                bool blend, int from_slot, float from_clock, float weight, const float *sh) {
     if (who < 0 || who >= NET_PARTY_N) return;
     NetPartyMember *m = &PCAP.m[who];
     memset(m, 0, sizeof *m);
-    m->who = (uint8_t)who, m->slot = (uint16_t)slot, m->clock = clock, m->face = face;
+    m->who = (uint8_t)who, m->chr = (uint8_t)(chr >= 0 && chr < 255 ? chr + 1 : 0);
+    m->slot = (uint16_t)slot, m->clock = clock, m->face = face;
     memcpy(m->feet, feet, sizeof m->feet);
     m->floor_dy = floor_y - feet[1];
     m->flags = (uint8_t)((ghost ? NPM_GHOST : 0) | (PCAP.weapon[who] ? NPM_WEAPON : 0));
@@ -49,7 +51,7 @@ static inline bool pcap_get(int who, float feet[3], float *face) {
 }
 
 typedef struct {
-    bool valid; uint8_t flags; uint16_t slot; float clock, feet[3], face, floor_dy;
+    bool valid; uint8_t flags, chr; uint16_t slot; float clock, feet[3], face, floor_dy;  // (chr: the wire's, PCH_* + 1, 0 = home)
     uint16_t from_slot; float from_clock, blend;
     float shield[3], shield_yaw, shield_t;
 } PartyPose;
@@ -81,13 +83,14 @@ static inline PartyPose peer_party_sample(const NetPeer *p, int who, uint64_t no
     if (!a) return q;
     int64_t a_at = (int64_t)p->at[ia];
     double since = render > a_at ? (double)(render - a_at) : 0.0;
-    q.valid = true, q.flags = a->flags, q.slot = a->slot, q.floor_dy = a->floor_dy;
+    q.valid = true, q.flags = a->flags, q.chr = a->chr, q.slot = a->slot, q.floor_dy = a->floor_dy;
     q.clock = (float)(a->clock + since * NET_KH_FPS / 1000.0);
     q.from_slot = a->from_slot, q.from_clock = a->from_clock, q.blend = a->blend;
     memcpy(q.feet, a->feet, sizeof q.feet), q.face = peer_wrap_2pi(a->face);
     memcpy(q.shield, a->shield, sizeof q.shield), q.shield_yaw = a->shield_yaw, q.shield_t = a->shield_t;
     if (a->flags & NPM_SHIELD) q.shield_t = (float)(a->shield_t + since * NET_KH_FPS / 1000.0);
     const NetPartyMember *b = ia + 1 < p->n && i >= 0 ? net_snap_pm(&p->ring[ia + 1], who) : NULL;
+    if (b && b->chr != a->chr) b = NULL;  // (s267: another character took the slot in the newer SNAP: held, no lerp across two bodies)
     if (b) {
         double span = (double)(p->at[ia + 1] - p->at[ia]), t = span > 0 ? since / span : 1.0;
         if (t > 1) t = 1;

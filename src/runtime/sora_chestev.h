@@ -10,6 +10,15 @@
 // set evcam <m>, set evang <deg>, set evon <presents>, set evoff <presents>. Log lines "[sora] chestev: ...".
 // (the knob variables are declared at the top of sora.c, next to g_chev)
 static bool g_chev_det;      // the camera is detached right now (the raw reading)
+// (evstick) user: "there was a moment where the kh2 hud would disappear at a certain angle". Log: 7 "event ON" with no
+// chest (3.1..6.1 m, 41..81 deg): the player's own camera (tilted up / swung round) puts Link > g_evang off axis, so Sora
+// froze and the HUD hid (g_event). A demo camera moves with no camera input, so with this on a detach that starts within
+// EVSTICK_PRESENTS of right-stick input (or sees stick input while it lasts) is the player's: it never turns the event on
+// until the camera is back on Link. SAVAGEWIND_SORA_EV_STICK=1 / live "set evstick 0/1"; default 1 (user tested, on by default). GUESS: a gyro / mouse
+// camera is not seen here.
+// (g_evstick: declared in sora.c, before the env / live parsers)
+#define EVSTICK_PRESENTS 60
+#define EVSTICK_DZ 6000  // (of 32767)
 
 static bool chev_measure(const float p[3], float *dist, float *ang) {
     float m[12];
@@ -41,6 +50,20 @@ static void chestev_tick(uint64_t present, const float p[3]) {
     }
     if (!chev_measure(p, &dist, &ang)) return;
     bool det = dist > (float)g_evcam || (ang > (float)g_evang && dist >= (float)g_evmin);  // (s94 review: evmin)
+    {  // (evstick) the player's own camera turn is no event
+        static uint64_t stick_at;
+        static bool mine;
+        int32_t rx = g_rx_raw, ry = g_ry_raw;
+        bool stick = rx > EVSTICK_DZ || rx < -EVSTICK_DZ || ry > EVSTICK_DZ || ry < -EVSTICK_DZ;
+        if (stick) stick_at = present;
+        bool recent = stick_at && present - stick_at <= EVSTICK_PRESENTS;
+        if (!det) mine = false;
+        else if (!mine && g_evstick && recent && !g_chev) {
+            mine = true;
+            LOG("[sora] chestev: camera off Link (%.1f m, %.1f deg) after right-stick input: the player's camera, no event (evstick)\n", dist, ang);
+        }
+        if (mine && g_evstick) det = false;
+    }
     if (det != g_chev_det && g_evrec)
         LOG("[sora] chestev: camera %s at present %llu: eye %.1f m from Link, Link %.1f deg off axis (Link state %#x, pause %u, event %d)\n",
             det ? "DETACHED" : "back on Link", (unsigned long long)present, dist, ang, linkpos_link_state_word(), GV(uint32_t, PAUSE_STATE, 0),

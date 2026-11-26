@@ -601,6 +601,7 @@ static void sample_party(NetSnap *s) {
     d->who = 0, d->flags = NPM_WEAPON | NPM_BLEND, d->slot = 1508, d->clock = 12.3f;
     d->feet[0] = 1236.5f, d->feet[1] = 210.0f, d->feet[2] = -985.5f, d->face = 1.25f, d->floor_dy = -0.42f;
     d->from_slot = 4, d->from_clock = 30.0f, d->blend = 0.5f;
+    d->chr = 3;  // (v12 s267: Riku (PCH 2) + 1 in Donald's place; Goofy's record keeps 0 = his own member)
     g->who = 1, g->flags = NPM_GHOST | NPM_SHIELD, g->slot = 400, g->clock = 3.0f;
     g->feet[0] = 1230.0f, g->feet[1] = 209.5f, g->feet[2] = -990.0f, g->face = 4.0f, g->floor_dy = 0;
     g->shield[0] = 1240.0f, g->shield[1] = 211.0f, g->shield[2] = -995.0f, g->shield_yaw = 0.75f, g->shield_t = 7.5f;
@@ -619,7 +620,7 @@ static void test_party_roundtrip(void) {
     CHECK(net_unpack(buf, n, &type, &player, &seq, &r, name));
     CHECK(r.npm == 2 && r.nev == 4 && r.nmv == NET_MAX_MOVES);
     const NetPartyMember *d = &r.pm[0], *g = &r.pm[1];
-    CHECK(d->who == 0 && d->flags == (NPM_WEAPON | NPM_BLEND) && d->slot == 1508 && NEAR(d->clock, 12.3, 0.05));
+    CHECK(d->who == 0 && d->chr == 3 && g->chr == 0 && d->flags == (NPM_WEAPON | NPM_BLEND) && d->slot == 1508 && NEAR(d->clock, 12.3, 0.05));
     CHECK(d->feet[0] == 1236.5f && d->feet[1] == 210.0f && d->feet[2] == -985.5f && NEAR(d->face, 1.25, 0.0002));
     CHECK(NEAR(d->floor_dy, -0.42, 0.006) && d->from_slot == 4 && NEAR(d->from_clock, 30.0, 0.05) && NEAR(d->blend, 0.5, 0.003));
     CHECK(g->who == 1 && g->flags == (NPM_GHOST | NPM_SHIELD) && g->slot == 400 && NEAR(g->face, 4.0, 0.0002));
@@ -770,14 +771,14 @@ static void test_pcap_record(void) {
     float feet[3] = {1, 10, 3}, f[3], face;
     pcap_begin();
     CHECK(pcap_fill(pm) == 0 && !pcap_get(0, f, &face));
-    pcap_commit(1, feet, 0.5f, 700, 12.5f, 8.0f, true, true, 650, 30.0f, 0.25f, NULL);
-    CHECK(pcap_fill(pm) == 1 && pm[0].who == 1 && pm[0].slot == 700 && NEAR(pm[0].floor_dy, -2.0, 1e-6));
+    pcap_commit(1, 3, feet, 0.5f, 700, 12.5f, 8.0f, true, true, 650, 30.0f, 0.25f, NULL);
+    CHECK(pcap_fill(pm) == 1 && pm[0].who == 1 && pm[0].chr == 4 && pm[0].slot == 700 && NEAR(pm[0].floor_dy, -2.0, 1e-6));
     CHECK(pm[0].flags == (NPM_GHOST | NPM_WEAPON | NPM_BLEND) && pm[0].from_slot == 650 && NEAR(pm[0].blend, 0.25, 1e-6));
     CHECK(pcap_get(1, f, &face) && f[1] == 10 && face == 0.5f && !pcap_get(0, f, &face));
     pcap_weapon(0, false);
     float sh[5] = {4, 5, 6, 1.5f, 7.0f};
-    pcap_commit(0, feet, 1.0f, 100, 0, 10.0f, false, false, 0, 0, 0, sh);
-    CHECK(pcap_fill(pm) == 2 && pm[0].who == 0 && pm[0].flags == NPM_SHIELD && pm[0].shield[2] == 6 && pm[0].shield_t == 7.0f);
+    pcap_commit(0, -1, feet, 1.0f, 100, 0, 10.0f, false, false, 0, 0, 0, sh);
+    CHECK(pcap_fill(pm) == 2 && pm[0].who == 0 && pm[0].chr == 0 && pm[0].flags == NPM_SHIELD && pm[0].shield[2] == 6 && pm[0].shield_t == 7.0f);
     pcap_begin();  // next frame: nothing drawn = absent (absorbed / hidden)
     CHECK(pcap_fill(pm) == 0 && pcap_get(1, f, &face));  // (merge fix: the anchors still see last frame's draw)
     pcap_begin();                                         // 2 frames not drawn: gone for the anchors too
@@ -804,6 +805,19 @@ static void test_party_sample(void) {
     PartyPose q = peer_party_sample(&p, 0, 1170);  // render 1050: halfway a -> b
     CHECK(q.valid && NEAR(q.feet[0], 50, 0.01) && NEAR(q.clock, 10 + 0.05 * 60, 0.01) && NEAR(q.floor_dy, -1, 1e-6));
     CHECK(!peer_party_sample(&p, 1, 1170).valid);  // Goofy is not in the SNAPs: not shown
+    {  // (s267) another character in the slot in the newer SNAP: held at the older one (no lerp across two bodies), its chr kept
+        NetPeer p2; memset(&p2, 0, sizeof p2); peer_on_hello(&p2, 5, "Deck", 1000);
+        NetSnap c0 = psnap(1, 0, 0, 0), c1 = psnap(2, 100, 0, 0);
+        c0.pm[0].chr = 1, c1.pm[0].chr = 3;  // Donald -> Riku
+        CHECK(peer_on_snap(&p2, &c0, 1000) && peer_on_snap(&p2, &c1, 1100));
+        PartyPose q2 = peer_party_sample(&p2, 0, 1150);
+        CHECK(q2.valid && q2.chr == 1 && NEAR(q2.feet[0], 0, 1e-6));
+        c1.pm[0].chr = 1;  // same character: lerped as before
+        memset(&p2, 0, sizeof p2); peer_on_hello(&p2, 5, "Deck", 1000);
+        CHECK(peer_on_snap(&p2, &c0, 1000) && peer_on_snap(&p2, &c1, 1100));
+        q2 = peer_party_sample(&p2, 0, 1170);
+        CHECK(q2.valid && q2.chr == 1 && NEAR(q2.feet[0], 50, 0.01));
+    }
     q = peer_party_sample(&p, 0, 5000);  // after the newest: hold it
     CHECK(q.valid && NEAR(q.feet[0], 100, 0.001));
     CHECK(peer_on_snap(&p, &c, 1200));  // newest SNAP without him (absorbed)
@@ -831,7 +845,7 @@ static void test_party_sample_arc_blend_shield(void) {
 
 // ---- (mp4) protocol v5 + the peer table ----
 static void test_v5_worst_snap(void) {
-    CHECK(NET_VERSION == 11 && NET_MAX_EVENTS == 12 && NET_SNAP_WORST == 450 && NET_SNAP_WORST <= NET_PKT_MAX);
+    CHECK(NET_VERSION == 12 && NET_MAX_EVENTS == 12 && NET_SNAP_WORST == 450 && NET_SNAP_WORST <= NET_PKT_MAX);
     NetSnap s = sample_snap(NET_MAX_EVENTS), r;
     s.nmv = NET_MAX_MOVES;
     for (int i = 0; i < NET_MAX_MOVES; i++) s.mv[i].ev = (uint8_t)(10 + i);
@@ -986,7 +1000,7 @@ static void test_outfit_byte(void) {
 
 // ---- (s166 v6) NET_EDMG: shared enemy HP ----
 static void test_edmg_codec(void) {
-    CHECK(NET_VERSION == 11 && NET_EDMG == 4 && NET_EDMG_ENT == 12 && NET_EDMG_MAX == 16 && NET_EDMG_PKT == 199 && NET_EDMG_PKT <= NET_PKT_MAX);
+    CHECK(NET_VERSION == 12 && NET_EDMG == 4 && NET_EDMG_ENT == 12 && NET_EDMG_MAX == 16 && NET_EDMG_PKT == 199 && NET_EDMG_PKT <= NET_PKT_MAX);
     NetEdEnt e[NET_EDMG_MAX], r[NET_EDMG_MAX];
     for (int i = 0; i < NET_EDMG_MAX; i++)
         e[i].hid = 0x80000000u + 0x01020304u * (uint32_t)i + 1, e[i].dealt = (uint16_t)(1 + 4000 * i), e[i].after = (uint16_t)(65535 - i),
@@ -994,7 +1008,7 @@ static void test_edmg_codec(void) {
     uint8_t buf[NET_PKT_MAX], pl = 0;
     uint16_t sq = 0;
     int n = net_pack_edmg(9, 0xFFFE, e, 16, buf, sizeof buf);
-    CHECK(n == 199 && buf[0] == 'S' && buf[1] == 'N' && buf[2] == 11 && buf[3] == NET_EDMG && buf[4] == 9);
+    CHECK(n == 199 && buf[0] == 'S' && buf[1] == 'N' && buf[2] == 12 && buf[3] == NET_EDMG && buf[4] == 9);
     CHECK(net_unpack_edmg(buf, n, &pl, &sq, r) == 16 && pl == 9 && sq == 0xFFFE);
     for (int i = 0; i < 16; i++) CHECK(r[i].hid == e[i].hid && r[i].dealt == e[i].dealt && r[i].after == e[i].after && r[i].f54 == e[i].f54 && r[i].f40 == e[i].f40 && r[i].flags == e[i].flags);
     // little endian on the wire
@@ -1027,7 +1041,7 @@ static void test_edmg_codec(void) {
 }
 // ---- (s176 v10) NET_FIRE: fire sync ----
 static void test_fire_codec(void) {
-    CHECK(NET_VERSION == 11 && NET_FIRE == 6 && NET_FIRE_ENT == 18 && NET_FIRE_MAX == 4 && NET_FIRE_PKT == 79 && NET_FIRE_PKT <= NET_PKT_MAX);
+    CHECK(NET_VERSION == 12 && NET_FIRE == 6 && NET_FIRE_ENT == 18 && NET_FIRE_MAX == 4 && NET_FIRE_PKT == 79 && NET_FIRE_PKT <= NET_PKT_MAX);
     NetFireEnt e[NET_FIRE_MAX], r[NET_FIRE_MAX];
     for (int i = 0; i < NET_FIRE_MAX; i++)
         e[i].pos[0] = 100.5f + (float)i, e[i].pos[1] = -3.25f, e[i].pos[2] = -2000.0f - (float)i, e[i].r = (uint16_t)(260 + i), e[i].h = (uint16_t)(130 + i),
@@ -1035,7 +1049,7 @@ static void test_fire_codec(void) {
     uint8_t buf[NET_PKT_MAX], pl = 0;
     uint16_t sq = 0;
     int n = net_pack_fire(7, 4242, e, 4, buf, sizeof buf), type = 0;
-    CHECK(n == 79 && buf[0] == 'S' && buf[1] == 'N' && buf[2] == 11 && buf[3] == NET_FIRE && buf[4] == 7);
+    CHECK(n == 79 && buf[0] == 'S' && buf[1] == 'N' && buf[2] == 12 && buf[3] == NET_FIRE && buf[4] == 7);
     CHECK(net_unpack_fire(buf, n, &pl, &sq, r) == 4 && pl == 7 && sq == 4242);
     for (int i = 0; i < 4; i++) CHECK(!memcmp(&r[i].pos, &e[i].pos, 12) && r[i].r == e[i].r && r[i].h == e[i].h && r[i].flags == e[i].flags);
     char name[NET_NAME_MAX + 1];
@@ -1146,11 +1160,11 @@ static NetSnap bones_snap(void) {
 static void test_bones_wire(void) {
     uint8_t buf[NET_PKT_MAX], b2[NET_PKT_MAX];
     int type; uint8_t player; uint16_t seq; char name[NET_NAME_MAX + 1];
-    CHECK(NET_VERSION == 11 && NET_PKT_MAX == 768 && NET_BONE_SIZE == 162);
+    CHECK(NET_VERSION == 12 && NET_PKT_MAX == 768 && NET_BONE_SIZE == 162);
     NetSnap s = bones_snap(), r;
     NetSnap plain = sample_snap(2);
     int n0 = net_pack_snap(&plain, b2, sizeof b2);
-    CHECK(n0 == NET_HDR + NET_SNAP_BODY + 2 * NET_EV_SIZE && b2[2] == 11);  // the v7 layout, version 9
+    CHECK(n0 == NET_HDR + NET_SNAP_BODY + 2 * NET_EV_SIZE && b2[2] == 12);  // the v7 layout, version 9
     int n = net_pack_snap(&s, buf, sizeof buf);
     CHECK(n == n0 + NET_BONE_SIZE);
     CHECK(net_unpack(buf, n, &type, &player, &seq, &r, name) && (r.flags & NF_BONES) && r.bones.slot == 777 && r.bones.clock == 12.5f);
@@ -1254,17 +1268,17 @@ static void test_skate_wire(void) {
     memset(&r, 0xcc, sizeof r);
     CHECK(n > 0 && net_unpack(buf, n, &type, &player, &seq, &r, name) && type == NET_SNAP);
     CHECK(r.flags == (NF_SKATE | NF_AIR) && r.slot == 166 && r.body == 7 && NEAR(r.clock, 41.5, 0.05));
-    CHECK(NET_VERSION == 11 && NF_SKATE == 256 && !(NF_SKATE & (NF_BONEPOSE | NF_BONES)));
+    CHECK(NET_VERSION == 12 && NF_SKATE == 256 && !(NF_SKATE & (NF_BONEPOSE | NF_BONES)));
 }
 
 // (s191) NET_AREA: a new type, NET_VERSION unchanged; exact size, only the area letters; "" is valid (= not known)
 static void test_area_codec(void) {
-    CHECK(NET_VERSION == 11 && NET_AREA == 7 && NET_AREA_MAX == 31 && NET_AREA_PKT == 39 && NET_AREA_PKT <= NET_PKT_MAX);
+    CHECK(NET_VERSION == 12 && NET_AREA == 7 && NET_AREA_MAX == 31 && NET_AREA_PKT == 39 && NET_AREA_PKT <= NET_PKT_MAX);
     uint8_t buf[NET_PKT_MAX], pl = 0;
     uint16_t sq = 0;
     char a[NET_AREA_MAX + 1], name[NET_NAME_MAX + 1];
     int type = 0, n = net_pack_area(9, 0xBEEF, "Dungeon012", buf, sizeof buf);
-    CHECK(n == NET_HDR + 1 + 10 && buf[0] == 'S' && buf[1] == 'N' && buf[2] == 11 && buf[3] == NET_AREA && buf[4] == 9 && buf[7] == 10 && !memcmp(buf + 8, "Dungeon012", 10));
+    CHECK(n == NET_HDR + 1 + 10 && buf[0] == 'S' && buf[1] == 'N' && buf[2] == 12 && buf[3] == NET_AREA && buf[4] == 9 && buf[7] == 10 && !memcmp(buf + 8, "Dungeon012", 10));
     CHECK(net_unpack_area(buf, n, &pl, &sq, a) && pl == 9 && sq == 0xBEEF && !strcmp(a, "Dungeon012"));
     CHECK(net_unpack(buf, n, &type, &pl, &sq, NULL, name) && type == NET_AREA);
     CHECK(!net_unpack(buf, n - 1, &type, &pl, &sq, NULL, name) && !net_unpack(buf, n + 1, &type, &pl, &sq, NULL, name) && !net_unpack_area(buf, n - 1, NULL, NULL, a));

@@ -119,6 +119,83 @@ static bool wpn_equipped(WpnCur *out) {
 
 static void wpn_menu_pick(int use) { g_wpn_use = use != 0; }
 
+// ------------------------------------------------------------------ (eqtabs) the KH2 Equipment picker's BotW Weapons tab
+// wpn_pouch_list: the weapon-pouch items Sora can swing (pouch order: type 0, a WPN_TAB row that is not "keep the Keyblade",
+// life > 0), read like wpn_read_list. wpn_equip_ask: the menu picked one; it is equipped AT ONCE from the menu (BotW's own
+// pause menu equips while paused too; user: "it won't register until after I press start again" when it waited for the
+// unpaused frame); if the exe refuses there (not inside its frame) wpn_tick tries again once the game runs. The exe export
+// linkpos_weapon_equip(item, actor) equips it the way BotW's quick selector does.
+typedef struct { uint64_t item; const WpnDef *def; int life, atk_up; bool eq; } WpnPouch;
+static bool wpn_kb_only(const WpnDef *d);
+static int wpn_pouch_list(WpnPouch *out, int max) {
+    uint64_t got = sora_sites()->pmdm_got;
+    if (!got || !rd_ok(got, 8)) return 0;
+    uint64_t pp = *(const uint64_t *)(uintptr_t)got;
+    if (!rd_ok(pp, 8)) return 0;
+    uint64_t mgr = *(const uint64_t *)(uintptr_t)pp;
+    if (!rd_ok(mgr + 0x68, 0x18) || *(const int32_t *)(uintptr_t)(mgr + 0x7c) != 8) return 0;
+    uint64_t head = mgr + 0x68, nd = *(const uint64_t *)(uintptr_t)(head + 8);
+    int n = 0;
+    for (int k = 0; k < 500 && nd && nd != head && n < max; k++) {
+        uint64_t it = nd - 8;
+        if (!rd_ok(it, 0x90)) break;
+        nd = *(const uint64_t *)(uintptr_t)(nd + 8);
+        if (*(const int32_t *)(uintptr_t)(it + 0x18) != 0) continue;
+        uint64_t sp = *(const uint64_t *)(uintptr_t)(it + 0x30);
+        char actor[48];
+        int i;
+        if (!rd_ok(sp, 1)) continue;
+        for (i = 0; i < (int)sizeof actor - 1 && rd_ok(sp + (uint64_t)i, 1) && ((const char *)(uintptr_t)sp)[i]; i++) actor[i] = ((const char *)(uintptr_t)sp)[i];
+        actor[i] = 0;
+        const WpnDef *d = i ? wpn_find(actor) : NULL;
+        int life = *(const int32_t *)(uintptr_t)(it + 0x20);
+        if (!d || wpn_kb_only(d) || life <= 0) continue;
+        out[n].item = it, out[n].def = d, out[n].life = life / 100;
+        out[n].atk_up = (*(const uint32_t *)(uintptr_t)(it + 0x88) & 1) ? (int)*(const uint32_t *)(uintptr_t)(it + 0x80) : 0;
+        out[n].eq = *(const uint8_t *)(uintptr_t)(it + 0x24) != 0;
+        n++;
+    }
+    return n;
+}
+// (eqarmor) one pending request: a pouch item to equip (a weapon or an armor piece: type 0 / 4..6), or off = take the piece
+// of pouch type `type` off (the picker's None entry). Tried at once from the menu, else on the first unpaused frames.
+static struct { uint64_t item; char actor[48]; int tries, type, off; } g_wpn_ask;
+static void wpn_equip_ask(uint64_t item, const char *actor) {
+    g_wpn_ask.item = item, g_wpn_ask.tries = 0, g_wpn_ask.type = 0, g_wpn_ask.off = 0;
+    snprintf(g_wpn_ask.actor, sizeof g_wpn_ask.actor, "%s", actor);
+    LOG("[wpn] eqtabs: %s picked in the KH2 menu\n", actor);
+}
+static void armor_equip_ask(int type, uint64_t item, const char *actor) {  // item 0 = take the piece off
+    g_wpn_ask.item = item, g_wpn_ask.tries = 0, g_wpn_ask.type = type, g_wpn_ask.off = item == 0;
+    snprintf(g_wpn_ask.actor, sizeof g_wpn_ask.actor, "%s", item ? actor : "(none)");
+    LOG("[armor] eqarmor: %s picked in the KH2 menu for pouch type %d\n", g_wpn_ask.actor, type);
+}
+typedef int (*WpnEquipFn)(uint64_t, const char *);
+static void wpn_equip_tick(bool now) {  // now = the menu's own try (paused); else wpn_tick: playing, not paused
+    static WpnEquipFn fn, fn_any;
+    static int (*fn_off)(int);
+    static int tried;
+    if ((!g_wpn_ask.item && !g_wpn_ask.off) || (!now && *(volatile uint32_t *)(uintptr_t)PAUSE_STATE)) return;
+    if (!tried) {
+        HMODULE exe = GetModuleHandleA(NULL);
+        tried = 1, fn = (WpnEquipFn)(void *)GetProcAddress(exe, "linkpos_weapon_equip");
+        fn_any = (WpnEquipFn)(void *)GetProcAddress(exe, "linkpos_pouch_equip");
+        fn_off = (int (*)(int))(void *)GetProcAddress(exe, "linkpos_pouch_unequip");
+        LOG("[wpn] exe exports: linkpos_weapon_equip %s, linkpos_pouch_equip %s, linkpos_pouch_unequip %s\n", fn ? "found" : "MISSING",
+            fn_any ? "found" : "MISSING (armor cannot be equipped: NEEDS EXE RELINK)", fn_off ? "found" : "MISSING");
+    }
+    WpnEquipFn f = g_wpn_ask.type == 0 && !fn_any ? fn : fn_any;
+    int r = g_wpn_ask.off ? (fn_off ? fn_off(g_wpn_ask.type) : -9) : f ? f(g_wpn_ask.item, g_wpn_ask.actor) : -9;
+    const char *tag = g_wpn_ask.type ? "[armor] eqarmor" : "[wpn] eqtabs";
+    if (r == -1 && now) { LOG("%s: not now (paused menu): BotW applies it when the game runs again\n", tag); return; }
+    if (r == -1 && ++g_wpn_ask.tries < 30) return;  // (not inside the exe's frame yet: try again)
+    LOG("%s: %s %s -> %s\n", tag, g_wpn_ask.off ? "take off pouch type" : "equip", g_wpn_ask.off ? (g_wpn_ask.type == 4 ? "4 (head)" : g_wpn_ask.type == 5 ? "5 (body)" : g_wpn_ask.type == 6 ? "6 (legs)" : "3 (shield)") : g_wpn_ask.actor,
+        r == 1 ? "done (BotW's own calls)" : r == 0 ? "nothing was worn there" : r == -2 ? "no PauseMenuDataMgr / player" : r == -3 ? "the item is not in the pouch any more"
+                                                                 : r == -9 ? "no exe export" : "refused by the exe");
+    if (r == 1 && g_wpn_ask.type == 0) g_wpn_use = 1;
+    g_wpn_ask.item = 0, g_wpn_ask.off = 0;
+}
+
 // exe export (s128 linkpos.c): int linkpos_weapon_info(char *actor, int cap, int *life_x100, int *atk_up)
 // = 1 when Link's sword slot (PauseMenuDataMgr mEquippedWeapons[0]) holds a weapon; older exe = no symbol = never.
 typedef int (*WpnInfoFn)(char *, int, int *, int *);
@@ -211,6 +288,12 @@ static WpnCur g_wpn_cur;  // this frame's (def NULL = the Keyblade)
 // keyblade does") sora.c sets this while the bow mimic is on: the exe is told "not in his hand", so the weapon is Link's hidden gear
 // again until the shot is over. Only the drawing changes (g_wpn_cur and the damage rules stay).
 static volatile int g_wpn_bow_hide;
+// (wpnsheathe) user: "Sora to be able to sheath the botw weapons the same way as he would with a keyblade". sora.c sets this
+// while kbfield puts the Keyblade away (field stance out of battle, or put away with L3): a BotW weapon in Sora's hand goes the
+// same way as for the bow ("not in his hand" -> Link's hidden gear). It is back for every swing, the battle stance and L3.
+// Only the drawing changes. SAVAGEWIND_SORA_WPN_SHEATHE=0 / live "set wpnsheathe 0" = always in his hand. Default 1.
+static int g_wpnsheathe = 0;  /* (s288: stays OFF: the user wants his BotW weapon in Sora's hand outside combat too) */
+static volatile int g_wpn_field_hide;
 static void wpn_tick(bool drawn) {
     static int tried;
     if (!tried) {
@@ -221,6 +304,7 @@ static void wpn_tick(bool drawn) {
         g_wpn_lead_fn = (WpnWearFn)(void *)GetProcAddress(exe, "linkpos_weapon_lead");  // (s129; NULL = an older exe)
         g_wpn_hand2_fn = (WpnHandFn)(void *)GetProcAddress(exe, "linkpos_weapon_hand2");  // (s131; NULL = an older exe: arms at scale 1)
     }
+    wpn_equip_tick(false);  // (eqtabs: a BotW weapon picked in the KH2 menu the exe could not equip at once)
     WpnCur c = {0};
     bool on = drawn && wpn_active(&c);
     static const WpnDef *last;
@@ -242,8 +326,9 @@ static void wpn_tick(bool drawn) {
         float off[8] = {c.def ? -(float)wpn_gz(c.def) / 100.0f : 0,  // (minus: the exe puts the origin at grip - Z*off; we want grip + Z*wgz, hands on the handle)
                         (float)(g_wroll + (rx ? g_wroll_rox : 0) + (a ? g_wroll_arm : 0)), (float)(g_wpitch + (rx ? g_wpitch_rox : 0) + (a ? g_wpitch_arm : 0)), (float)(g_wyaw + (rx ? g_wyaw_rox : 0) + (a ? g_wyaw_arm : 0)),
                         a ? (float)a->s_pct / 100.0f : 1.0f, a ? (float)a->gx_cm / 100.0f : 0, a ? a->gy : 0, a ? a->gz : 0};
-        if (g_wpn_hand2_fn) g_wpn_hand2_fn(on && !g_wpn_fake && !g_wpn_bow_hide, off);
-        else g_wpn_hand_fn(on && !g_wpn_fake && !g_wpn_bow_hide, off);
+        bool hand = on && !g_wpn_fake && !g_wpn_bow_hide && !g_wpn_field_hide;  // (wpnsheathe: put away with the Keyblade)
+        if (g_wpn_hand2_fn) g_wpn_hand2_fn(hand, off);
+        else g_wpn_hand_fn(hand, off);
     }
 }
 // the damage of one hit with the weapon (user s128 option a): (Attack + Attack up) x the KH2 window's power % x wpace %

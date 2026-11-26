@@ -18,6 +18,20 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sb  # noqa: E402
+import setupguard  # noqa: E402
+
+_RUN_LOCK = None               # held until this process ends (the OS drops it then, however it ends: setupguard)
+
+
+def hold_run_lock(work):
+    """(s288 K6) a 2nd sorabuild on the same work folder (a setup started while the first still ran) stops here in plain
+    words instead of failing on the first one's files. "refused" in the line: the GitHub installer shows that line."""
+    global _RUN_LOCK
+    lockp = os.path.join(work, setupguard.SORABUILD_LOCK)
+    fd = setupguard.take_lock(lockp)
+    if fd is None:
+        raise SystemExit("[sorabuild] refused: " + setupguard.busy_text(lockp))
+    _RUN_LOCK = fd
 
 
 def load_steps():
@@ -81,6 +95,7 @@ def main():
     a = ap.parse_args()
     cfg = sb.load_cfg(a.config, {k: getattr(a, k) for k in sb.CFG_KEYS})
     if not a.list:
+        hold_run_lock(cfg["work"])  # (s288 K6) one run per work folder, before anything writes there
         sb.pick_kh2(cfg)  # (s168) config kh2img: extract only the needed KH2 files first
     elif cfg.get("kh2img") and not cfg.get("kh2"):
         cfg["kh2"] = os.path.join(cfg["work"], "kh2")

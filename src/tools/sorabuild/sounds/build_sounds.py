@@ -50,7 +50,9 @@ def scd_audio_streams(d):
 
 
 # s157: only this build is proven to give the PHH-identical voices (133/133 byte-identical); fetch_vgmstream.py pins its zip
-VGM_KNOWN = {"29df08c557ada8269c92a6abfe3886ad2f65849b0b26ba78a0819b363bbc5b85": "r2117 win64 vgmstream-cli.exe"}
+VGM_KNOWN = {"29df08c557ada8269c92a6abfe3886ad2f65849b0b26ba78a0819b363bbc5b85": "r2117 win64 vgmstream-cli.exe",
+             # (s280) official r2117 vgmstream-linux.zip (zip sha256 2f98c77f...) static vgmstream-cli
+             "2b05458f470ac6e051848e08cbd6d31a074e1808a648e2c6007418ad4242fc58": "r2117 linux vgmstream-cli"}
 
 
 def find_vgmstream(arg, any_build=False):

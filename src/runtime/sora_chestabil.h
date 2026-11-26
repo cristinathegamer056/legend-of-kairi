@@ -194,6 +194,7 @@ static int ca_survive(int life) {
     int mask = 0;
     if (g_chestfx && life >= 0) mask = (ab_on(AB.on, 415) ? 1 : 0) | (ab_on(AB.on, 416) ? 2 : 0);
     mask |= mk_survive_mask();  // (s109 b22-mickey: armed in a boss fight)
+    mask |= du_survive_mask();  // (s272 duel: in a duel world damage can't take Sora below 1; 0 outside a duel)
     set(mask);
     if (count) {
         int what = 0, n = count(&what);

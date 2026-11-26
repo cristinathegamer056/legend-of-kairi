@@ -155,6 +155,11 @@ int main(int argc, char **argv) {
     CHECK(!pchar_need_ok(g_out, PNEED_TRINITY) && pchar_need_ok(g_out, PNEED_COMET) && pchar_need_ok(g_out, PNEED_DUCKFLARE));
     CHECK(pchar_limit_ok(g_out, 0) && !pchar_limit_ok(g_out, 1) && !strcmp(pchar_missing_text(g_out), "Goofy is"));
     for (int k = 0; k < PNEED_N; k++) CHECK(!pchar_need_ok(both, k));
+    {  // (s267 co-op item 2) one member per player in a room: the slot NOT picked last goes None; nothing in single player / with a None
+        bool on2[2] = {false, false}, off0[2] = {true, false}, off1[2] = {false, true}, offb[2] = {true, true};
+        CHECK(pchar_coop_drop(false, on2, 0) == -1 && pchar_coop_drop(true, on2, 0) == 1 && pchar_coop_drop(true, on2, 1) == 0);
+        CHECK(pchar_coop_drop(true, off0, 0) == -1 && pchar_coop_drop(true, off1, 1) == -1 && pchar_coop_drop(true, offb, 0) == -1);
+    }
     CHECK(!strcmp(pchar_missing_text(both), "Donald and Goofy are") && !strcmp(pchar_missing_text(riku), "Donald is"));
     CHECK(pchar_fallback(PCH_RIKU, 0, false) == PCH_DONALD && pchar_fallback(PCH_RIKU, 0, true) == PCH_RIKU && pchar_fallback(PCH_RIKU, 1, true) == PCH_RIKU);
     CHECK(pchar_fallback(99, 0, true) == PCH_DONALD && pchar_fallback(PCH_DONALD, 0, true) == PCH_DONALD && pchar_fallback(PCH_DONALD, 1, true) == PCH_GOOFY);
@@ -545,6 +550,42 @@ int main(int argc, char **argv) {
     printf("  Donald + Goofy after all the swaps: %d / %d attacks, %d / %d casts, %d / %d hits, rnd %u\n", last[0].attacks, last[1].attacks,
            last[0].spells, last[1].spells, last[0].hits, last[1].hits, g_run_rnd);
     CHECK(same_run(&last[0], &before[0]) && same_run(&last[1], &before[1]) && g_run_rnd == rnd_before);
+
+    // ---- (s269 F3) the rule's None marks ride PPICK_ENV: " auto=DG" after " off=DG"; an env without it = no marks; an older DLL reads the same off bits
+    {
+        char tail[32];
+        bool sv_off[PARTY_N] = {g_pslot_off[0], g_pslot_off[1]}, sv_au[PARTY_N] = {g_coop_auto[0], g_coop_auto[1]}, au[PARTY_N];
+        g_pslot_off[0] = g_pslot_off[1] = false, g_coop_auto[0] = g_coop_auto[1] = false;
+        party_pick_tail_fmt(tail, sizeof tail);
+        CHECK(!strcmp(tail, ""));
+        g_pslot_off[1] = true;  // the player's own None
+        party_pick_tail_fmt(tail, sizeof tail);
+        CHECK(!strcmp(tail, " off=01"));
+        g_coop_auto[1] = true;  // the rule made it
+        party_pick_tail_fmt(tail, sizeof tail);
+        CHECK(!strcmp(tail, " off=01 auto=01"));
+        char env[64];
+        snprintf(env, sizeof env, "0:0 1:1%s", tail);
+        party_pick_auto_parse(env, au);
+        CHECK(!au[0] && au[1]);
+        // an older DLL's parse (s233: sscanf of the pairs, strstr " off=") still sees the same off bits
+        int s0[2], c0[2], k = sscanf(env, "%d:%d %d:%d", &s0[0], &c0[0], &s0[1], &c0[1]) / 2;
+        const char *o = strstr(env, " off=");
+        CHECK(k == 2 && s0[1] == 1 && c0[1] == 1 && o && o[5] == '0' && o[6] == '1');
+        // an older DLL's env (no auto=): no marks, exactly today's restore
+        party_pick_auto_parse("0:0 1:1 off=01", au);
+        CHECK(!au[0] && !au[1]);
+        party_pick_auto_parse("0:0 1:1", au);
+        CHECK(!au[0] && !au[1]);
+        // an auto bit on a slot that is not off is not read
+        party_pick_auto_parse("0:0 1:1 off=01 auto=11", au);
+        CHECK(!au[0] && au[1]);
+        // both slots
+        g_pslot_off[0] = g_coop_auto[0] = true;
+        party_pick_tail_fmt(tail, sizeof tail);
+        CHECK(!strcmp(tail, " off=11 auto=11"));
+        g_pslot_off[0] = sv_off[0], g_pslot_off[1] = sv_off[1], g_coop_auto[0] = sv_au[0], g_coop_auto[1] = sv_au[1];
+    }
 
     printf("%s: %d/%d checks passed\n", fails ? "FAILED" : "OK", runs - fails, runs);
     return fails ? 1 : 0;

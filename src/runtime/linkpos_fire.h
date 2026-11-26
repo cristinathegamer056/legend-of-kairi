@@ -16,4 +16,5 @@ typedef struct {
 typedef int (*LinkposFireObjsFn)(LinkposFireObj *out, int max);           // "linkpos_fire_objects": copies, any thread
 typedef int (*LinkposFireIgniteFn)(uint64_t actor);                         // "linkpos_fire_ignite": 1 lit, 2 asked, 0 no, -1 refused
 typedef int (*LinkposFireSparkFn)(const float p[3], float radius, float life);  // "linkpos_fire_spark": 1 sent, -1 refused
+typedef int (*LinkposFireBurningFn)(uint64_t actor);                       // "linkpos_fire_burning": 1 burning, 0 not, -1 unknown
 typedef int (*LinkposFireBurstFn)(const float p[3]);                         // "linkpos_fire_burst": 1 sent, -1 refused

@@ -3598,6 +3598,23 @@ static void quick_exit_handler(void) {
 #endif
 }
 
+// SDL_EVENT_QUIT: the window's close button, or SIGTERM / SIGINT (SDL turns them into a quit; Steam's Exit Game sends
+// SIGTERM). Linux (s277, Deck finding B): exit() first ran the exit handlers registered after ours, among them the
+// Steam overlay's Vulkan layer tearing itself down while the present thread was still in vkQueuePresentKHR -> signal
+// 11 + a crash box that kept the game "running" for Steam. Now the quick exit work runs right here and ends with
+// _exit (plat_terminate): no later handler or library teardown runs. Windows: unchanged (plain exit).
+void ui_quit(void) {
+#ifdef __linux__
+    if (g_vk.dev) {
+        LOG("[exit] quick exit (no library teardown)\n");
+        extern void prof_shutdown(void);
+        prof_shutdown();          // (its own atexit handler would not run)
+        quick_exit_handler();     // GPU idle, pipeline cache saved, then _exit(0)
+    }
+#endif
+    exit(0);
+}
+
 void ui_window_init(void) {
     if (window) return;
     atexit(quick_exit_handler);
@@ -3713,7 +3730,7 @@ int ui_run(void) {
         while (SDL_GetTicks() - t0 < 16 && SDL_WaitEventTimeout(&e, 16)) {
             if (e.type == SDL_EVENT_QUIT) {
                 LOG("window closed\n");
-                exit(0);
+                ui_quit();
             }
             window_event_log(&e);
             if (input_user_blocked(&e)) continue;

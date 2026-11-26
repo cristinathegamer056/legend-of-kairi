@@ -6,13 +6,14 @@ tools/sorabuild/logo/kairi_layers.npz. Pure numpy, no scipy, ~25 s. Byte-identic
 import os
 import shutil
 
+import sb
 from sb import Step
 
 OUTS = ["logo/Logo3DGameTitle_00.bin", "logo/Logo2D_00.bin", "overlay/Pack/Title.pack"]
 
 
 def _logo(ctx):
-    sorabake = os.path.join(ctx.work, "cs", "sorabake", "sorabake.exe")   # built / copied from the kit by step cs_build
+    sorabake = os.path.join(ctx.work, "cs", "sorabake", "sorabake" + sb.EXE)   # built / copied from the kit by step cs_build
     ctx.need(os.path.join(ctx.romfs, "Pack", "Bootup.pack"), os.path.join(ctx.romfs, "Pack", "Title.pack"),
              os.path.join(ctx.kh2, "kh2_first", "original", "obj", "W_EX010.mdlx"), sorabake)
     kb = os.path.join(ctx.work, "logo_kb")

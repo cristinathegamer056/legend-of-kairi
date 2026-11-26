@@ -36,6 +36,15 @@
 //                 row 15 Infinite MP = DM.imp: sora.c mp_change skips every MP spend (no MP Charge can start) + MP refilled each world
 //                 frame; Off = the MP / MP Charge from before it went on (MP is never saved).
 // Live keys (s233): dbmdrive 0/1, dbmform 0..6, dbmmickey 0..2, dbmmp 0/1.
+//   (dbgjump) row 16 High Jump / row 17 Aerial Dodge = g_dbm_hjump / g_dbm_adodge (sora.c): Off / LV1 / LV2 / LV3 = base Sora's High
+//                 Jump (235 / 310 / 385 cm) / Aerial Dodge level is at least that, at once (KH2 makes him earn them: Valor's / Master's
+//                 growth - 1, LV3 only at form LV7); a higher earned level still wins; Off = KH2's rule alone. Drive Forms keep their
+//                 own. Never saved (session; a hot reload keeps them via DBM_ENV). Live keys dbmhjump 0..3, dbmadodge 0..3.
+//                 Both start at DBM_GROW_DEF (sora.c; s288 port: 0 = Off); only a value other than that rides in DBM_ENV.
+//   (qrun) row 19 Quick Run = g_dbm_qrun (sora.c), the same rule for base Sora's Quick Run (Wisdom's growth - 1, sora_qrun.h qr_lv;
+//                 needs the qrun option). Starts at DBM_GROW_DEF like the two above. Live key dbmqrun 0..3.
+//   (dbggyro) row 18 Gyro Aim = g_kg_on (sora_kbgyro.h): On (the normal state) = the pad's gyro aims the Keyblade throw, Off = the
+//                 right stick only. Its "off" value for All Off is 1 (dbm_off_val_). Never saved. Live key dbmgyro 0/1.
 // Included from sora.c after sora_summon_menu.h. All LOG lines carry "[dbgmenu]".
 #pragma once
 _Static_assert(CP_DB_OUTFITS == OF_N, "s263: the camp Debug page's Outfit tags (sora_camp_dbg.h) must match sora_outfit.h OF_N");
@@ -43,7 +52,7 @@ _Static_assert(CP_DB_OUTFITS == OF_N, "s263: the camp Debug page's Outfit tags (
 // backend rows (dbm_set / dbm_state; the page's CP_DB_ORD shows them in its own order). (s233) a new row = a number here + its name /
 // help / value list in sora_camp_dbg.h + a place in CP_DB_ORD + its case in dbm_set / dbm_state / dbm_persist + a DBM_KEYS entry
 enum { DBM_R_LV, DBM_R_KB, DBM_R_FORMS, DBM_R_SMN, DBM_R_AB, DBM_R_GOD, DBM_R_CLIP, DBM_R_SORA, DBM_R_OUTFIT, DBM_R_AUTOOUT, DBM_R_PARTY1,
-       DBM_R_PARTY2, DBM_R_INFDRIVE, DBM_R_FORM, DBM_R_MICKEY, DBM_R_INFMP, DBM_NROWS };
+       DBM_R_PARTY2, DBM_R_INFDRIVE, DBM_R_FORM, DBM_R_MICKEY, DBM_R_INFMP, DBM_R_HJUMP, DBM_R_ADODGE, DBM_R_GYRO, DBM_R_QRUN, DBM_NROWS };
 _Static_assert(DBM_NROWS == CP_DB_ROWS, "sora_camp_page.h CP_DB_ROWS = the backend rows here");
 
 static struct {
@@ -80,7 +89,7 @@ static struct { int any, any_prev, now; uint64_t t; } DMK;
 static const char *const DBM_FORM_NAME[DBM_FORM_N] = {"Off", "Valor", "Wisdom", "Limit", "Master", "Final", "Anti"};
 
 static void dbm_persist(void) {
-    if (!DM.kb && !DM.forms && !DM.smn && !DM.ab && !g_dbm_god && !g_dbm_clip && !g_dbm_sora && !g_outfit && !g_outfit_auto && !DM.inf && !DM.imp && !DFM.want && !DMK.any) { SetEnvironmentVariableA(DBM_ENV, NULL); return; }
+    if (!DM.kb && !DM.forms && !DM.smn && !DM.ab && !g_dbm_god && !g_dbm_clip && !g_dbm_sora && !g_outfit && !g_outfit_auto && !DM.inf && !DM.imp && !DFM.want && !DMK.any && g_dbm_hjump == DBM_GROW_DEF && g_dbm_adodge == DBM_GROW_DEF && g_dbm_qrun == DBM_GROW_DEF && g_kg_on) { SetEnvironmentVariableA(DBM_ENV, NULL); return; }
     char b[640];
     int n = snprintf(b, sizeof b, "v1 kb=%d fm=%d sm=%d k0=%d k1=%d k2=%d k3=%d bp=%d op=%d gp=%d pp=%d ab=%d", DM.kb, DM.forms, DM.smn, DM.kbs[0],
              DM.kbs[1], DM.kbs[2], DM.kbs[3], DM.beasts_prev, DM.own_prev, DM.gn_prev, DM.pp_prev, DM.ab);
@@ -93,6 +102,9 @@ static void dbm_persist(void) {
     if (DFM.want) n += snprintf(b + n, sizeof b - (size_t)n, " fo=%d", DFM.want);
     if (DMK.any) n += snprintf(b + n, sizeof b - (size_t)n, " mk=1 mp=%d", DMK.any_prev);
     if (DM.imp) n += snprintf(b + n, sizeof b - (size_t)n, " im=1 mq=%.2f mc=%.2f mt=%.2f", DM.mp_prev, DM.mpc_prev, DM.mpt_prev);
+    if (g_dbm_hjump != DBM_GROW_DEF || g_dbm_adodge != DBM_GROW_DEF) n += snprintf(b + n, sizeof b - (size_t)n, " hj=%d ad=%d", g_dbm_hjump, g_dbm_adodge);  // (dbgjump)
+    if (g_dbm_qrun != DBM_GROW_DEF) n += snprintf(b + n, sizeof b - (size_t)n, " qr=%d", g_dbm_qrun);  // (qrun)
+    if (!g_kg_on) n += snprintf(b + n, sizeof b - (size_t)n, " gy=0");  // (dbggyro: only the non-default Off)
     SetEnvironmentVariableA(DBM_ENV, b);
 }
 static void dbm_smn_dirty_(void) { SMN.owned_last = -1, SMN.owned_mask_last = -1; }
@@ -123,6 +135,9 @@ static void dbm_init(void) {
         if (DX.f_on || DX.e_on) LOG("[dbgmenu] hot reload: EXP snapshots kept (forms %d, sora %d)\n", DX.f_on, DX.e_on);
     }
     { const char *g = strstr(b, " gd="); int a = 0, c = 0; if (g && sscanf(g, " gd=%d nc=%d", &a, &c) == 2) g_dbm_god = a != 0, g_dbm_clip = c != 0; }  // (s143)
+    { const char *g = strstr(b, " hj="); int a = 0, c = 0; if (g && sscanf(g, " hj=%d ad=%d", &a, &c) == 2) g_dbm_hjump = a < 0 ? 0 : a > 3 ? 3 : a, g_dbm_adodge = c < 0 ? 0 : c > 3 ? 3 : c; }  // (dbgjump)
+    if (strstr(b, " gy=0")) g_kg_on = 0;  // (dbggyro)
+    { const char *g = strstr(b, " qr="); int a = 0; if (g && sscanf(g, " qr=%d", &a) == 1) g_dbm_qrun = a < 0 ? 0 : a > 3 ? 3 : a; }  // (qrun)
     { const char *g = strstr(b, " so="); int a = 0, c = 0, d = 0; if (g && sscanf(g, " so=%d of=%d au=%d", &a, &c, &d) == 3) g_dbm_sora = a != 0, g_outfit = c < 0 || c >= OF_N ? 0 : c, g_outfit_auto = d != 0; }  // (s146)
     {   // (s233) Infinite Drive / Drive Form / Mickey Rescue Any Enemy / Infinite MP
         const char *g = strstr(b, " id=");
@@ -157,7 +172,7 @@ static void dbm_kb_fix_(const char *why) {
     LOG("[dbgmenu] keyblades back to what is really owned (%s): %d slot(s) put back, %d reset by the one-copy rule\n", why, n, bad);
 }
 
-static int dbm_state(int row) { return row == 0 ? SL.devlv : row == 1 ? DM.kb : row == 2 ? DM.forms : row == 3 ? DM.smn : row == 4 ? DM.ab : row == 5 ? g_dbm_god : row == 6 ? g_dbm_clip : row == 7 ? g_dbm_sora : row == 8 ? g_outfit : row == 9 ? g_outfit_auto : row == 10 || row == 11 ? (party_slot_off(row - 10) ? PCH_NONE : g_pchar[row - 10]) :row == DBM_R_INFDRIVE ? DM.inf : row == DBM_R_FORM ? DFM.want : row == DBM_R_MICKEY ? (DMK.now ? 2 : DMK.any) : row == DBM_R_INFMP ? DM.imp : 0; }  // (the camp page at open)
+static int dbm_state(int row) { return row == 0 ? SL.devlv : row == 1 ? DM.kb : row == 2 ? DM.forms : row == 3 ? DM.smn : row == 4 ? DM.ab : row == 5 ? g_dbm_god : row == 6 ? g_dbm_clip : row == 7 ? g_dbm_sora : row == 8 ? g_outfit : row == 9 ? g_outfit_auto : row == 10 || row == 11 ? (party_slot_off(row - 10) ? PCH_NONE : g_pchar[row - 10]) :row == DBM_R_INFDRIVE ? DM.inf : row == DBM_R_FORM ? DFM.want : row == DBM_R_MICKEY ? (DMK.now ? 2 : DMK.any) : row == DBM_R_INFMP ? DM.imp : row == DBM_R_HJUMP ? g_dbm_hjump : row == DBM_R_ADODGE ? g_dbm_adodge : row == DBM_R_GYRO ? g_kg_on : row == DBM_R_QRUN ? g_dbm_qrun : 0; }  // (the camp page at open)
 
 // ---- (s142 dbgexp) the real EXP snapshots
 static void dbm_forms_snap_(const char *why) {
@@ -558,11 +573,46 @@ static bool dbm_party_none_(int slot, bool on, const char *why) {
     return true;
 }
 
+// ---- (s267 co-op item 2) one party member per player in multiplayer (sora_pchar.h pchar_coop_drop). The rule empties a slot with
+// the s233 None (g_coop_auto marks it: filled again when the game leaves the room); a pick on a Party row while in a room empties the
+// other row (dbm_set rows 10 / 11). A refused None (knocked down, in a Limit) is tried again once a second.
+static int g_coop_keep;            // the slot picked last on a Party row (0 = Donald's place at start)
+static bool g_coop_picked;         // a Party row was picked in a room (g_coop_keep is the player's)
+// (g_coop_auto[PARTY_N] = the rule, not the player, made this slot None: declared in sora_party.h, rides a hot reload in PPICK_ENV)
+static uint64_t g_coop_next;
+static bool dbm_coop_drop_(int slot, const char *why) {
+    if (!dbm_party_none_(slot, true, why)) return false;
+    g_coop_auto[slot] = true;
+    party_pick_persist();  // (s269 F3: the auto bit rides a hot reload)
+    LOG("[dbgmenu] party: co-op, one member per player: %s's place is None (%s); pick someone on the other Party row to switch\n", slot ? "Goofy" : "Donald", why);
+    return true;
+}
+static void dbm_coop_tick_(void) {
+    uint64_t now = GetTickCount64();
+    if (now < g_coop_next) return;
+    if (!NET.inited) return;  // (s269 review F1: right after a hot reload the net is not up yet: not "out of the room")
+    if (!NET.on && !NET.parked) {  // (out of the room again: the rule's None slots get their member back; review F2: parked = still in it)
+        bool any = g_coop_auto[0] || g_coop_auto[1];
+        for (int s = 0; s < PARTY_N; s++)
+            if (g_coop_auto[s]) {
+                g_coop_auto[s] = false;
+                if (party_slot_off(s) && !dbm_party_none_(s, false, "co-op over: single player has both")) g_coop_auto[s] = true, g_coop_next = now + 1000;
+            }
+        if (any) party_pick_persist();
+        return;
+    }
+    int keep = g_coop_keep;  // (review F7: no pick in the room yet and a stand-in in Goofy's place only: he stays, Donald's place goes None)
+    if (!g_coop_picked && pchar_home(g_pchar, 0) && !pchar_home(g_pchar, 1)) keep = 1;
+    int s = pchar_coop_drop(true, g_pslot_off, keep);
+    if (s >= 0 && !dbm_coop_drop_(s, "co-op: one party member per player")) g_coop_next = now + 1000;
+}
+
 // every unpaused world frame (sora.c, right after mk_tick)
 static void dbm_world_tick(void) {
     if (!DM.inited) return;  // (sl_init -> dbm_init runs first: the env's rows are in before anything refills)
     dbm_inf_tick_();
     dbm_mk_tick_();
+    dbm_coop_tick_();  // (s267)
 }
 
 // row: 0 level (val 0..99), 1 Keyblades, 2 Drive Forms, 3 Summons, 4 All Abilities, 5 God, 6 No Clip, 7 Become Sora (val 0/1), 8 Outfit (0..OF_N - 1), 9 Auto Outfits (0/1). Returns the value now in force.
@@ -601,16 +651,56 @@ static int dbm_set(int row, int val, const char *why) {
     }
     if (row == 10 || row == 11) {  // (s217 riku / s220) Party 1 / 2: the character val in Donald's / Goofy's place; the one in force comes back
         int slot = row - 10;
-        if (val == PCH_NONE || val < 0) return dbm_party_none_(slot, true, why) ? PCH_NONE : g_pchar[slot];  // (s233: None = the slot empty)
+        if (val == PCH_NONE || val < 0) {  // (s233: None = the slot empty)
+            if (!dbm_party_none_(slot, true, why)) return g_pchar[slot];
+            g_coop_auto[slot] = false;  // (s267: the player's own None: not given back when the room ends)
+            party_pick_persist();
+            return PCH_NONE;
+        }
         if (party_slot_off(slot) && !dbm_party_none_(slot, false, why)) return PCH_NONE;  // (s233: a character again: the slot back first)
+        g_coop_auto[slot] = false;
         int c = party_swap(slot, val, why);
         LOG("[dbgmenu] party: %s in %s's place (%s)%s\n", PCH_TAB[c].name, slot ? "Goofy" : "Donald", why, c != val ? " (refused: the [party] line says why)" : "");
+        if (c == val && NET.on) {  // (s267 co-op: one member per player: this pick wins, the other row goes None)
+            g_coop_keep = slot, g_coop_picked = true;
+            if (!party_slot_off(1 - slot) && !dbm_coop_drop_(1 - slot, why)) g_coop_next = GetTickCount64() + 1000;  // (the tick tries again)
+        }
         return c;
     }
     if (row == DBM_R_INFDRIVE) return dbm_inf_set_(val, why);  // (s233)
     if (row == DBM_R_FORM) return dbm_form_set_(val, why);
     if (row == DBM_R_MICKEY) return dbm_mk_set_(val, why);
     if (row == DBM_R_INFMP) return dbm_mp_set_(val, why);
+    if (row == DBM_R_GYRO) {  // (dbggyro) the pad's gyro aims the Keyblade throw (On) or not (Off: the right stick only)
+        val = val != 0;
+        if (val == g_kg_on) return val;
+        g_kg_on = val;
+        LOG("[dbgmenu] gyro aim: %s (%s)\n", val ? "ON, the gyro aims the Keyblade throw" : "OFF, the right stick only", why);
+        dbm_persist();
+        return val;
+    }
+    if (row == DBM_R_QRUN) {  // (qrun) base Sora's Quick Run level at least val (0 = KH2's rule: Wisdom's growth - 1)
+        val = val < 0 ? 0 : val > 3 ? 3 : val;
+        if (val == g_dbm_qrun) return val;
+        g_dbm_qrun = val;
+        LOG("[dbgmenu] quick run: %s %d (%s): base Sora's Quick Run LV%d now (Wisdom LV%d%s)\n", val ? "debug LV" : "OFF, KH2's rule", val, why,
+            qr_lv(), wl_lv(), g_qrun ? "" : "; the qrun option is OFF");
+        dbm_persist();
+        return val;
+    }
+    if (row == DBM_R_HJUMP || row == DBM_R_ADODGE) {  // (dbgjump) base Sora's High Jump / Aerial Dodge level at least val (0 = KH2's rule)
+        int *g = row == DBM_R_HJUMP ? &g_dbm_hjump : &g_dbm_adodge;
+        val = val < 0 ? 0 : val > 3 ? 3 : val;
+        if (val == *g) return val;
+        *g = val;
+        if (row == DBM_R_HJUMP)
+            LOG("[dbgmenu] high jump: %s %d (%s): base Sora jumps %.0f cm now (Valor LV%d)\n", val ? "debug LV" : "OFF, KH2's rule", val, why,
+                vl_base_jump_h(KH_JUMP_H), vl_lv());
+        else LOG("[dbgmenu] aerial dodge: %s %d (%s): base Sora's Aerial Dodge LV%d now (Master LV%d)\n", val ? "debug LV" : "OFF, KH2's rule", val, why,
+                 bd_lv(), ml_lv());
+        dbm_persist();
+        return val;
+    }
     if (row == 9) {  // (s146 outfit)
         val = val != 0;
         if (val == g_outfit_auto) return val;
@@ -694,8 +784,12 @@ static void dbm_log(const char *why) {
         why, DM.inf, DG.bars, DG.fill, DM.dg_prev, DM.imp, MP.mp, MP.mp_max, mp_charging(), DM.mp_prev, DBM_FORM_NAME[DFM.want], DFM.phase,
         DFM.phase == DFP_OURS ? FM_FORMS[DFM.cur].name : "-", FM.st == FM_BASE ? "base" : FM.st == FM_CHANGE ? "CHANGEFORM" : "in", FM.st == FM_BASE ? "" : FM_FORMS[g_fform].name,
         FM.t, FM.total, dbm_form_hold(), DMK.now ? "Now" : DMK.any ? "Any Enemy" : "Off", DMK.now, g_mk_any, g_dbm_mksora, g_mickey, MK.active, MK.choosing);
+    LOG("[dbgmenu] state 3 (%s): high jump row %d (base jump %.0f cm, Valor LV%d), aerial dodge row %d (base LV%d, Master LV%d)\n", why,
+        g_dbm_hjump, vl_base_jump_h(KH_JUMP_H), vl_lv(), g_dbm_adodge, bd_lv(), ml_lv());  // (dbgjump)
+    LOG("[dbgmenu] state 4 (%s): gyro aim %d, right stick aim %d\n", why, g_kg_on, g_kg_stick);  // (dbggyro)
+    LOG("[dbgmenu] state 5 (%s): quick run row %d (base LV%d, Wisdom LV%d, qrun %d)\n", why, g_dbm_qrun, qr_lv(), wl_lv(), g_qrun);  // (qrun)
 }
-static int dbm_off_val_(int r) { return r == DBM_R_PARTY1 || r == DBM_R_PARTY2 ? PCH_HOME[r - DBM_R_PARTY1] : 0; }  // (the Party rows' "off" = Donald / Goofy)
+static int dbm_off_val_(int r) { return r == DBM_R_PARTY1 || r == DBM_R_PARTY2 ? PCH_HOME[r - DBM_R_PARTY1] : r == DBM_R_GYRO ? 1 : 0; }  // (dbggyro: On is its normal state)  // (the Party rows' "off" = Donald / Goofy)
 static void dbm_all_off(const char *why) {
     for (int r = DBM_NROWS - 1; r >= 0; r--) dbm_set(r, dbm_off_val_(r), why);  // (s146: + Become Sora / Outfit / Auto Outfits; s217 / s220: + Party 1 / 2 = Donald / Goofy; s233: + rows 12-15)
 }
@@ -779,7 +873,8 @@ static void dbm_resume(int was, bool is_load) {
 
 static bool dbm_set_key(const char *key, int v) {
     if (strncmp(key, "dbm", 3)) return false;
-    if (!strcmp(key, "dbmlv")) dbm_set(0, v, "live set dbmlv");
+    if (!strcmp(key, "dbmsave")) g_dbm_save = v != 0, LOG("[dbgmenu] save with the BotW slot: %s (live set dbmsave)\n", g_dbm_save ? "ON" : "OFF");  // (dbgsave)
+    else if (!strcmp(key, "dbmlv")) dbm_set(0, v, "live set dbmlv");
     else if (!strcmp(key, "dbmkb")) dbm_set(1, v, "live set dbmkb");
     else if (!strcmp(key, "dbmforms")) dbm_set(2, v, "live set dbmforms");
     else if (!strcmp(key, "dbmsmn")) dbm_set(3, v, "live set dbmsmn");
@@ -799,7 +894,8 @@ static bool dbm_set_key(const char *key, int v) {
     else if (!strcmp(key, "dbmlog")) { if (v) dbm_log("live set dbmlog"); }
     else {  // (s233) one table line per row from here on
         static const struct { const char *key; int row; } DBM_KEYS[] = {
-            {"dbmdrive", DBM_R_INFDRIVE}, {"dbmform", DBM_R_FORM}, {"dbmmickey", DBM_R_MICKEY}, {"dbmmp", DBM_R_INFMP}};
+            {"dbmdrive", DBM_R_INFDRIVE}, {"dbmform", DBM_R_FORM}, {"dbmmickey", DBM_R_MICKEY}, {"dbmmp", DBM_R_INFMP},
+            {"dbmhjump", DBM_R_HJUMP}, {"dbmadodge", DBM_R_ADODGE}, {"dbmgyro", DBM_R_GYRO}, {"dbmqrun", DBM_R_QRUN}};  // (dbgjump; dbggyro)
         for (size_t i = 0; i < sizeof DBM_KEYS / sizeof *DBM_KEYS; i++)
             if (!strcmp(key, DBM_KEYS[i].key)) {
                 char why[40];
@@ -810,4 +906,60 @@ static bool dbm_set_key(const char *key, int v) {
         return false;
     }
     return true;
+}
+
+#include "sora_dbgsave.h"  // (dbgsave: the sidecar line's text format)
+// ---- (dbgsave, PR #60; s288 port) the Debug Menu rows go with the BotW save slot. Key g_dbm_save (sora_levels.h): compiled
+// default 0, env SAVAGEWIND_SORA_DBM_SAVE, live "set dbmsave 0/1". 0 = nothing written, nothing read (the sidecar is byte for
+// byte the old one; a "dbgmenu" line an earlier run left in it is ignored, and dropped by the next save).
+// WRITE: sl_sidecar_write (every BotW save of slot N, manual or autosave) puts dbm_save_str's line into <save>/<N>/sora_kh2.json,
+//   the same temp file + rename as the rest of the sidecar. The text format is sora_dbgsave.h. Mickey Rescue's one-shot "Now"
+//   is written as its Any Enemy value (Off / Any Enemy only), so a load never starts a rescue.
+// READ: sl_slot_load (BotW read slot N: Continue / Load) calls dbm_slot_load AFTER the slot's real values are in and the
+//   Debug Menu layers are back on (dbm_resume): each row that differs goes through dbm_set, the same path as a pick in the menu,
+//   so every row snapshots / layers as usual and the sidecar's real EXP / Keyblades / abilities stay real. Not read: a missing
+//   key (an older save, a new slot: the rows stay as they are), a broken value (-2: nothing of it is used), a name this DLL does
+//   not know (skipped, counted). In a co-op room (NET.on) the Party 1 / 2 rows are not put back: the room's one-member-per-player
+//   pick (dbm_coop_tick_) owns them there.
+_Static_assert(DBS_NROWS == DBM_NROWS, "sora_dbgsave.h has one name per Debug Menu row, in DBM_R_* order");
+// (what the row is worth in the save: Mickey Rescue Off / Any Enemy only; a Party row's None = -1, not PCH_NONE, whose number
+// grows when a character is added; dbm_set takes any value < 0 as None)
+static int dbm_save_party_(int r, int v) { return (r == DBM_R_PARTY1 || r == DBM_R_PARTY2) && v == PCH_NONE ? -1 : v; }
+static int dbm_save_val_(int r) { return r == DBM_R_MICKEY ? DMK.any : dbm_save_party_(r, dbm_state(r)); }
+// -> the line's length, 0 = no line (key off, or it did not fit: logged)
+static int dbm_save_str(char *o, size_t cap) {
+    if (o && cap) o[0] = 0;
+    if (!g_dbm_save || !o) return 0;
+    int v[DBM_NROWS];
+    for (int r = 0; r < DBM_NROWS; r++) v[r] = dbm_save_val_(r);
+    int n = dbs_write(o, cap, v);
+    if (!n) LOG("[dbgmenu] save: the Debug Menu line does not fit (%zu), left out of the sidecar\n", cap);
+    return n;
+}
+static void dbm_slot_load(const char *b, int slot) {
+    if (!g_dbm_save) return;
+    int v[DBM_NROWS], bad = 0;
+    bool have[DBM_NROWS];
+    int got = dbs_parse(b, v, have, &bad);
+    if (got == -1) { LOG("[dbgmenu] slot %d: no saved Debug Menu rows, kept as they are\n", slot); return; }
+    if (got == -2) { LOG("[dbgmenu] slot %d: the saved Debug Menu line is broken: not used, rows kept as they are\n", slot); return; }
+    int ch = 0, skip = 0;
+    bool retry1 = false;
+    for (int r = 0; r < DBM_NROWS; r++) {
+        if (!have[r]) continue;
+        if (r == DBM_R_MICKEY && v[r] > 1) v[r] = 1;  // (never "Now" from a file: Any Enemy)
+        if ((NET.on || NET.parked) && (r == DBM_R_PARTY1 || r == DBM_R_PARTY2)) { skip++; continue; }  // (co-op room, parked too: the room's party pick stays)
+        int cur = dbm_save_val_(r);
+        if (cur == v[r]) continue;
+        int now = dbm_save_party_(r, dbm_set(r, v[r], "BotW load: the slot's saved Debug Menu"));
+        ch++;
+        if (now != v[r] && r == DBM_R_PARTY1) { retry1 = true; continue; }  // (s288 review 2: maybe in Party 2's place now; again after it)
+        if (now != v[r]) LOG("[dbgmenu] slot %d: %s saved %d, now %d (refused: the line above says why)\n", slot, DBS_NAME[r], v[r], now);
+    }
+    if (retry1) {  // (s288 review 2) Party 1's stand-in stood in Party 2's place: Party 2 has moved now, one more try
+        int r = DBM_R_PARTY1, now = dbm_save_party_(r, dbm_set(r, v[r], "BotW load: the slot's saved Debug Menu (again)"));
+        if (now != v[r]) LOG("[dbgmenu] slot %d: %s saved %d, now %d (refused: the line above says why)\n", slot, DBS_NAME[r], v[r], now);
+    }
+    LOG("[dbgmenu] slot %d: saved Debug Menu rows put back (%d rows read, %d changed, %d not understood%s)\n", slot, got, ch, bad,
+        skip ? ", Party rows kept: co-op room" : "");
 }

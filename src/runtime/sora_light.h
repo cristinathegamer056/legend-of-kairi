@@ -146,6 +146,10 @@ static bool light_from_botw(const float *c4, float sunk, float ambk, float floor
 // ---- runtime part (needs sora.c's LOG and windows.h) ----
 static int g_light = 1;  // (s121 user: style 1 picked -> light on by default; set light 0 = off)
 static int g_lightstyle = 1, g_lightamt = 70, g_lightfloor = 65, g_lighthour = -1, g_lighthm = -1;
+// (lightsat) the bodies' saturation after the light, percent (100 = unchanged): the exe's L3.w = (lightsat - 100) / 100.
+// User: the KH2 models look greyed out next to the KH2 menu (unlit). Live "set lightsat <pct>" / SAVAGEWIND_SORA_LIGHT_SAT;
+// default 100 = unchanged (s288 port; the PR: 130, its tester: "the colors look much better now").
+static int g_lightsat = 130;  /* (s288: the user played 130, "you can keep it that way": default 130; 100 = unchanged) */
 static int g_lightyaw = 0, g_lightlog = 0;
 // (s123 a2) lightsrc 1 = BotW's real sun words when fresh, else a1 (default); 0 = a1 only. lsunk: sun rgb = HDR word * pct/100
 // (GUESS 18: BotW 6.0 intensity -> ~1.1, a1's noon 1.05); lambk: ambient top = word * pct/100 (GUESS 140: dawn word ~0.55 -> ~0.77, a1 ambient ~0.8).
@@ -200,6 +204,7 @@ static bool light_set_key(const char *key, int v) {
     if (!strcmp(key, "light")) g_light = v != 0;
     else if (!strcmp(key, "lightstyle")) g_lightstyle = v < 1 ? 1 : v > 3 ? 3 : v;
     else if (!strcmp(key, "lightamt")) g_lightamt = v;
+    else if (!strcmp(key, "lightsat")) g_lightsat = v < 0 ? 0 : v > 300 ? 300 : v, LOG("[light] lightsat %d%%\n", g_lightsat);  // (lightsat)
     else if (!strcmp(key, "lightfloor")) g_lightfloor = v;
     else if (!strcmp(key, "lighthour")) g_lighthour = v, g_lighthm = -1;  // -1 = real time
     else if (!strcmp(key, "lighthm")) g_lighthm = v;                       // tenths of an hour, -1 = off
@@ -357,6 +362,7 @@ static void light_tick(void) {
         if (!was_on || frame % 600 == 0)
             LOG("[light] sun after cap %d warm %d: rgb %.2f %.2f %.2f floor %.2f\n", g_lsunmax, g_lwarm, p[4], p[5], p[6], p[11]);
     }
+    p[15] = (float)(g_lightsat - 100) / 100.0f;  // (lightsat: the shader's saturation change; 0 = unchanged)
     if (draw) draw(p, 16);
     light_shadow_send(1);
     int every = g_lightlog ? 60 : 600;

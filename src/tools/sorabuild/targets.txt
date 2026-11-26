@@ -167,6 +167,9 @@ hud/sumface.bin hud
 hud/itempic.bin hud
 hud/camp_text.txt hud
 levels/gamedata_flag_names.txt levels
+# (s288 b6: #21 updraft, step "updrafts") turn the next line on TOGETHER with the batch 8 manifest rebuild (manifest.thispc.json +
+# manifest.deck.json); before that verify.py would say NOT IN MANIFEST / NOREF and fail every install
+levels/updrafts.txt levels
 logo/Logo3DGameTitle_00.bin logo
 logo/Logo2D_00.bin logo
 overlay/Pack/Title.pack logo

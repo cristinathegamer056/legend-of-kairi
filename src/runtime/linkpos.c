@@ -109,7 +109,7 @@ static int env_int(const char *name, int def) {
     return e && *e ? atoi(e) : def;
 }
 
-static bool in_guest(uint64_t a) { return a >= GUEST_LO && a + 16 <= GUEST_HI; }
+static bool in_guest(uint64_t a) { return a >= GUEST_LO && a <= GUEST_HI - 16; }  // (mgelem: no a + 16 overflow, 0xffff... was "in")
 
 // How many of the n bytes at a can be read (committed, readable pages), so the dump never faults past the actor's heap.
 // (s81 fps hunt) A cache of the guest's 64 KB commit chunks seen committed: VirtualQuery on the 12.5 GB guest
@@ -121,7 +121,7 @@ static bool in_guest(uint64_t a) { return a >= GUEST_LO && a + 16 <= GUEST_HI; }
                      // VirtualQuery of the 3 GB run above it = 45 ms; copied enemy swings ran at 13-20 fps. Bitmap = 400 KB.)
 static volatile LONG64 g_rd_bits[((GUEST_HI - GUEST_LO) >> RD_CHUNK) / 64];
 static bool rd_cached(uint64_t a, size_t n) {
-    if (a < GUEST_LO || a + n > GUEST_HI || !n) return false;
+    if (a < GUEST_LO || a >= GUEST_HI || !n || n > GUEST_HI - a) return false;  // (mgelem: no a + n overflow)
     for (uint64_t c = (a - GUEST_LO) >> RD_CHUNK, e = (a + n - 1 - GUEST_LO) >> RD_CHUNK; c <= e; c++)
         if (!(g_rd_bits[c / 64] >> (c % 64) & 1)) return false;
     return true;
@@ -798,6 +798,13 @@ static uint64_t g_vel_head, g_vel_actor, g_vel_cc;
 // has come in a frame (g_link_step_frame), the other controllers' calls write his velocity, which wakes him (stepA3:
 // his calls start the frame after); once it has, they leave it alone so the solver's result survives to step_frame.
 static volatile uint64_t g_vel_frame_id, g_link_step_frame;  // (vel_frame counts frames)
+// (s288 port: the PR options' exe bookkeeping runs only while the DLL asks) Each list / record below (swhit levers, bowtorch
+// gear positions, malnoflinch's last damage call, logchop trunks) is kept only while its DLL export was called within
+// EXE_ASK_FRESH frames (the DLL calls it every frame while its live key is on). Key off (or an old DLL) = the exe does
+// exactly what it did before these PRs.
+#define EXE_ASK_FRESH 60
+static bool exe_asked(volatile uint64_t *stamp) { uint64_t s = *stamp; return s && g_vel_frame_id - s <= EXE_ASK_FRESH; }
+static void exe_ask(volatile uint64_t *stamp) { *stamp = g_vel_frame_id ? g_vel_frame_id : 1; }
 
 // s55 airhold slice 2 (recon/S55_HELPER_AIRHOLD.md 4): other actors' character controllers (Bokoblins etc. have one:
 // Bokoblin.bphysics use_character_controller, form "Standing") go through the same step; an actor given a velocity by
@@ -1465,8 +1472,9 @@ void linkpos_hide_link(bool on) { g_hide = on; }
 #define ACTOR_OPACITY_DIRTY 0x68e
 static volatile uint64_t g_opacity_hits, g_opacity_calls;  // (fix 2 below)
 
+static bool lfx_on(void);
 static void hide_frame(void) {
-    if (!g_hide || !servo_body()) return;
+    if (!g_hide || !servo_body() || lfx_on()) return;  // (linkfx: the opacity hook hides his model instead)
     *(float *)(uintptr_t)(g_servo_actor + ACTOR_FINAL_OPACITY) = 0;
     *(float *)(uintptr_t)(g_servo_actor + ACTOR_START_OPACITY) = 0;
     *(uint8_t *)(uintptr_t)(g_servo_actor + ACTOR_OPACITY_DIRTY) = 1;
@@ -1900,6 +1908,28 @@ int linkpos_weapon_info(char *actor, int cap, int *life, int *atk_up) {
     if (atk_up) *atk_up = (*(const uint32_t *)(uintptr_t)(it + 0x88) & 1) ? (int)*(const uint32_t *)(uintptr_t)(it + 0x80) : 0;
     return 1;
 }
+// (shielddef) Link's equipped shield: the pouch item of type 3 (shield) with its equipped flag (+0x24) set, found by
+// walking PauseMenuDataMgr's item list (mgr+0x68, as linkpos_weapon_equip / the DLL's pouch lists). The modifier pair
+// as the weapon's (+0x80 value, +0x88 flags; the caller logs them). -> 1 with the actor name, 0 = no shield equipped.
+int linkpos_shield_info(char *actor, int cap, int *mod_value, int *mod_flags) {
+    uint64_t got = SS->pmdm_got;
+    uint64_t pp = in_guest(got) ? *(const uint64_t *)(uintptr_t)got : 0;
+    uint64_t mgr = in_guest(pp) ? *(const uint64_t *)(uintptr_t)pp : 0;
+    if (!in_guest(mgr) || readable(mgr + 0x68, 0x18) != 0x18 || *(const int32_t *)(uintptr_t)(mgr + 0x7c) != 8) return 0;
+    uint64_t head = mgr + 0x68, n = *(const uint64_t *)(uintptr_t)(head + 8);
+    for (int k = 0; k < 500 && in_guest(n) && n != head; k++) {
+        uint64_t it = n - 8;
+        char nm[64];
+        n = *(const uint64_t *)(uintptr_t)(n + 8);
+        if (readable(it, 0x90) != 0x90 || *(const int32_t *)(uintptr_t)(it + 0x18) != 3 || !*(const uint8_t *)(uintptr_t)(it + 0x24) ||
+            !wpn_item_name(it, nm, sizeof nm)) continue;
+        if (actor && cap > 0) snprintf(actor, (size_t)cap, "%s", nm);
+        if (mod_value) *mod_value = (int)*(const uint32_t *)(uintptr_t)(it + 0x80);
+        if (mod_flags) *mod_flags = (int)*(const uint32_t *)(uintptr_t)(it + 0x88);
+        return 1;
+    }
+    return 0;
+}
 // (s131) off[8]: off[0..3] as below + off[4] = scale (BotW PlayerEqScale; <= 0 = 1), off[5..7] = the model-space point
 // (metres, unscaled) that sits on Sora's grip. For the 3 monster arms (Stal arm models run along model +X, knob at the
 // origin, recon/S130_HELPER_STALARM.md); every other weapon sends 1, 0 0 0 (= the s128-s130 behaviour).
@@ -2247,8 +2277,21 @@ static void zero_opacity(uint64_t a) {
 #define VT_GET_DAMAGE_MGR 127
 #define ACTOR_LIFE 0x848        // (1.8.2: getLife = add x0, x0, #0x848; enemy1: 13 on the red Bokoblins)
 #define ACTOR_DAMAGE_MGR 0x840  // (getDamageMgr = ldr x0, [x0, #0x840])
-typedef struct { uint64_t actor, seen; float pos[3], dist; int32_t life; uint32_t hid; char name[48]; } Enemy;  // hid: mubin HashId, 0 = none (s166)
+// (lockpt) BotW's attention point (the lock-on / Z-target point) of an actor: Actor +0x430 (vec3), written every update
+// by the Actor virtual f_7001529290 (in ~60 actor vtables): the actor's AttClientList AttPos (node + offset + rotate,
+// YRotOnly; f_71013d8124 -> f_71013d9af4 on list +0x328, list = actor +0x5d8), else the model origin (f_71015290d4).
+// Actor +0x490 = the ModelList Attention CursorOffsetY (f_71015212e0 copies it at create; f_7101502524 = ModelList
+// getAttentionInfo, out +0x14). Ghidra 12.1.2 on 1.9.0 main (addresses: Ghidra's 0x71... base, runtime 0x70...).
+#define ACTOR_ATT_POS 0x430
+#define ACTOR_CURSOR_Y 0x490
+typedef struct { uint64_t actor, seen; float pos[3], dist; int32_t life; uint32_t hid; char name[48]; float att[3], cursor_y; } Enemy;  // hid: mubin HashId, 0 = none (s166)
 static Enemy g_enemy[ENEMY_MAX];
+static volatile uint64_t g_att_ask;  // (s288 port, lockpt) stamped by linkpos_enemy_attpos: off = the old reads only
+static int att_version_ok(void) {  // (s288 review: +0x430 / +0x490 checked on 1.9.0 only)
+    static int ok = -1;
+    if (ok < 0) ok = g_game_version && !strcmp(g_game_version, "1.9.0");
+    return ok;
+}
 static int g_nenemy;
 static SRWLOCK g_enemy_lock = SRWLOCK_INIT;
 
@@ -2322,6 +2365,11 @@ static void enemy_note(uint64_t a) {
     uint32_t hid = g_enemy[i].hid;
     g_enemy[i].seen = g_vel_frame_id;
     g_enemy[i].pos[0] = m[3], g_enemy[i].pos[1] = m[7], g_enemy[i].pos[2] = m[11];
+    if (exe_asked(&g_att_ask) && att_version_ok()) {   // (lockpt; s288 review: lapses after EXE_ASK_FRESH frames like the others) BotW's attention point + cursor height, read the same way as the matrix above
+        const float *at = (const float *)(uintptr_t)(a + ACTOR_ATT_POS);
+        g_enemy[i].att[0] = at[0], g_enemy[i].att[1] = at[1], g_enemy[i].att[2] = at[2];
+        g_enemy[i].cursor_y = *(const float *)(uintptr_t)(a + ACTOR_CURSOR_Y);
+    }
     g_enemy[i].dist = g_servo_actor ? link_dist(a) : -1;
     g_enemy[i].life = *(const int32_t *)(uintptr_t)(a + ACTOR_LIFE);
     EdmgPend pend;
@@ -2349,6 +2397,26 @@ int linkpos_enemies(uint64_t *actor, float (*pos)[3], int32_t *life, int max) {
     }
     ReleaseSRWLockExclusive(&g_enemy_lock);
     return n;
+}
+
+// (lockpt) for sora_mod.dll (GetProcAddress): an enemy's BotW attention point (u, world) and ModelList CursorOffsetY (u)
+// as of its last note. 1 = found, 0 = not in the list / not a finite point.
+int linkpos_enemy_attpos(uint64_t actor, float out[3], float *cursor_y) {
+    int ok = 0;
+    exe_ask(&g_att_ask);  // (s288 port: enemy_note reads the two fields only while the DLL asks, i.e. lockpt is on)
+    AcquireSRWLockExclusive(&g_enemy_lock);
+    for (int i = 0; i < g_nenemy; i++)
+        if (g_enemy[i].actor == actor) {
+            const float *t = g_enemy[i].att;
+            if (isfinite(t[0]) && isfinite(t[1]) && isfinite(t[2]) && isfinite(g_enemy[i].cursor_y)) {
+                out[0] = t[0], out[1] = t[1], out[2] = t[2];
+                if (cursor_y) *cursor_y = g_enemy[i].cursor_y;
+                ok = 1;
+            }
+            break;
+        }
+    ReleaseSRWLockExclusive(&g_enemy_lock);
+    return ok;
 }
 
 static uint64_t enemy_nearest(void) {  // the enemy nearest to Link right now (0: none)
@@ -2712,6 +2780,21 @@ static volatile int g_guard_set; static volatile uint64_t g_guard_frame; static 
 void linkpos_guard_set(int on) { g_guard_set = on, g_guard_frame = g_vel_frame_id; }
 int linkpos_guard_blocks(void) { return g_guard_blocks; }
 int linkpos_guard_last_damage(void) { return g_guard_dmg; }
+// (s288 port, gparry) sora.c's linkpos_guard_parry_set(1) each driving frame while its gparry key is on: only then the
+// guard also drops BotW's shield-knockback hit (damage 0, f54 0xd). Never set (gparry off, an older DLL) = the old drop
+// test (damage > 0 only). Stale after 3 frames, as g_guard_set.
+static volatile int g_guard_parry; static volatile uint64_t g_guard_parry_frame;
+void linkpos_guard_parry_set(int on) { g_guard_parry = on, g_guard_parry_frame = g_vel_frame_id; }
+// (s286) a duel finisher knocks Link down (the DLL's sora_duel.h): linkpos_link_knock(f54) asks for it; the NEXT player
+// addDamage call with no hit of its own (calcDamage runs one per damage slot every frame) within 3 frames gets that f54
+// (0x15 = explosion-type LARGE, the kind the player's hit handler FUN_7100bd59c8 reacts to without a life loss,
+// DAMAGE_ARGS_RECON.md) with damage 0: BotW tumbles / ragdolls Link and Sora's body copies it (the Mickey mode-2 path).
+// GUESS: no attacker on that call, so BotW picks the knock direction itself. -> the number of knocks done so far.
+static volatile int g_knock_f54, g_knock_done; static volatile uint64_t g_knock_frame;
+int linkpos_link_knock(int f54) {
+    if (f54 > 0) g_knock_f54 = f54, g_knock_frame = g_vel_frame_id;
+    return g_knock_done;
+}
 // (s104) KH2 Second Chance / Once More, clamped HERE (before applyDamage takes the frame's damage off his life, so BotW
 // never starts a death; the s103 DLL write after the fact could land mid-death). sora_chestabil.h calls
 // linkpos_survive_set(mask) every frame: bit 0 = Second Chance (a hit that would take him from > 1 quarter heart to 0
@@ -2788,10 +2871,32 @@ static void hurt_scale(Cpu *c) {
     if ((int32_t)c->x[4] > d) c->x[4] = (uint32_t)d;
     LOG("[linkpos] khdef: hit %d -> %d (x%d%%) f50 %#x f54 %#x\n", dmg, d, pct, f50, f54);
 }
+// (malnoflinch) the last nonzero player addDamage as BotW called it (before Guard / Defense / Second Chance change it):
+// a2, f50, f54, damage and the frame. Malice (Ganon's goop) = a2 6, f50 0x11, f54 0 (user log: 2 quarter hearts every
+// ~130 frames, no enemy near), f54 0 = no reaction size, unlike an enemy's hit. linkpos_player_dmg_last: out[4] = a2,
+// f50, f54, damage; -> frames since that call, -1 = none yet. Any thread (plain ints; a torn read = one wrong hit kind).
+static volatile int g_pdl_a2, g_pdl_f50, g_pdl_f54, g_pdl_dmg;
+static volatile uint64_t g_pdl_frame;
+static volatile int g_pdl_ok;
+static volatile uint64_t g_pdl_ask;  // (s288 port: recorded only while the DLL asks, see exe_asked)
+int linkpos_player_dmg_last(int out[4]) {  // (out NULL = only "keep recording")
+    exe_ask(&g_pdl_ask);
+    if (!g_pdl_ok) return -1;
+    if (out) out[0] = g_pdl_a2, out[1] = g_pdl_f50, out[2] = g_pdl_f54, out[3] = g_pdl_dmg;
+    uint64_t d = g_vel_frame_id - g_pdl_frame;
+    return d > 0x7fffffff ? 0x7fffffff : (int)d;
+}
 static void dmg_add_player_hook(Cpu *c) {
+    if ((int32_t)c->x[2] > 0 && exe_asked(&g_pdl_ask))
+        g_pdl_a2 = (int)c->x[1], g_pdl_f50 = (int32_t)c->x[5], g_pdl_f54 = (int32_t)c->x[6], g_pdl_dmg = (int32_t)c->x[2],
+        g_pdl_frame = g_vel_frame_id, g_pdl_ok = 1;
     int drop = fall_drop();
     int32_t dmg = (int32_t)c->x[2], f50 = (int32_t)c->x[5], f54 = (int32_t)c->x[6];
-    if (g_guard_set && g_vel_frame_id - g_guard_frame <= 3 && dmg > 0 &&
+    // (gparry reflect) with Link's isGuardJust bit raised (parrybits 32) BotW's own shield guard catches some melee swings
+    // first and sends Link a damage-0 hit of reaction 0xd (log: Link+0xc40 gained 0x4000, then addDamage damage 0 f54 0xd):
+    // its shield knockback. While guarding, that one is dropped and counted as a block too (the mod plays its own).
+    bool parry_kb = g_guard_parry && g_vel_frame_id - g_guard_parry_frame <= 3 && f54 == 0xd;  // (s288 port: gparry's key)
+    if (g_guard_set && g_vel_frame_id - g_guard_frame <= 3 && (dmg > 0 || parry_kb) &&
         !(f54 == 0x20 || f50 == 0x15 || (f50 == 0xf && (f54 == 0x19 || f54 == 0x1a)))) {  // (not a fall)
         // (s119) guard_set(2) = Mickey mode: a LARGE hit (f54 0x15 explosion / 0x16 / 0xa: the kinds BotW's player hit
         // handler FUN_7100bd59c8 reacts to without a life loss, DAMAGE_ARGS_RECON.md) keeps its type with damage 0, so BotW
@@ -2814,6 +2919,14 @@ static void dmg_add_player_hook(Cpu *c) {
             (unsigned long long)c->x[1], dmg, (int32_t)c->x[3], (int32_t)c->x[4], f50, f54, (int32_t)c->x[7],
             (unsigned long long)c->x[30], fall ? " -> FALL, dropped" : "");
         if (fall) c->x[2] = c->x[3] = c->x[4] = 0, c->x[5] = 0, c->x[6] = (uint32_t)-1;
+    }
+    if (g_knock_f54 > 0 && g_vel_frame_id - g_knock_frame <= 3 && (int32_t)c->x[2] == 0 && (int32_t)c->x[6] <= 0) {
+        LOG("[linkpos] knock: player addDamage a2 %llx f54 %d -> %#x, damage 0 (frame %llu)\n", (unsigned long long)c->x[1],
+            (int32_t)c->x[6], g_knock_f54, (unsigned long long)g_vel_frame_id);
+        c->x[6] = (uint32_t)g_knock_f54, g_knock_f54 = 0, g_knock_done++;
+    } else if (g_knock_f54 > 0 && g_vel_frame_id - g_knock_frame > 3) {
+        LOG("[linkpos] knock: no free player addDamage call in 3 frames (dropped)\n");
+        g_knock_f54 = 0;
     }
     hurt_scale(c);     // (s109 KH2 Defense, before the survive clamp sees the damage)
     survive_clamp(c);  // (s104 Second Chance / Once More)
@@ -2934,6 +3047,15 @@ static void die_note(Cpu *c, int kind) {
     const char *name = in_guest(a) ? actor_name(a) : NULL;
     static int log_all = -1;
     if (log_all < 0) log_all = env_int("SAVAGEWIND_LINK_DIE_LOG", 0);
+    static int trunk_log = -1;  // (the world section's SAVAGEWIND_LINK_WORLD_LOG, read here: that flag is declared further down)
+    if (trunk_log < 0) trunk_log = env_int("SAVAGEWIND_LINK_WORLD_LOG", 0);
+    if (trunk_log && name && (strstr(name, "_Trunk") || !strncmp(name, "Obj_TreeTrunk", 13))) {  // (logchop round 6: who kills a trunk)
+        LOG("[linkpos] trunkdie slot 54 (%s) %llx %s x1 %#llx x2 %#llx x3 %#llx lr %llx\n", kind == 1 ? "enemy" : "base",
+            (unsigned long long)a, name, (unsigned long long)c->x[1], (unsigned long long)c->x[2], (unsigned long long)c->x[3],
+            (unsigned long long)c->x[30]);
+        extern void kernel_log_guest_chain(void);
+        kernel_log_guest_chain();
+    }
     if (!name || !enemy_name_ok(name)) {
         if (log_all) LOG("[linkpos] die slot 54 (%s) %llx %s reason %d: not an enemy name, not queued\n",
                          kind == 1 ? "enemy" : "base", (unsigned long long)a, name ? name : "?", (int32_t)c->x[1]);
@@ -3092,6 +3214,7 @@ static void life_frame(void) {
 }
 
 static void break_note(uint64_t a);  // (breakables section, s55)
+static void swhit_note(uint64_t a);  // (swhit experiment, after the breakables)
 static void tree_note(uint64_t a), stasis_note(uint64_t a);  // (world section, s122)
 static void fire_note(uint64_t a);   // (fire world section, s59)
 
@@ -3193,6 +3316,33 @@ static void slate_xlu_probe(Cpu *c, uint64_t a) {
             fn == lfn ? ", same" : ", OVERRIDDEN", linkpos_link_state_word());
     }
 }
+// (linkfx) The torch's fire is LINK's: with Link drawn (live showlink 1) the lit torch burns, with him hidden it does not
+// (user tests; the torch's own getFinalOpacity was 1.0 then, Link's 0.0). So while the DLL asks (linkpos_link_fx, each frame;
+// it lapses LFX_FRESH game frames after the last call) Link is hidden through his MODEL only: his opacity factors stay 1 (his
+// effects keep their alpha), BotW's applyOpacityIfDirty runs as is, then the ModelMgr apply (1.9.0 0x710124cd10, the call
+// inside it) again with alpha 0 - as BotW does for a hidden actor (dither when +0x524 bit 2 is clear). GUESS: his other
+// effects show too while this is on (the DLL asks only while the torch is in his hand).
+#define LFX_FRESH 6
+static volatile uint64_t g_lfx_frame;
+void linkpos_link_fx(void) { g_lfx_frame = g_vel_frame_id; }
+static bool lfx_on(void) { return g_lfx_frame && g_vel_frame_id - g_lfx_frame <= LFX_FRESH; }
+static bool link_model_hide(Cpu *c, uint64_t a) {  // (opacity hook, Link) false = not possible here, hide him the old way
+    if (!SS->model_alpha_apply || !SS->model_mgr_got) return false;
+    uint64_t model = *(const uint64_t *)(uintptr_t)(a + 0x4e0), got = SS->model_mgr_got;
+    uint64_t mgrp = *(const uint64_t *)(uintptr_t)got, mgr = in_guest(mgrp) ? *(const uint64_t *)(uintptr_t)mgrp : 0;
+    if (!in_guest(model) || !in_guest(mgr) || !dispatch_lookup(SS->model_alpha_apply)) return false;
+    *(float *)(uintptr_t)(a + ACTOR_FINAL_OPACITY) = 1;
+    *(float *)(uintptr_t)(a + ACTOR_START_OPACITY) = 1;
+    *(uint8_t *)(uintptr_t)(a + ACTOR_OPACITY_DIRTY) = 1;
+    g_opacity_apply(c);
+    Cpu save = *c;
+    c->x[0] = mgr, c->x[1] = model, c->x[2] = (*(const uint32_t *)(uintptr_t)(a + 0x524) & 2) == 0, c->v[0] = 0;
+    guest_call(c, SS->model_alpha_apply);
+    *c = save;
+    static int said;
+    if (!said++) LOG("[linkpos] linkfx: Link hidden through his model only (his effects keep their alpha), model %llx\n", (unsigned long long)model);
+    return true;
+}
 static void slate_xlu_force(Cpu *c, uint64_t a) {
     if (g_slate_xlu != 1 || !SS->model_alpha_apply || !SS->model_mgr_got) return;
     uint64_t model = *(const uint64_t *)(uintptr_t)(a + 0x4e0), got = SS->model_mgr_got;
@@ -3241,16 +3391,49 @@ float linkpos_tbox_near(float pos[3], char *name, int n) {
     return d;
 }
 
+// (bowtorch) where each piece of Link's equipment is (world, its mMtx translation), noted from the opacity hook below
+#define GEARPOS_N 8
+static struct { char name[40]; float pos[3]; uint64_t fr; } g_gearpos[GEARPOS_N];
+static SRWLOCK g_gearpos_lock = SRWLOCK_INIT;
+static volatile uint64_t g_gearpos_ask;  // (s288 port: noted only while the DLL asks, see exe_asked)
+static void gearpos_note(uint64_t a) {
+    if (!exe_asked(&g_gearpos_ask)) return;
+    const char *n = actor_name(a);
+    if (!n) return;
+    const float *m = (const float *)(uintptr_t)(a + ACTOR_MTX);
+    AcquireSRWLockExclusive(&g_gearpos_lock);
+    int i, old = 0;
+    for (i = 0; i < GEARPOS_N && strncmp(g_gearpos[i].name, n, sizeof g_gearpos[i].name - 1); i++)
+        if (g_gearpos[i].fr < g_gearpos[old].fr) old = i;
+    if (i == GEARPOS_N) i = old, snprintf(g_gearpos[i].name, sizeof g_gearpos[i].name, "%s", n);
+    g_gearpos[i].pos[0] = m[3], g_gearpos[i].pos[1] = m[7], g_gearpos[i].pos[2] = m[11], g_gearpos[i].fr = g_vel_frame_id;
+    ReleaseSRWLockExclusive(&g_gearpos_lock);
+}
+// the world position of Link's equipment piece <name> seen in the last 2 frames (1), else 0
+int linkpos_gear_pos(const char *name, float out[3]) {  // (name NULL = only "keep noting")
+    exe_ask(&g_gearpos_ask);
+    int ok = 0;
+    AcquireSRWLockExclusive(&g_gearpos_lock);
+    for (int i = 0; i < GEARPOS_N && !ok; i++)
+        if (name && !strcmp(g_gearpos[i].name, name) && g_vel_frame_id - g_gearpos[i].fr <= 2) memcpy(out, g_gearpos[i].pos, 12), ok = 1;
+    ReleaseSRWLockExclusive(&g_gearpos_lock);
+    return ok;
+}
+
 static void cam_override_late(void);  // (s137 fps: the FPS camera's late rewrite, camera section below)
+static void heldfire_note(uint64_t a);  // (firelight: below, with the fire code)
 static void opacity_apply(Cpu *c) {
     g_opacity_calls++;
     cam_override_late();
     uint64_t a = c->x[0];
-    if (in_guest(a)) enemy_note(a), break_note(a), tree_note(a), stasis_note(a), fire_note(a), tbox_note(a), show_name_log(a);
+    if (in_guest(a)) enemy_note(a), break_note(a), swhit_note(a), tree_note(a), stasis_note(a), fire_note(a), tbox_note(a), show_name_log(a);
     if (g_hide && g_servo_actor && a == g_servo_actor) {
+        if (lfx_on() && link_model_hide(c, a)) return;  // (linkfx: the torch's fire is his)
         zero_opacity(a);
         if (g_opacity_hits++ == 0) LOG("[linkpos] opacity hook: hiding Link (actor %llx)\n", (unsigned long long)g_servo_actor);
     } else if (g_servo_actor && in_guest(a) && is_link_equip(a) && g_hide && !g_no_equip_hide) {
+        gearpos_note(a);  // (bowtorch: where it is, for linkpos_gear_pos)
+        heldfire_note(a);  // (firelight: a burning torch / branch in his hand lights Sora)
         if (slate_hip_wanted(a)) {  // (s94 b8-slatehip)
             slate_hip_apply(a);
             slate_xlu_probe(c, a);  // (s108 slatexlu)
@@ -3857,6 +4040,160 @@ bool linkpos_raycast(const float from[3], const float to[3], float hit[3], float
     return ok;
 }
 
+// (watersplash) BotW's own foot effect (dust / water splash) at a point, the way the game plays contact effects (1.9.0):
+//   record = FUN_710058194c(rec) (a 3x4 matrix at 0 = identity, normal (0,1,0) at +0x30, scale 1 at +0x3c, MaterialMasks at
+//   +0x60 / +0x78 (raw at +0x80), +0xb8 actor 0, +0xc0 2, +0xc4 flags 6), then FUN_71011f1ab4(mgr = *(*0x7101d66ab8), rec):
+//   if mgr+0xb0 and flags bit 2 -> FUN_71011f3708(*(mgr+0xa0), rec): type rec+0x90 0xf / 0x13 / 0x16 / 0x17 = a foot -> distance
+//   cull (40) -> FUN_71011f5ab4 sets the xlink properties of the system actor *(sub+0x30) (0 material, 1 sub-material, 3 speed
+//   = |rec+0x48|, 5 water depth; from the stepping actor rec+0xb8 when its in-water flag +0x68f is set: its water material
+//   +0x6fc / +0x700 and surface +0x6f0) and lifts the point to the water surface -> searchAndEmit("FootEffect") on the actor,
+//   else on the system actor -> the effect's position / scale (+0xa8 / +0xb4, flag +0x180 | 4). Flags 4 = the effect only
+//   (bit 1 = the contact sound path, FUN_71011f5fd8: off, Sora has his own steps).
+// Here: type 0xf, the point `pos`, velocity (0, -speed, 0), the material raw `mat`, NO stepping actor: FUN_71011f3708 returns
+// early for an actor whose xlink holder +0xcc lacks bits 0xc (Link is hidden by the mod), so the caller states the water
+// itself (mat = 8 Water, pos = on the surface) and the system actor plays it. Without an actor, FUN_71011f5ab4 never sets
+// the water depth property (5), so it kept the last contact's value (user test 3: splashes only sometimes): `depth` >= 0
+// sets it first on the system actor's ELink user (*(*(*(mgr+0xa0)+0x30)+0x568)+0x48) with FUN_7100f515ec(s0 value, x0 user,
+// w1 index) = xlink2 setPropertyValue (float).
+// Inside linkpos_frame only; false when it could not run. 1.8.2: no addresses = false.
+bool linkpos_foot_effect(const float pos[3], float speed, uint32_t mat, float depth) {
+    Cpu *c = g_in_frame ? kernel_current_cpu() : NULL;
+    if (!c || !pos || !SS->contact_fx_mgr_ptr || !dispatch_lookup(SS->contact_rec_init) || !dispatch_lookup(SS->contact_fx_play))
+        return false;
+    uint64_t gp = *(const uint64_t *)(uintptr_t)SS->contact_fx_mgr_ptr;
+    if (!in_guest(gp)) return false;
+    uint64_t mgr = *(const uint64_t *)(uintptr_t)gp;
+    if (!in_guest(mgr)) return false;
+    Cpu save = *c;
+    uint64_t sp = (c->sp - 0x300) & ~0xfull;  // the record (0x100 B) at sp + 0x100, below the live guest sp (s288 review: 0x100 slack)
+    uint64_t rec = sp + 0x100;
+    memset((void *)(uintptr_t)rec, 0, 0x100);
+    c->sp = sp;
+    c->x[0] = rec;
+    guest_call(c, SS->contact_rec_init);
+    uint8_t *r = (uint8_t *)(uintptr_t)rec;
+    *(float *)(r + 0x0c) = pos[0], *(float *)(r + 0x1c) = pos[1], *(float *)(r + 0x2c) = pos[2];  // (the matrix translation)
+    *(float *)(r + 0x48) = 0, *(float *)(r + 0x4c) = -speed, *(float *)(r + 0x50) = 0;            // (contact velocity)
+    *(uint32_t *)(r + 0x80) = mat;          // (the floor's MaterialMask raw)
+    // (test 6: splashes only on some steps, walking too, all requests played) FUN_71011f5ab4 also sets xlink property 4 =
+    // rec+0x54, 7 = rec+0x9c (1.0 for a Water floor), 0xe = rec+0xa0 (1.0 only while a global flag, +0x192f4 bit 0x8000000, is
+    // set): left at the init's 0 they made the effect GUESS zero-strength except while that flag was on. The game's contact
+    // code fills them; here 1.0 / 1.0 and the contact speed.
+    *(float *)(r + 0x54) = speed;
+    *(float *)(r + 0x9c) = 1.0f;
+    *(float *)(r + 0xa0) = 1.0f;
+    *(int32_t *)(r + 0x90) = 0xf;           // (contact type: a foot)
+    *(uint8_t *)(r + 0xc4) = 4;             // (the contact effect only)
+    *c = save;
+    if (depth >= 0 && SS->xlink_set_prop_f && dispatch_lookup(SS->xlink_set_prop_f)) {  // (the water depth property)
+        uint64_t sub = *(const uint64_t *)(uintptr_t)(mgr + 0xa0);
+        uint64_t sa = in_guest(sub) ? *(const uint64_t *)(uintptr_t)(sub + 0x30) : 0;
+        uint64_t xh = in_guest(sa) ? *(const uint64_t *)(uintptr_t)(sa + 0x568) : 0;
+        uint64_t user = in_guest(xh) ? *(const uint64_t *)(uintptr_t)(xh + 0x48) : 0;
+        if (in_guest(user)) {
+            c->sp = sp;
+            c->x[0] = user, c->x[1] = 5;
+            c->v[0] = 0;
+            memcpy(&c->v[0], &depth, 4);
+            guest_call(c, SS->xlink_set_prop_f);
+            *c = save;
+        }
+    }
+    c->sp = sp;
+    for (int i = 2; i < 9; i++) c->x[i] = 0;
+    c->x[0] = mgr, c->x[1] = rec;
+    guest_call(c, SS->contact_fx_play);
+    bool on = (c->x[0] & 1) != 0;  // (false = the manager's effects are off)
+    *c = save;
+    return on;
+}
+
+// (watersplash v8, user test 7: still only some steps splash) the same as linkpos_foot_effect's game path, but done here so
+// the result of every step is known: the xlink properties FUN_71011f5ab4 sets for a record without a stepping actor
+// (ints: 0 material, 1 = FUN_7101597fa0(*mat table, material, sub) sub-material index, 6 = 2, 0xc = 0; floats: 3 / 4 speed,
+// 5 water depth, 7 = 1 (Water), 0xd = 0, 0xe = 1) on the contact system actor's ELink user, then FUN_7101100bd0 (x8 Handle,
+// x0 actor, x1 "FootEffect") and, for a live handle (inst +0x20 == id), the position / scale / flag 4 as the game writes
+// them. Returns 0 = could not run, 1 = no effect emitted (handle 0), 2 = stale handle, 3 = emitted and placed.
+int linkpos_foot_effect2(const float pos[3], float speed, uint32_t mat, float depth) {
+    Cpu *c = g_in_frame ? kernel_current_cpu() : NULL;
+    if (!c || !pos || !SS->contact_fx_mgr_ptr || !SS->elink_emit || !dispatch_lookup(SS->elink_emit) ||
+        !dispatch_lookup(SS->xlink_set_prop_f) || !dispatch_lookup(SS->xlink_set_prop_i) || !dispatch_lookup(SS->mat_sub_index))
+        return 0;
+    uint64_t gp = *(const uint64_t *)(uintptr_t)SS->contact_fx_mgr_ptr;
+    uint64_t mgr = in_guest(gp) ? *(const uint64_t *)(uintptr_t)gp : 0;
+    uint64_t sub = in_guest(mgr) ? *(const uint64_t *)(uintptr_t)(mgr + 0xa0) : 0;
+    uint64_t sa = in_guest(sub) ? *(const uint64_t *)(uintptr_t)(sub + 0x30) : 0;
+    uint64_t xh = in_guest(sa) ? *(const uint64_t *)(uintptr_t)(sa + 0x568) : 0;
+    uint64_t user = in_guest(xh) ? *(const uint64_t *)(uintptr_t)(xh + 0x48) : 0;
+    uint64_t tp = SS->mat_table_ptr ? *(const uint64_t *)(uintptr_t)SS->mat_table_ptr : 0;  // (s288 port: a version without the row)
+    uint64_t mt = in_guest(tp) ? *(const uint64_t *)(uintptr_t)tp : 0;
+    if (!in_guest(user) || !in_guest(mt)) return 0;
+    Cpu save = *c;
+    uint64_t sp = (c->sp - 0x200) & ~0xfull;
+    int material = (int)(mat & 63u), submat = (int)((mat >> 6) & 15u);
+    // the sub-material index
+    c->sp = sp, c->x[0] = mt, c->x[1] = (uint64_t)material, c->x[2] = (uint64_t)submat;
+    guest_call(c, SS->mat_sub_index);
+    int subidx = (int)(uint32_t)c->x[0];
+    *c = save;
+    const int ip[][2] = {{0, material}, {1, subidx}, {6, 2}, {0xc, 0}};
+    for (int i = 0; i < 4; i++) {
+        c->sp = sp, c->x[0] = user, c->x[1] = (uint64_t)ip[i][0], c->x[2] = (uint64_t)(uint32_t)ip[i][1];
+        guest_call(c, SS->xlink_set_prop_i);
+        *c = save;
+    }
+    const struct { int idx; float v; } fp[] = {{3, speed}, {4, speed}, {5, depth}, {7, 1.0f}, {0xd, 0.0f}, {0xe, 1.0f}};
+    for (int i = 0; i < 6; i++) {
+        c->sp = sp, c->x[0] = user, c->x[1] = (uint64_t)fp[i].idx, c->v[0] = 0;
+        memcpy(&c->v[0], &fp[i].v, 4);
+        guest_call(c, SS->xlink_set_prop_f);
+        *c = save;
+    }
+    // emit
+    memset((void *)(uintptr_t)sp, 0, 0x40);
+    strcpy((char *)(uintptr_t)(sp + 0x10), "FootEffect");
+    c->sp = sp;
+    for (int i = 2; i < 8; i++) c->x[i] = 0;
+    c->x[0] = sa, c->x[1] = sp + 0x10, c->x[8] = sp;
+    guest_call(c, SS->elink_emit);
+    *c = save;
+    uint64_t inst = *(const uint64_t *)(uintptr_t)sp;
+    uint32_t id = *(const uint32_t *)(uintptr_t)(sp + 8);
+    if (!inst) return 1;
+    if (!in_guest(inst) || *(const uint32_t *)(uintptr_t)(inst + 0x20) != id) return 2;
+    uint8_t *e = (uint8_t *)(uintptr_t)inst;
+    *(float *)(e + 0xa8) = pos[0], *(float *)(e + 0xac) = pos[1], *(float *)(e + 0xb0) = pos[2];
+    *(float *)(e + 0xb4) = 1.0f, *(float *)(e + 0xb8) = 1.0f, *(float *)(e + 0xbc) = 1.0f;
+    *(uint32_t *)(e + 0x180) |= 4;
+    return 3;
+}
+
+// (kh2steps) linkpos_raycast + the hit's material: the helper's x4 = an out record (1.9.0 FUN_7100bd78a0 -> FUN_7100bd74a0:
+// if x4, *(int)(x4 + 8) = (int) RayCast[0x10] (the hit's MaterialMask raw value, GUESS: material in the low bits), *(u64)(x4 +
+// 0x10) = 0). *mat = that raw value (0 without a hit). Same rules as linkpos_raycast (inside linkpos_frame only).
+bool linkpos_raycast_mat(const float from[3], const float to[3], float hit[3], float normal[3], uint32_t *mat) {
+    Cpu *c = g_in_frame ? kernel_current_cpu() : NULL;
+    if (mat) *mat = 0;
+    if (!c || !dispatch_lookup(RC_GROUND_SEG)) return false;
+    Cpu save = *c;
+    uint64_t sp = (c->sp - 0xa0) & ~0xfull;        // g[0..15] as linkpos_raycast + the material record at +0x40 (0x18 bytes)
+    float *g = (float *)(uintptr_t)sp;
+    memset(g, 0, 0x60);
+    memcpy(g, from, 12), memcpy(g + 4, to, 12);
+    c->sp = sp;
+    c->x[0] = sp, c->x[1] = sp + 0x10, c->x[2] = sp + 0x20, c->x[3] = sp + 0x30, c->x[4] = sp + 0x40;
+    c->v[0] = 0;
+    guest_call(c, RC_GROUND_SEG);
+    bool ok = (c->x[0] & 1) != 0;
+    if (ok) {
+        if (hit) memcpy(hit, g + 8, 12);
+        if (normal) memcpy(normal, g + 12, 12);
+        if (mat) *mat = *(const uint32_t *)(uintptr_t)(sp + 0x48);
+    }
+    *c = save;
+    return ok;
+}
+
 // Game data flags (s55 levels, slice 2; recon/S54_HELPER_LV_LEVELS.md 4.2 A, S55_HELPER_LEVELS23.md): a guest call of
 // the gdt getters the way the Defeated counter FUN_7100ac6840 calls getS32 (disassembly 0x7100ac68d8..f4):
 // x0 = TriggerParam [[gdt::Manager + 0xbe0]], x1 = &out, x2 = &sead::SafeString {vtable [GOT 0x7101c05290] + 0x10,
@@ -3948,6 +4285,114 @@ int linkpos_pouch_remove(const char *name) {
     *c = save;
     if (!g_npouch_rm++) LOG("[linkpos] first pouch remove: %s (PauseMenuDataMgr %llx)\n", name, (unsigned long long)mgr);
     return 1;
+}
+
+// (eqtabs) the KH2 Equipment picker's BotW Weapons tab: equip one weapon-pouch item the way BotW's own quick weapon selector
+// does (1.9.0 0x7100e25af4): PauseMenuDataMgr equip(mgr, item) (pouch_equip), then the player request(item)
+// (player_equip_req). item = a PouchItem* the DLL read from the pouch list; it must still be in that list with type 0 (a
+// melee weapon) and the same actor name (+0x30 SafeString cstr). Only inside linkpos_frame (guest calls).
+// 1 = called, -1 = refused (no site for this version / not now), -2 = no PauseMenuDataMgr yet, -3 = item gone / changed.
+// (eqarmor) the same for the armor pieces: types 4 / 5 / 6 (ArmorHead / Upper / Lower; the request takes them at 0x7100e88fb0's
+// case 4..6 -> 0x7100b25018). linkpos_pouch_equip accepts types 0 and 4..6; linkpos_weapon_equip keeps type 0 only.
+static uint64_t g_nwpn_equip, g_nwpn_equip_refused;
+static int pouch_equip_(uint64_t item, const char *name, bool armor_ok);
+int linkpos_weapon_equip(uint64_t item, const char *name) { return pouch_equip_(item, name, false); }
+int linkpos_pouch_equip(uint64_t item, const char *name) { return pouch_equip_(item, name, true); }
+static int pouch_equip_(uint64_t item, const char *name, bool armor_ok) {
+    Cpu *c = g_in_frame ? kernel_current_cpu() : NULL;
+    uint64_t f_eq = SS->pouch_equip, f_req = SS->player_equip_req, got = PMDM_GOT;
+    uint64_t pp = in_guest(got) ? *(const uint64_t *)(uintptr_t)got : 0;
+    uint64_t mgr = in_guest(pp) ? *(const uint64_t *)(uintptr_t)pp : 0;
+    if (!c || !f_eq || !f_req || !name || !dispatch_lookup(f_eq) || !dispatch_lookup(f_req)) {
+        if (!g_nwpn_equip_refused++)
+            LOG("[linkpos] weapon equip refused (%s)\n", !f_eq || !f_req ? "no site for this game version" : !c ? (g_in_frame ? "no guest cpu" : "outside linkpos_frame")
+                                                       : !name ? "no name" : "no function");
+        return -1;
+    }
+    if (!in_guest(mgr)) return -2;
+    // the item must still be in the pouch list (mgr +0x68 sead::OffsetList, node offset +0x7c = 8: node = item + 8)
+    if (readable(mgr + 0x68, 0x18) != 0x18 || *(const int32_t *)(uintptr_t)(mgr + 0x7c) != 8) return -3;
+    uint64_t head = mgr + 0x68, n = *(const uint64_t *)(uintptr_t)(head + 8);
+    bool found = false;
+    for (int k = 0; k < 500 && in_guest(n) && n != head; k++) {
+        if (n - 8 == item) { found = true; break; }
+        n = *(const uint64_t *)(uintptr_t)(n + 8);
+    }
+    char nm[64];
+    int ty = found && readable(item, 0x90) == 0x90 ? *(const int32_t *)(uintptr_t)(item + 0x18) : -1;
+    if (!found || !(ty == 0 || (armor_ok && ty >= 3 && ty <= 6)) || !wpn_item_name(item, nm, sizeof nm) || strcmp(nm, name)) {
+        LOG("[linkpos] weapon equip: %s item %llx not in the pouch any more (found %d)\n", name, (unsigned long long)item, (int)found);
+        return -3;
+    }
+    Cpu save = *c;
+    c->sp = (c->sp - 0x100) & ~0xfull;  // (scratch below the live guest sp, as linkpos_pouch_remove)
+    c->x[0] = mgr, c->x[1] = item;
+    guest_call(c, f_eq);
+    *c = save;
+    c->sp = (c->sp - 0x100) & ~0xfull;
+    c->x[0] = item;
+    guest_call(c, f_req);
+    uint64_t r = c->x[0];
+    *c = save;
+    g_nwpn_equip++;
+    LOG("[linkpos] weapon equip #%llu: %s (item %llx, life %d, equipped flag %d, player request %s)\n", (unsigned long long)g_nwpn_equip, name,
+        (unsigned long long)item, *(const int32_t *)(uintptr_t)(item + 0x20), *(const uint8_t *)(uintptr_t)(item + 0x24),
+        (r & 1) ? "sent" : "REFUSED (no player equipment object)");
+    return 1;
+}
+
+// (eqarmor) take one piece off, the way BotW's quick selector's "none" entry does (1.9.0 0x7100e25948): PauseMenuDataMgr
+// unequip(mgr, item) 0x7100d9a590 on the equipped item of that type, then the player's wanted name for the slot = the
+// pouch's default name for the type (0x7100d940c4(mgr, type), e.g. Armor_Default_Upper) via 0x7100cbe4d0(player, name,
+// 0x1e, -1, &0); player = 0x7100cc6fd0([PlayerInfo]). type 0 / 4..6. 1 = done, 0 = nothing of that type equipped,
+// -1 = refused (no site / not now), -2 = no PauseMenuDataMgr / player.
+int linkpos_pouch_unequip(int type) {
+    Cpu *c = g_in_frame ? kernel_current_cpu() : NULL;
+    uint64_t f_un = SS->pouch_unequip, f_dn = SS->pouch_dflt_name, f_set = SS->player_equip_set, f_pl = SS->player_from_info;
+    uint64_t pinfo = SS->player_info, got = PMDM_GOT;
+    uint64_t pp = in_guest(got) ? *(const uint64_t *)(uintptr_t)got : 0;
+    uint64_t mgr = in_guest(pp) ? *(const uint64_t *)(uintptr_t)pp : 0;
+    if (!c || !f_un || !f_dn || !f_set || !f_pl || !pinfo || !(type == 0 || (type >= 3 && type <= 6)) || !dispatch_lookup(f_un) ||
+        !dispatch_lookup(f_dn) || !dispatch_lookup(f_set) || !dispatch_lookup(f_pl)) {
+        LOG("[linkpos] pouch unequip %d refused (%s)\n", type, !f_un || !f_set ? "no site for this game version" : !c ? (g_in_frame ? "no guest cpu" : "outside linkpos_frame") : "bad type / no function");
+        return -1;
+    }
+    uint64_t info = in_guest(pinfo) ? *(const uint64_t *)(uintptr_t)pinfo : 0;
+    if (!in_guest(mgr) || !in_guest(info)) return -2;
+    if (readable(mgr + 0x68, 0x18) != 0x18 || *(const int32_t *)(uintptr_t)(mgr + 0x7c) != 8) return -2;
+    uint64_t head = mgr + 0x68, n = *(const uint64_t *)(uintptr_t)(head + 8), item = 0;
+    for (int k = 0; k < 500 && in_guest(n) && n != head; k++) {
+        uint64_t it = n - 8;
+        if (readable(it, 0x90) == 0x90 && *(const int32_t *)(uintptr_t)(it + 0x18) == type && *(const uint8_t *)(uintptr_t)(it + 0x24)) { item = it; break; }
+        n = *(const uint64_t *)(uintptr_t)(n + 8);
+    }
+    if (!item) { LOG("[linkpos] pouch unequip: nothing of type %d equipped\n", type); return 0; }
+    char nm[64] = "?";
+    wpn_item_name(item, nm, sizeof nm);
+    Cpu save = *c;
+    uint64_t sp = (c->sp - 0x100) & ~0xfull;
+    c->sp = sp;
+    c->x[0] = mgr, c->x[1] = item;
+    guest_call(c, f_un);
+    *c = save, c->sp = sp;
+    c->x[0] = info;
+    guest_call(c, f_pl);
+    uint64_t player = c->x[0];
+    *c = save, c->sp = sp;
+    c->x[0] = mgr, c->x[1] = (uint64_t)type;
+    guest_call(c, f_dn);
+    uint64_t dname = c->x[0];
+    *c = save;
+    if (in_guest(player) && in_guest(dname)) {
+        c->sp = sp;
+        memset((void *)(uintptr_t)(sp + 0x20), 0, 8);  // (the 8-byte modifier, 0)
+        c->x[0] = player, c->x[1] = dname, c->x[2] = 0x1e, c->x[3] = 0xffffffffu, c->x[4] = sp + 0x20;
+        guest_call(c, f_set);
+        *c = save;
+    }
+    LOG("[linkpos] pouch unequip: %s (type %d, item %llx) taken off; player %llx, default name %llx%s\n", nm, type, (unsigned long long)item,
+        (unsigned long long)player, (unsigned long long)dname, in_guest(player) && in_guest(dname) ? "" : " - NO player request");
+    return in_guest(player) && in_guest(dname) ? 1 : 2;  // (s288 review: 2 = the pouch says off, the model may still be worn)
 }
 
 // s99 b14-runes: choose the Sheikah Slate rune like BotW's own wheel does (recon/S99_HELPER_RUNES.md). The wheel screen's
@@ -4109,6 +4554,120 @@ int linkpos_break_hit(uint64_t actor, int n) {
     return after;
 }
 
+// ---- (swhit) hit-switches: the Goron cannon lever (BotW AI SwitchHit, headless Ghidra on 1.9.0).
+// SwitchHit's calc (0x7100a87910) takes "hit" from an attack contact OR *(actor+0x708)+0x1c > 0: a per-frame "attack received"
+// value (tested: BotW clears it by the next frame itself). linkpos_switch_hit writes v there for ONE frame; the next linkpos
+// frame puts the old value back only if it is still ours (in the test BotW had always cleared it already).
+#define SWHIT_MAX 8
+#define ACTOR_SWHIT_OBJ 0x708
+#define SWHIT_VAL 0x1c
+typedef struct { LinkposBreakable b; uint64_t vt, seen; } SwHit;
+static SwHit g_swhit[SWHIT_MAX];
+static int g_nswhit;
+static SRWLOCK g_swhit_lock = SRWLOCK_INIT;
+static struct { uint64_t addr, frame, actor, vt; float old, v; int n; } g_swhit_put;  // (one pending write; game thread)
+static void swhit_frame(void);
+
+// (shrineswitch) the shrines' crystal switches are actors "SwitchHit" / "SwitchHitOnce" (Dungeon056_Static.smubin; their packs
+// name the same SwitchHit AI as the lever: user report "Sora couldn't hit the switch with his Keyblade" in Dungeon056). The DLL
+// decides which ones it hits (sora.c swhitdgn); the list holds all three kinds.
+static bool swhit_name(const char *name) {
+    return !strncmp(name, "FldObj_GoronCannonSwitch", 24) || !strcmp(name, "SwitchHit") || !strcmp(name, "SwitchHitOnce");
+}
+// (s288 port) the +0x708 / +0x1c field was found on 1.9.0 only (sora_sites.h: the 59 field offsets checked on 1.8.2 do not
+// include it): another game version lists no switch and writes nothing (the Keyblade bounces off as before).
+static volatile uint64_t g_swhit_ask;  // (s288 port: listed only while the DLL asks, see exe_asked)
+static bool swhit_version_ok(void) {
+    static int ok = -1;
+    if (ok < 0) {
+        ok = g_game_version && !strcmp(g_game_version, "1.9.0");
+        if (!ok) LOG("[linkpos] swhit: game version %s is not 1.9.0: no switch hits (field +0x708 checked on 1.9.0 only)\n", g_game_version ? g_game_version : "?");
+    }
+    return ok;
+}
+static void swhit_note(uint64_t a) {  // (opacity hook, any thread)
+    if (!exe_asked(&g_swhit_ask) || !g_servo_actor || a == g_servo_actor) return;
+    const char *name = actor_name(a);
+    if (!name || !swhit_name(name) || link_dist(a) > BREAK_DIST) return;
+    const float *m = (const float *)(uintptr_t)(a + ACTOR_MTX);
+    AcquireSRWLockExclusive(&g_swhit_lock);
+    int i;
+    for (i = 0; i < g_nswhit && g_swhit[i].b.actor != a; i++) {}
+    bool fresh = i == g_nswhit;
+    if (fresh) {
+        if (g_nswhit == SWHIT_MAX) { ReleaseSRWLockExclusive(&g_swhit_lock); return; }
+        SwHit *e = &g_swhit[g_nswhit++];
+        memset(e, 0, sizeof *e);
+        e->b.actor = a, e->vt = *(const uint64_t *)(uintptr_t)a;
+        snprintf(e->b.name, sizeof e->b.name, "%s", name);
+    }
+    SwHit *e = &g_swhit[i];
+    e->seen = g_vel_frame_id;
+    e->b.pos[0] = m[3], e->b.pos[1] = m[7], e->b.pos[2] = m[11];
+    SwHit copy = *e;
+    ReleaseSRWLockExclusive(&g_swhit_lock);
+    if (fresh) {
+        uint64_t o = readable(a + ACTOR_SWHIT_OBJ, 8) == 8 ? *(const uint64_t *)(uintptr_t)(a + ACTOR_SWHIT_OBJ) : 0;
+        float v = in_guest(o) && readable(o + SWHIT_VAL, 4) == 4 ? *(const float *)(uintptr_t)(o + SWHIT_VAL) : -1;
+        LOG("[linkpos] swhit: %llx %s at %.2f %.2f %.2f, +0x708 %llx (+0x1c = %g)\n", (unsigned long long)a, copy.b.name,
+            copy.b.pos[0], copy.b.pos[1], copy.b.pos[2], (unsigned long long)o, v);
+    }
+}
+
+int linkpos_switches(LinkposBreakable *out, int max) {  // (drawn this or the last frame; max 0 = only "keep listing")
+    if (!swhit_version_ok()) return 0;
+    exe_ask(&g_swhit_ask);
+    AcquireSRWLockExclusive(&g_swhit_lock);
+    int n = 0;
+    for (int i = 0; i < g_nswhit && n < max; i++)
+        if (g_vel_frame_id - g_swhit[i].seen <= 1) out[n++] = g_swhit[i].b;
+    ReleaseSRWLockExclusive(&g_swhit_lock);
+    return n;
+}
+
+// *(actor+0x708)+0x1c = v for this frame (only inside linkpos_frame, on a switch seen this or the last frame, unchanged vtable,
+// not being deleted). 1 = written, 0 = refused.
+int linkpos_switch_hit(uint64_t actor, float v) {
+    if (!g_in_frame || g_swhit_put.addr || !swhit_version_ok()) return 0;
+    bool ok = false;
+    AcquireSRWLockExclusive(&g_swhit_lock);
+    for (int i = 0; i < g_nswhit; i++)
+        if (g_swhit[i].b.actor == actor)
+            ok = g_vel_frame_id - g_swhit[i].seen <= 1 && *(const uint64_t *)(uintptr_t)actor == g_swhit[i].vt &&
+                 *(const uint8_t *)(uintptr_t)(actor + BASEPROC_STATE) != 3;
+    ReleaseSRWLockExclusive(&g_swhit_lock);
+    if (!ok || readable(actor + ACTOR_SWHIT_OBJ, 8) != 8) return 0;
+    uint64_t o = *(const uint64_t *)(uintptr_t)(actor + ACTOR_SWHIT_OBJ);
+    if (!in_guest(o) || readable(o + SWHIT_VAL, 4) != 4) return 0;
+    float *f = (float *)(uintptr_t)(o + SWHIT_VAL);
+    g_swhit_put.actor = actor, g_swhit_put.vt = *(const uint64_t *)(uintptr_t)actor;  // (s288 review: checked at the put-back)
+    g_swhit_put.addr = o + SWHIT_VAL, g_swhit_put.old = *f, g_swhit_put.v = v, g_swhit_put.frame = g_vel_frame_id, g_swhit_put.n++;
+    *f = v;
+    LOG("[linkpos] swhit: hit %llx: +0x708 %llx +0x1c %g -> %g (#%d)\n", (unsigned long long)actor, (unsigned long long)o, g_swhit_put.old, v,
+        g_swhit_put.n);
+    return 1;
+}
+
+static void swhit_frame(void) {  // (game thread, once a frame: the written value back after its frame; drop stale entries)
+    if (g_swhit_put.addr && g_vel_frame_id != g_swhit_put.frame) {
+        float *f = (float *)(uintptr_t)g_swhit_put.addr;
+        uint64_t a = g_swhit_put.actor;  // (s288 review: the switch must still be there and still own that slot)
+        bool same = readable(a, 8) == 8 && *(const uint64_t *)(uintptr_t)a == g_swhit_put.vt && readable(a + ACTOR_SWHIT_OBJ, 8) == 8 &&
+                    *(const uint64_t *)(uintptr_t)(a + ACTOR_SWHIT_OBJ) + SWHIT_VAL == g_swhit_put.addr;
+        if (same && readable(g_swhit_put.addr, 4) == 4) {
+            float now = *f;
+            if (now == g_swhit_put.v) *f = g_swhit_put.old;
+            LOG("[linkpos] swhit: next frame +0x1c was %g (%s), now %g\n", now, now == g_swhit_put.v ? "ours: put back" : "BotW changed it", *f);
+        }
+        g_swhit_put.addr = 0;
+    }
+    AcquireSRWLockExclusive(&g_swhit_lock);
+    for (int i = 0; i < g_nswhit;)
+        if (g_vel_frame_id - g_swhit[i].seen > BREAK_STALE) g_swhit[i] = g_swhit[--g_nswhit];
+        else i++;
+    ReleaseSRWLockExclusive(&g_swhit_lock);
+}
+
 static void break_frame(void) {  // (game thread, once a frame: drop stale entries)
     AcquireSRWLockExclusive(&g_brk_lock);
     for (int i = 0; i < g_nbrk;)
@@ -4242,8 +4801,229 @@ static void tree_dbg(uint64_t a) {
     LOG("%s\n", b);
 }
 
+// (logchop diag) user: "Sora's keyblade cut knocked tree down into wood ... it just deflects like he's hitting a wall".
+// A felled tree is a new actor Obj_Tree*_Trunk (ActorInfo; pack: AIProgram TreeWeapon = WeaponRootAI ... LumberjackTree
+// node named LumberjackFallenTree + ChanegToLog, DamageParam LumberjackTree, DropTable Obj_FireWoodBundle) that tree_note
+// skips (profile not MapDynamic, or the LumberjackTree node not in mode 0). First TRUNK_DBG_MAX of them within TREE_DIST:
+// profile, life, damage manager vtable, the AI tree to depth 3 (vtables, actor at +8, child counts) and, for a
+// LumberjackTree node, its mode +0x240 / +0x24a..+0x24c. With SAVAGEWIND_LINK_WORLD_LOG=1 (stops itself).
+#define TRUNK_DBG_MAX 6
+static volatile LONG g_trunk_dbg_n;
+static uint64_t g_trunk_dbg_seen[TRUNK_DBG_MAX];
+static int trunk_ai_dump(char *b, int len, int cap, uint64_t node, uint64_t a, int depth) {
+    if (!in_guest(node) || len >= cap - 96) return len;
+    uint64_t vt = *(const uint64_t *)(uintptr_t)node;
+    uint32_t cnt = *(const uint32_t *)(uintptr_t)(node + TAI_NCHILD);
+    len += snprintf(b + len, cap - len, " [d%d %llx vt %llx%s act%s n%u", depth, (unsigned long long)node, (unsigned long long)vt,
+                    vt == TREE_AI_VT ? " =LumberjackTree" : "", *(const uint64_t *)(uintptr_t)(node + AI_ACTOR) == a ? "=me" : "", cnt);
+    if (vt == TREE_AI_VT)
+        len += snprintf(b + len, cap - len, " mode %d 24a %d 24b %d 24c %d", *(const int8_t *)(uintptr_t)(node + TAI_MODE),
+                        *(const uint8_t *)(uintptr_t)(node + 0x24a), *(const uint8_t *)(uintptr_t)(node + 0x24b),
+                        *(const uint8_t *)(uintptr_t)(node + TAI_FELLED));
+    len += snprintf(b + len, cap - len, "]");
+    uint64_t kids = *(const uint64_t *)(uintptr_t)(node + TAI_CHILDREN);
+    if (depth >= 3 || !cnt || cnt > 64 || !in_guest(kids)) return len;
+    for (uint32_t k = 0; k < cnt && k < 8; k++) len = trunk_ai_dump(b, len, cap, *(const uint64_t *)(uintptr_t)(kids + 8ull * k), a, depth + 1);
+    return len;
+}
+static void trunk_dbg(uint64_t a) {
+    if (!g_world_log || g_trunk_dbg_n >= TRUNK_DBG_MAX || !g_servo_actor || link_dist(a) > TREE_DIST) return;
+    const char *name = actor_name(a);
+    if (!name || !(strstr(name, "_Trunk") || !strncmp(name, "Obj_TreeTrunk", 13) || !strncmp(name, "Obj_TreeLog", 11))) return;
+    for (int i = 0; i < TRUNK_DBG_MAX; i++) if (g_trunk_dbg_seen[i] == a) return;
+    LONG k = InterlockedIncrement(&g_trunk_dbg_n) - 1;
+    if (k >= TRUNK_DBG_MAX) return;
+    g_trunk_dbg_seen[k] = a;
+    uint64_t ap = *(const uint64_t *)(uintptr_t)(a + ACTOR_PARAM);
+    uint64_t pc = in_guest(ap) ? *(const uint64_t *)(uintptr_t)(ap + AP_PROFILE_CSTR) : 0;
+    uint64_t dm = *(const uint64_t *)(uintptr_t)(a + ACTOR_DAMAGE_MGR);
+    char b[1400];
+    int len = snprintf(b, sizeof b, "[linkpos] trunkdbg %s %llx profile %s life %d dm %llx (vt %llx):", name, (unsigned long long)a,
+                       in_guest(pc) ? (const char *)(uintptr_t)pc : "?", *(const int32_t *)(uintptr_t)(a + ACTOR_LIFE),
+                       (unsigned long long)dm, in_guest(dm) ? (unsigned long long)*(const uint64_t *)(uintptr_t)dm : 0ull);
+    len = trunk_ai_dump(b, len, (int)sizeof b, *(const uint64_t *)(uintptr_t)(a + ACTOR_ROOT_AI), a, 0);
+    LOG("%s\n", b);
+}
+
+// (logchop) AI-tree walks: the LumberjackTree node of trunk `a` (tw_find_lj) / an AI node of `a` by vtable (tw_find_vt).
+// (s288 port: the round-2 research watch trunk_watch / SAVAGEWIND_LINK_TRUNK_WATCH is dropped; these two stay for trunk_note / the chop.)
+static uint64_t tw_find_lj(uint64_t node, uint64_t a, int depth) {
+    if (!in_guest(node)) return 0;
+    if (*(const uint64_t *)(uintptr_t)node == TREE_AI_VT && *(const uint64_t *)(uintptr_t)(node + AI_ACTOR) == a) return node;
+    if (depth >= 3) return 0;
+    uint32_t cnt = *(const uint32_t *)(uintptr_t)(node + TAI_NCHILD);
+    uint64_t kids = *(const uint64_t *)(uintptr_t)(node + TAI_CHILDREN);
+    if (!cnt || cnt > 64 || !in_guest(kids)) return 0;
+    for (uint32_t k = 0; k < cnt && k < TAI_KIDS_MAX; k++) {
+        uint64_t r = tw_find_lj(*(const uint64_t *)(uintptr_t)(kids + 8ull * k), a, depth + 1);
+        if (r) return r;
+    }
+    return 0;
+}
+static uint64_t tw_find_vt(uint64_t node, uint64_t a, uint64_t vt, int depth) {  // (logchop) an AI node of `a` by vtable
+    if (!vt || !in_guest(node)) return 0;
+    if (*(const uint64_t *)(uintptr_t)node == vt && *(const uint64_t *)(uintptr_t)(node + AI_ACTOR) == a) return node;
+    if (depth >= 4) return 0;
+    uint32_t cnt = *(const uint32_t *)(uintptr_t)(node + TAI_NCHILD);
+    uint64_t kids = *(const uint64_t *)(uintptr_t)(node + TAI_CHILDREN);
+    if (!cnt || cnt > 64 || !in_guest(kids)) return 0;
+    for (uint32_t k = 0; k < cnt && k < TAI_KIDS_MAX; k++) {
+        uint64_t r = tw_find_vt(*(const uint64_t *)(uintptr_t)(kids + 8ull * k), a, vt, depth + 1);
+        if (r) return r;
+    }
+    return 0;
+}
+
+// (logchop) round 2 (trunkwatch, Link chopping a felled log with an axe, Sora mode off): BotW turns a trunk into
+// Obj_FireWoodBundle on ONE weapon hit (no life counts down). (Its actor +0x71c bit 0x2000 flips then, but on the bundles
+// too: a generic flag, setting it chops nothing.) linkpos_trunk_hit does what the game's chop does (below).
+#define TRUNK_MAX 16
+#define TRUNK_KILL_VSLOT 54  // (Actor::killWithDropsAndEffects, breakables section)
+typedef struct { LinkposTrunk t; uint64_t vt, seen, born_ms; bool killed; } TrunkE;  // (s288 review: killed = one chop only)
+static TrunkE g_trunk[TRUNK_MAX];
+static int g_ntrunk;
+static volatile uint64_t g_trunk_ask;  // (s288 port: listed only while the DLL asks, see exe_asked)
+static void trunk_note(uint64_t a) {
+    if (!exe_asked(&g_trunk_ask) || !g_servo_actor || link_dist(a) > TREE_DIST) return;
+    const char *name = actor_name(a);
+    if (!name || !(strstr(name, "_Trunk") || !strncmp(name, "Obj_TreeTrunk", 13) || !strncmp(name, "Obj_TreeLog", 11))) return;
+    uint64_t ai = tw_find_lj(*(const uint64_t *)(uintptr_t)(a + ACTOR_ROOT_AI), a, 0);
+    if (!ai || *(const int8_t *)(uintptr_t)(ai + TAI_MODE) != 1) return;
+    const float *m = (const float *)(uintptr_t)(a + ACTOR_MTX);
+    AcquireSRWLockExclusive(&g_world_lock);
+    int i;
+    for (i = 0; i < g_ntrunk && g_trunk[i].t.actor != a; i++) {}
+    if (i == g_ntrunk) {
+        int old = -1;  // (full: reuse the stalest)
+        if (g_ntrunk < TRUNK_MAX) i = g_ntrunk++;
+        else for (int k = 0; k < TRUNK_MAX; k++) if (old < 0 || g_trunk[k].seen < g_trunk[old].seen) old = k, i = k;
+        memset(&g_trunk[i], 0, sizeof g_trunk[i]);
+        g_trunk[i].t.actor = a, g_trunk[i].vt = *(const uint64_t *)(uintptr_t)a, g_trunk[i].born_ms = GetTickCount64();
+        snprintf(g_trunk[i].t.name, sizeof g_trunk[i].t.name, "%s", name);
+        if (g_world_log) LOG("[linkpos] trunk: %llx %s at %.2f %.2f %.2f axis %.2f %.2f %.2f\n", (unsigned long long)a, name,
+                             m[3], m[7], m[11], m[1], m[5], m[9]);
+    }
+    TrunkE *e = &g_trunk[i];
+    e->seen = g_vel_frame_id;
+    e->t.age_ms = (int32_t)(GetTickCount64() - e->born_ms);
+    e->t.pos[0] = m[3], e->t.pos[1] = m[7], e->t.pos[2] = m[11];
+    float l = sqrtf(m[1] * m[1] + m[5] * m[5] + m[9] * m[9]);
+    if (l > 1e-4f) e->t.axis[0] = m[1] / l, e->t.axis[1] = m[5] / l, e->t.axis[2] = m[9] / l;
+    ReleaseSRWLockExclusive(&g_world_lock);
+}
+int linkpos_trunks(LinkposTrunk *out, int max) {  // (drawn this or the last frame; max 0 = only "keep listing")
+    exe_ask(&g_trunk_ask);
+    AcquireSRWLockExclusive(&g_world_lock);
+    int n = 0;
+    for (int i = 0; i < g_ntrunk && n < max; i++)
+        if (g_vel_frame_id - g_trunk[i].seen <= 1) out[n++] = g_trunk[i].t;
+    ReleaseSRWLockExclusive(&g_world_lock);
+    return n;
+}
+int linkpos_trunk_hit(uint64_t actor) {
+    if (!g_in_frame) return -1;
+    if (!SS->drop_request || !SS->trunk_chop_vt) {  // (s288 port: both rows are 1.9.0 only; without the drop request the kill leaves no wood)
+        static int said;
+        if (!said++) LOG("[linkpos] trunk hit refused: this game version has no drop_request / trunk_chop_vt row (1.9.0 only)\n");
+        return -1;
+    }
+    int ok = -1;
+    char name[48] = "";
+    AcquireSRWLockExclusive(&g_world_lock);
+    for (int i = 0; i < g_ntrunk; i++) {
+        TrunkE *e = &g_trunk[i];
+        if (e->t.actor != actor) continue;
+        if (!e->killed && g_vel_frame_id - e->seen <= 1 && *(const uint64_t *)(uintptr_t)actor == e->vt &&
+            *(const uint8_t *)(uintptr_t)(actor + BASEPROC_STATE) != 3) {
+            memcpy(name, e->t.name, sizeof name), ok = 1;
+        }
+        break;
+    }
+    ReleaseSRWLockExclusive(&g_world_lock);
+    // (round 5) the +0x71c bit was a side effect (set on the wood bundles too, and on a settled trunk it chopped nothing);
+    // the trunk's drop table is Obj_FireWoodBundle, so the chop = its own killWithDropsAndEffects (actor vslot 54, x1 0), the
+    // call BotW's damage step makes for a broken breakable (breakables section): break effect, vanish, drops.
+    // (round 6, the game's own chop: f_700094e5a0, guest lr 700094ebd0, read in generated/main) before the delete it
+    // (1) puts the drop point (the trunk's mMtx x an offset) into a vec, (2) FUN_7100bdc1f0(actor, out*, pos*) = *out = pos,
+    // the actor's drop object (vslot 134, +0x430) checked by type, its flag +0xc |= 0x80 = drops wanted, (3) vslot 135
+    // (+0x438) -> if not null, its +4 = 1, (4) FUN_7100aa5330(actor, 0) = slot 54 (+0x1b0) unless being deleted. Same here,
+    // with the drop point = the trunk's own position (GUESS: the offset only spreads the bundles).
+    // (s288 review) the kill only after a real drop request into the node's destination: else the trunk vanishes with no wood
+    bool dropped = false;
+    if (ok > 0 && SS->drop_request && dispatch_lookup(SS->drop_request)) {
+        Cpu *c = kernel_current_cpu();
+        uint64_t vt = *(const uint64_t *)(uintptr_t)actor;
+        uint64_t lj0 = in_guest(vt) ? tw_find_vt(*(const uint64_t *)(uintptr_t)(actor + ACTOR_ROOT_AI), actor, SS->trunk_chop_vt, 0) : 0;
+        if (c && in_guest(vt) && lj0 && in_guest(*(const uint64_t *)(uintptr_t)(lj0 + 0xe8))) {
+            Cpu save = *c;
+            uint64_t sp = (c->sp - 0x80) & ~0xfull;
+            float *g = (float *)(uintptr_t)sp;  // g[0..2] the point, g[4..6] the copy
+            const float *m = (const float *)(uintptr_t)(actor + ACTOR_MTX);
+            memset(g, 0, 0x40);
+            // (test 7: request set, slot 135 flagged, still no wood: the copy went to our scratch, so the drop object had no
+            // point) f_700094e5a0's this (this+8 = the actor): the point = mMtx x the node's local offset at +0x274 (stored
+            // back there), the copy goes to the pointer at node +0xe8. (test 8: NOT the LumberjackTree node - garbage there;
+            // f_700094e5a0 is slot 32 of vtable 0x7101c711a8 (Ghidra: DATA ref 7101c712a8) = the LumberjackTree node's
+            // child (trunkdbg d3, GUESS the ChanegToLog action).)
+            uint64_t lj = tw_find_vt(*(const uint64_t *)(uintptr_t)(actor + ACTOR_ROOT_AI), actor, SS->trunk_chop_vt, 0);
+            uint64_t dst = lj ? *(const uint64_t *)(uintptr_t)(lj + 0xe8) : 0;
+            if (lj) {
+                float *o = (float *)(uintptr_t)(lj + 0x274);
+                float ox = o[0], oy = o[1], oz = o[2];
+                if (!(fabsf(ox) < 50 && fabsf(oy) < 50 && fabsf(oz) < 50)) ox = oy = oz = 0;  // (not an offset: the trunk's origin)
+                o[0] = m[0] * ox + m[1] * oy + m[2] * oz + m[3];
+                o[1] = m[4] * ox + m[5] * oy + m[6] * oz + m[7];
+                o[2] = m[8] * ox + m[9] * oy + m[10] * oz + m[11];
+                LOG("[linkpos] trunk drop point: node %llx offset %.2f %.2f %.2f -> %.2f %.2f %.2f, destination +0xe8 %llx\n",
+                    (unsigned long long)lj, ox, oy, oz, o[0], o[1], o[2], (unsigned long long)dst);
+            }
+            g[0] = m[3], g[1] = m[7], g[2] = m[11];
+            c->sp = sp;
+            c->x[0] = actor, c->x[1] = in_guest(dst) ? dst : sp + 0x10, c->x[2] = lj ? lj + 0x274 : sp;
+            guest_call(c, SS->drop_request);
+            int dr = (int)(c->x[0] & 1);
+            *c = save;
+            dropped = dr != 0;
+            uint64_t f135 = *(const uint64_t *)(uintptr_t)(vt + 0x438);
+            int s135 = -1;
+            if (f135 && dispatch_lookup(f135)) {
+                c->sp = sp, c->x[0] = actor;
+                guest_call(c, f135);
+                uint64_t r = c->x[0];
+                *c = save;
+                s135 = 0;
+                if (in_guest(r)) *(volatile uint32_t *)(uintptr_t)(r + 4) = 1, s135 = 1;
+            }
+            LOG("[linkpos] trunk drops: request %s (point %.2f %.2f %.2f), slot 135 %s\n", dr ? "set" : "NOT set (no drop object?)",
+                g[0], g[1], g[2], s135 > 0 ? "flagged" : s135 == 0 ? "null" : "no function");
+        }
+    }
+    if (ok > 0 && !dropped) ok = -1;
+    if (ok > 0) {
+        Cpu *c = kernel_current_cpu();
+        uint64_t vt = *(const uint64_t *)(uintptr_t)actor;
+        uint64_t fn = in_guest(vt) ? *(const uint64_t *)(uintptr_t)(vt + TRUNK_KILL_VSLOT * 8) : 0;
+        if (!c || !fn || !dispatch_lookup(fn)) ok = -1;
+        else {
+            Cpu save = *c;
+            c->sp = (c->sp - 0x40) & ~0xfull;
+            c->x[0] = actor, c->x[1] = 0;
+            guest_call(c, fn);
+            *c = save;
+            AcquireSRWLockExclusive(&g_world_lock);  // (s288 review: never a second drop + kill on the same trunk)
+            for (int i = 0; i < g_ntrunk; i++) if (g_trunk[i].t.actor == actor) g_trunk[i].killed = true;
+            ReleaseSRWLockExclusive(&g_world_lock);
+        }
+    }
+    LOG("[linkpos] trunk hit %llx %s: %s\n", (unsigned long long)actor, name,
+        ok > 0 ? "killWithDropsAndEffects (vslot 54)" : "refused");
+    return ok;
+}
+
 static void tree_note(uint64_t a) {  // (opacity hook, any thread)
     world_env();
+    trunk_dbg(a);  // (logchop diag)
+    trunk_note(a);  // (logchop)
     if (!g_tree_on || !TREE_FELL || !g_servo_actor || a == g_servo_actor || link_dist(a) > TREE_DIST) return;
     uint64_t ai = tree_ai(a);
     if (!ai) { if (g_tree_dbg_n < TREE_DBG_MAX) tree_dbg(a); return; }
@@ -4459,6 +5239,9 @@ static void world_frame(void) {  // (game thread, once a frame: the pool's ids, 
     for (int i = 0; i < g_nstobj;)
         if (g_vel_frame_id - g_stobj[i].seen > WORLD_STALE) g_stobj[i] = g_stobj[--g_nstobj];
         else i++;
+    for (int i = 0; i < g_ntrunk;)  // (s288 review: a reused actor address must not inherit an old trunk's vt / age)
+        if (g_vel_frame_id - g_trunk[i].seen > WORLD_STALE) g_trunk[i] = g_trunk[--g_ntrunk];
+        else i++;
     ReleaseSRWLockExclusive(&g_world_lock);
 }
 
@@ -4541,6 +5324,55 @@ static void fire_note(uint64_t a) {  // (opacity hook, any thread)
             (unsigned long long)*(const uint64_t *)(uintptr_t)(a + ACTOR_CHEMICAL));
 }
 
+// (firelight) Link's own weapons are his equipment (fire_note skips them): the held torch (Weapon_Sword_043) or a wooden
+// weapon set alight. heldfire_note (opacity hook, Link's equipment) keeps each Weapon_* piece with a chemical holder;
+// linkpos_held_fire(out) = 1 and its world position when one of them, drawn in the last 2 frames, is burning (chemical state
+// 2, the getChemical call of linkpos_fire_burning: inside linkpos_frame only), 0 none burning, -1 none seen / refused.
+static Cpu *fire_cpu(const char *what, uint64_t fn);  // (below)
+#define HELDFIRE_N 6
+static struct { uint64_t a, vt, seen; float pos[3]; } g_hf[HELDFIRE_N];
+static SRWLOCK g_hf_lock = SRWLOCK_INIT;
+static volatile uint64_t g_hf_ask;  // (s288 review: noted only while the DLL asks, see exe_asked)
+static void heldfire_note(uint64_t a) {
+    if (!exe_asked(&g_hf_ask)) return;
+    const char *n = actor_name(a);
+    if (!n || strncmp(n, "Weapon_", 7) || !in_guest(*(const uint64_t *)(uintptr_t)(a + ACTOR_CHEMICAL))) return;
+    const float *m = (const float *)(uintptr_t)(a + ACTOR_MTX);
+    AcquireSRWLockExclusive(&g_hf_lock);
+    int i, old = 0;
+    for (i = 0; i < HELDFIRE_N && g_hf[i].a != a; i++) if (g_hf[i].seen < g_hf[old].seen) old = i;
+    if (i == HELDFIRE_N) i = old, g_hf[i].a = a;
+    g_hf[i].vt = *(const uint64_t *)(uintptr_t)a, g_hf[i].seen = g_vel_frame_id;
+    g_hf[i].pos[0] = m[3], g_hf[i].pos[1] = m[7], g_hf[i].pos[2] = m[11];
+    ReleaseSRWLockExclusive(&g_hf_lock);
+}
+int linkpos_held_fire(float out[3]) {
+    exe_ask(&g_hf_ask);
+    uint64_t cand[HELDFIRE_N];
+    float cp[HELDFIRE_N][3];
+    int nc = 0;
+    AcquireSRWLockExclusive(&g_hf_lock);
+    for (int i = 0; i < HELDFIRE_N; i++)
+        if (g_hf[i].a && g_vel_frame_id - g_hf[i].seen <= 1 &&  /* (s288 review: 1 frame, as fire_actor_ok) */ in_guest(g_hf[i].a) && *(const uint64_t *)(uintptr_t)g_hf[i].a == g_hf[i].vt)
+            cand[nc] = g_hf[i].a, memcpy(cp[nc], g_hf[i].pos, 12), nc++;
+    ReleaseSRWLockExclusive(&g_hf_lock);
+    if (!nc) return -1;
+    for (int i = 0; i < nc; i++) {
+        uint64_t a = cand[i];
+        if (*(const uint8_t *)(uintptr_t)(a + BASEPROC_STATE) == 3) continue;
+        uint64_t vt = *(const uint64_t *)(uintptr_t)a;
+        uint64_t getc = in_guest(vt) ? *(const uint64_t *)(uintptr_t)(vt + 8 * VT_GET_CHEMICAL) : 0;
+        Cpu *c = fire_cpu("held fire", getc);
+        if (!c) return -1;
+        Cpu save = *c;
+        c->x[0] = a;
+        guest_call(c, getc);
+        uint64_t chem = c->x[0];
+        *c = save;
+        if (in_guest(chem) && *(const uint8_t *)(uintptr_t)(chem + CHEM_STATE) == 2) { if (out) memcpy(out, cp[i], 12); return 1; }
+    }
+    return 0;
+}
 int linkpos_fire_objects(LinkposFireObj *out, int max) {  // (the ones drawn this or the last frame)
     AcquireSRWLockExclusive(&g_fire_lock);
     int n = 0;
@@ -4570,6 +5402,22 @@ static Cpu *fire_cpu(const char *what, uint64_t fn) {
     if (n++ < 8) LOG("[linkpos] fire %s refused (%s)\n", what, !g_fire_on ? "SAVAGEWIND_LINK_NO_FIRE" : !g_in_frame ?
                      "outside linkpos_frame" : !c ? "no guest cpu" : "no function");
     return NULL;
+}
+
+// (updraft) 1 = the listed fire object is burning now (its chemical state 2), 0 = not, -1 = unknown / refused. Read only:
+// the same getChemical guest call as linkpos_fire_ignite (inside linkpos_frame), nothing written.
+int linkpos_fire_burning(uint64_t actor) {
+    if (!in_guest(actor) || !fire_actor_ok(actor)) return -1;
+    uint64_t vt = *(const uint64_t *)(uintptr_t)actor;
+    uint64_t getc = in_guest(vt) ? *(const uint64_t *)(uintptr_t)(vt + 8 * VT_GET_CHEMICAL) : 0;
+    Cpu *c = fire_cpu("burning", getc);
+    if (!c) return -1;
+    Cpu save = *c;
+    c->x[0] = actor;
+    guest_call(c, getc);
+    uint64_t chem = c->x[0];
+    *c = save;
+    return in_guest(chem) ? *(const uint8_t *)(uintptr_t)(chem + CHEM_STATE) == 2 : -1;
 }
 
 // 1 = burning now, 2 = asked (state not 2 yet), 0 = nothing to do (no chemical, not burnable, burning already), -1 refused
@@ -4630,6 +5478,79 @@ int linkpos_fire_burst(const float p[3]) {
     int r = fire_elem("burst", FIRE_BURST, &a, sizeof a);
     if (g_fire_log && r > 0) LOG("[linkpos] fire burst at %.2f %.2f %.2f\n", p[0], p[1], p[2]);
     return r;
+}
+
+// ------------------------------------------------------------------ (mgelem) Sora's Blizzard / Thunder as BotW ice / shock
+// BotW's arrows do NOT carry the element through addDamage (log mgelem test 1: Fire / Ice / Shock Arrows all rode a2 2 /
+// f50 3 / f40 1); the element reaches the enemy through its element-reaction object, whose virtual react(this, el)
+// (1.9.0 0x7100b873d4, 1.8.2 f_7000a73ec4 = the s59 "enemies' fire reaction") does: el 2 fire (DamageParam Burnable
+// +0x9e8 -> chemical burning), 3 ice (Iceable +0xb88 -> chemical frozen + vfunc +0x98 = BotW's freeze), 4 electric
+// (+0xca8 -> vfunc +0x90 = BotW's shock). Its this+0x10 = the actor. Where an enemy keeps it is not known from the code, so
+// it is searched for (first hit, then cached): an object inside or pointed to from the actor's first 0x1000 bytes or the damage
+// manager's (actor+0x840) first 0x400 bytes, with this+0x10 = the actor AND a vtable holding the base react itself. Only such a
+// verified object is called (test 2 crash: dm + 8 also has +0x10 = the actor - the damage manager's own mActor - but is not it).
+// A class that overrides react is not matched (nothing sent). Guest call inside linkpos_frame only (fire_cpu).
+// 1 = sent, 0 = no reaction object, -1 refused.
+#define ELEM_REACT (SS->elem_react)
+#define ER_SLOTS 128
+static int g_er_base = -1, g_er_ptr, g_er_off, g_er_slot = -1;  // (cached: base 0 actor / 1 damage manager, pointer or embedded, offset, vtable slot)
+static int er_slot_of(uint64_t p, uint64_t actor) {  // the react slot in p's vtable, -1 = p is not a reaction object of this actor
+    if (!in_guest(p) || (p & 7) || readable(p, 0x18) != 0x18 || *(const uint64_t *)(uintptr_t)(p + 0x10) != actor) return -1;
+    uint64_t vt = *(const uint64_t *)(uintptr_t)p;
+    if (!in_guest(vt) || readable(vt, 8 * ER_SLOTS) != 8 * ER_SLOTS) return -1;
+    if (g_er_slot >= 0) return *(const uint64_t *)(uintptr_t)(vt + 8 * (uint64_t)g_er_slot) == ELEM_REACT ? g_er_slot : -1;
+    for (int k = 0; k < ER_SLOTS; k++)
+        if (*(const uint64_t *)(uintptr_t)(vt + 8 * (uint64_t)k) == ELEM_REACT) return k;
+    return -1;
+}
+static uint64_t er_at(uint64_t base, int ptr, int off) {
+    if (!in_guest(base)) return 0;
+    uint64_t q = base + (uint64_t)off;
+    if (!ptr) return q;
+    return readable(q, 8) == 8 ? *(const uint64_t *)(uintptr_t)q : 0;
+}
+static uint64_t er_obj(uint64_t a) {
+    uint64_t dm = readable(a + ACTOR_DAMAGE_MGR, 8) == 8 ? *(const uint64_t *)(uintptr_t)(a + ACTOR_DAMAGE_MGR) : 0;
+    if (g_er_base >= 0) {
+        uint64_t p = er_at(g_er_base ? dm : a, g_er_ptr, g_er_off);
+        return er_slot_of(p, a) >= 0 ? p : 0;
+    }
+    for (int base = 0; base < 2; base++) {
+        uint64_t b = base ? dm : a;
+        int lim = base ? 0x400 : 0x1000;
+        if (!in_guest(b) || readable(b, (size_t)lim) != (size_t)lim) continue;
+        for (int ptr = 1; ptr >= 0; ptr--)
+            for (int o = 0; o < lim; o += 8) {
+                uint64_t p = er_at(b, ptr, o);
+                int k = er_slot_of(p, a);
+                if (k < 0) continue;
+                g_er_base = base, g_er_ptr = ptr, g_er_off = o, g_er_slot = k;
+                LOG("[linkpos] mgelem: reaction object = %s %s+%#x (%llx, vtable %llx slot %d)\n", ptr ? "pointer at" : "inside",
+                    base ? "damage manager" : "actor", o, (unsigned long long)p, (unsigned long long)*(const uint64_t *)(uintptr_t)p, k);
+                return p;
+            }
+    }
+    return 0;
+}
+int linkpos_enemy_element(uint64_t actor, int el) {
+    if (!in_guest(actor) || !fire_actor_ok(actor)) return -1;
+    Cpu *c = fire_cpu("element", ELEM_REACT);
+    if (!c) return -1;
+    uint64_t p = er_obj(actor);
+    const char *nm = actor_name(actor);
+    if (!p) {
+        static int n;
+        if (n++ < 8) LOG("[linkpos] mgelem: %s %llx: no element-reaction object found (search %s)\n", nm ? nm : "?",
+                         (unsigned long long)actor, g_er_base >= 0 ? "cached" : "found nothing");
+        return 0;
+    }
+    Cpu save = *c;
+    c->x[0] = p, c->x[1] = (uint64_t)(uint32_t)el;
+    guest_call(c, ELEM_REACT);
+    *c = save;
+    LOG("[linkpos] mgelem: %s %llx element %d (%s) sent\n", nm ? nm : "?", (unsigned long long)actor, el,
+        el == 2 ? "fire" : el == 3 ? "ice" : el == 4 ? "electric" : "?");
+    return 1;
 }
 
 // ------------------------------------------------------------------ redirect (s56: enemies go for Donald / Goofy)
@@ -5001,6 +5922,7 @@ void linkpos_frame(void) {
     hide_frame();
     enemy_frame();
     break_frame();
+    swhit_frame();  // (swhit: put back last frame's written value)
     world_frame();  // (s122 trees / Stasis)
     life_frame();
     watch_frame(g_frame);

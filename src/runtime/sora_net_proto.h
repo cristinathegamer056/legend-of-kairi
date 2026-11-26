@@ -10,7 +10,7 @@
 
 #define NET_MAGIC0 'S'
 #define NET_MAGIC1 'N'
-#define NET_VERSION 11  // (11: s182 sfx pack ids shift (Roxas run se000 #306) = 0.1.1, 2: log scale byte, 3: fx moves, Task 8, 4: party block + fx anchors, slice 3, 5: 12 events per SNAP + HELLO peer list, slice 4 mp4, 6: NET_EDMG shared enemy HP, s166, 7: NET_ESYNC enemy sync, s168, 8: NF_BONES bone-pose block, s170, 9: NF_SKATE skate rider, s172, 10: NET_FIRE fire sync, s176)
+#define NET_VERSION 12  // (12: s267 co-op item 2, the party member's character in byte 27 of its record (Riku / Auron / ... drawn as themselves); 11: s182 sfx pack ids shift (Roxas run se000 #306) = 0.1.1, 2: log scale byte, 3: fx moves, Task 8, 4: party block + fx anchors, slice 3, 5: 12 events per SNAP + HELLO peer list, slice 4 mp4, 6: NET_EDMG shared enemy HP, s166, 7: NET_ESYNC enemy sync, s168, 8: NF_BONES bone-pose block, s170, 9: NF_SKATE skate rider, s172, 10: NET_FIRE fire sync, s176)
 #define NET_PORT 7790
 #define NET_MAX_EVENTS 12  // (mp4: 4 -> 12, a party-Limit burst no longer overflows the queue)
 #define NET_EVENT_REPEAT 3
@@ -26,7 +26,19 @@
 #define NET_ESYNC_EVMAX 6
 #define NET_PKT_MAX 768  // (v8: 512 -> 768 for the NF_BONES block;  slice 3: 256 -> 512; a full SNAP with both party members + a shield is 309)
 
-enum { NET_HELLO = 1, NET_SNAP = 2, NET_BYE = 3, NET_EDMG = 4, NET_ESYNC = 5, NET_FIRE = 6, NET_AREA = 7, NET_REACT = 8, NET_KILLS = 9 };  // (s191: AREA, s194: REACT, s196: KILLS, no NET_VERSION change: see the end of this file)
+enum { NET_HELLO = 1, NET_SNAP = 2, NET_BYE = 3, NET_EDMG = 4, NET_ESYNC = 5, NET_FIRE = 6, NET_AREA = 7, NET_REACT = 8, NET_KILLS = 9, NET_WARP = 10, NET_DUEL = 11 };  // (s191: AREA, s194: REACT, s196: KILLS, s269: WARP, s272: DUEL, no NET_VERSION change: see the end of this file)
+// (s269 warpcore, co-op item 4) NET_WARP sizes (the packet is at the end of this file; net_unpack_ex checks them)
+enum { NWO_ASK = 1, NWO_SPOT = 2, NWO_NOTE = 3 };
+#define NET_WARP_HEAD (NET_HDR + 6)        // 13: op, target player, u32 nonce (= ASK / NOTE)
+#define NET_WARP_SPOT_LEN (NET_WARP_HEAD + 33)  // 46: + flags, live xyz, live deg, save xyz, save deg
+// (s272 duel, co-op item 6) NET_DUEL sizes (the packet is at the end of this file; net_unpack_ex checks them)
+enum { NDO_ASK = 1, NDO_ANSWER = 2, NDO_HIT = 3, NDO_END = 4, NDO_TIME = 5, NDO_RING = 6 };
+#define NET_DUEL_HEAD (NET_HDR + 6)               // 13: op, target player, u32 duel id (= ASK)
+#define NET_DUEL_ANSWER_LEN (NET_DUEL_HEAD + 16)  // 29: + answer, why, centre xyz, radius cm
+#define NET_DUEL_HIT_LEN (NET_DUEL_HEAD + 38)     // 51: + hseq, power, stat, flags, src, boost, react, pad, from xyz, at xyz, atkp
+#define NET_DUEL_END_LEN (NET_DUEL_HEAD + 4)      // 17: + reason, result, hp permille
+#define NET_DUEL_TIME_LEN (NET_DUEL_HEAD + 2)     // 15: + hp permille
+#define NET_DUEL_RING_LEN (NET_DUEL_HEAD + 18)    // 31: + player a, player b, phase, pad, centre xyz, radius cm
 #define NET_REACT_ENT 24  // (s194, see the end of this file)
 #define NET_REACT_MAX 8
 #define NET_KILLS_CHUNK 106       // (s197) kills in one NET_KILLS part: 6 B each (u32 hid + u16 age), 17 + 636 = 653 <= the s196 657 (see the end of this file)
@@ -34,7 +46,7 @@ enum { NET_HELLO = 1, NET_SNAP = 2, NET_BYE = 3, NET_EDMG = 4, NET_ESYNC = 5, NE
 #define NET_KILLS_ENT 6           // (s197) one kill in a part: u32 hid, u16 age (s)
 #define NET_KILLS_ASK_LEN (NET_HDR + 17)   // 24 (s197: + u16 moon age)
 #define NET_KILLS_PART_HDR (NET_HDR + 10)  // 17
-enum { NF_WEAPON = 1, NF_AIR = 2, NF_GHOST = 4, NF_GUARD = 8, NF_DEAD = 16, NF_LOADING = 32, NF_BONEPOSE = 64, NF_BONES = 128, NF_SKATE = 256 };
+enum { NF_WEAPON = 1, NF_AIR = 2, NF_GHOST = 4, NF_GUARD = 8, NF_DEAD = 16, NF_LOADING = 32, NF_BONEPOSE = 64, NF_BONES = 128, NF_SKATE = 256, NF_DUEL = 2048 };  // (s272 duel: NF_DUEL = he is in a duel (countdown / fight); no NET_VERSION change: an older game copies the flags raw and tests no bit above 256; 512 / 1024 are kept for the s267 revive plan)
 // (v9, s172) NF_SKATE = he rides a skateboard: the SNAP's slot / clock are the KH2 skate rider's board slot (151..170, SKB_SLOTS) and
 // its clock (60 Hz frames), body 7 = Roxas' rider, any other = Sora's; the receiver draws its own copy of the rider actor (rider + board).
 // Never together with NF_BONEPOSE (a puppet / ragdoll gets him off the board).
@@ -60,7 +72,8 @@ typedef struct { uint8_t ev, flags; float pos[3]; float yaw; float fade; uint8_t
 #define NET_PARTY_N 2
 enum { NPM_GHOST = 1, NPM_WEAPON = 2, NPM_BLEND = 4, NPM_SHIELD = 8 };
 typedef struct {
-    uint8_t who, flags;           // who 0 Donald, 1 Goofy; flags NPM_*
+    uint8_t who, flags;           // who = the party SLOT: 0 Donald's place, 1 Goofy's; flags NPM_*
+    uint8_t chr;                  // (v12, s267) who stands there: sora_pchar.h PCH_* + 1; 0 = the slot's own member (Donald / Goofy)
     uint16_t slot; float clock;   // the drawn motion (mset slot, KH clock)
     float feet[3], face;          // BotW units, radians
     float floor_dy;               // his shadow's floor y - feet y (u; < 0 in the air of a knockdown), +-327 u
@@ -301,7 +314,7 @@ static inline int net_pack_snap(const NetSnap *s, uint8_t *out, int cap) {
         }
         net_w16(p + 22, m->from_slot), net_w16(p + 24, net_clock_enc(m->from_clock));
         float b = m->blend > 0 ? (m->blend < 1 ? m->blend : 1) : 0;
-        p[26] = (uint8_t)(b * 255.0f + 0.5f), p[27] = p[28] = 0;  // (27-28 reserved)
+        p[26] = (uint8_t)(b * 255.0f + 0.5f), p[27] = m->chr, p[28] = 0;  // (27: v12 character; 28 reserved)
         p += NET_PM_SIZE;
         if (m->flags & NPM_SHIELD) {
             for (int i = 0; i < 3; i++) net_wf(p + 4 * i, m->shield[i]);
@@ -414,6 +427,7 @@ static inline bool net_unpack_ex(const uint8_t *in, int len, int *type, uint8_t 
                 m->face = net_yaw_dec(net_r16(q + 18));
                 m->floor_dy = (float)(int16_t)net_r16(q + 20) / 100.0f;
                 m->from_slot = net_r16(q + 22), m->from_clock = net_r16(q + 24) / 10.0f, m->blend = q[26] / 255.0f;
+                m->chr = q[27];  // (v12: the receiver checks the id against its own character table)
                 q += NET_PM_SIZE;
                 if (m->flags & NPM_SHIELD) {
                     for (int i = 0; i < 3; i++) m->shield[i] = net_rf(q + 4 * i);
@@ -492,6 +506,14 @@ static inline bool net_unpack_ex(const uint8_t *in, int len, int *type, uint8_t 
         else if (p[0] == 2) {  // (NKO_PART: i < n <= 64, k <= 106, length exact)
             if (len < NET_KILLS_PART_HDR || p[8] < 1 || p[8] > NET_KILLS_CHUNKS_MAX || p[7] >= p[8] || p[9] > NET_KILLS_CHUNK || len != NET_KILLS_PART_HDR + NET_KILLS_ENT * p[9]) return false;
         } else return false;
+    } else if (t == NET_WARP) {  // (s269) the body is read by net_unpack_warp; here the op and the exact size are checked
+        if (len < NET_WARP_HEAD) return false;
+        if (p[0] == NWO_ASK || p[0] == NWO_NOTE) { if (len != NET_WARP_HEAD) return false; }
+        else if (p[0] == NWO_SPOT) { if (len != NET_WARP_SPOT_LEN) return false; }
+        else return false;
+    } else if (t == NET_DUEL) {  // (s272) the body is read by net_unpack_duel; here the op and the exact size are checked
+        static const uint8_t DL[7] = {0, NET_DUEL_HEAD, NET_DUEL_ANSWER_LEN, NET_DUEL_HIT_LEN, NET_DUEL_END_LEN, NET_DUEL_TIME_LEN, NET_DUEL_RING_LEN};
+        if (len < NET_DUEL_HEAD || p[0] < NDO_ASK || p[0] > NDO_RING || len != DL[p[0]]) return false;
     } else {
         return false;
     }
@@ -949,4 +971,146 @@ static inline bool net_lograte_ok(NetLogRate *r, uint64_t now, bool *first_quiet
     if (r->n == NET_LOGRATE_BURST && first_quiet) *first_quiet = true;
     r->n = NET_LOGRATE_BURST + 1, r->quiet++;
     return false;
+}
+
+// ---- (s269 warpcore, co-op item 4) NET_WARP: "warp to a friend" with BotW's own fast travel (sora_net_warp.h, sora_warp.h) ----
+// Packet = hdr (player, seq = this kind's OWN u16 counter) + u8 op + u8 target (the player id it is for; others drop it)
+//          + u32 nonce (the warper's, never 0) + body:
+//   op 1 ASK  (len 13): "where are you?"  (warper -> friend; re-sent until a SPOT with the same nonce comes back)
+//   op 2 SPOT (len 46): the answer (friend -> warper): u8 flags (NWF_*), f32 live x y z (his feet, BotW world units),
+//                       f32 live deg (his facing: Sora's yaw in degrees, BotW's RotY sense: GUESS that it is the same sense
+//                       as PlayerSavePosAngleYDegree), f32 save x y z (his gdt PlayerSavePos = his last safe ground spot),
+//                       f32 save deg (PlayerSavePosAngleYDegree)
+//   op 3 NOTE (len 13): "I warped to you" (warper -> friend, once the game took the warp call): his game shows a small text
+// A NEW type, NET_VERSION unchanged: an older game (no NET_WARP in its net_unpack_ex) counts the packet "bad" and goes on (no
+// log, no slot touched), exactly as NET_AREA / NET_KILLS did for theirs; the warper then never gets a SPOT and gives up
+// after its ask timeout ("no answer: older build?"). UDP: the ASK is repeated, SPOT / NOTE go once per ask / warp; in a Melty
+// room every one is a reliable event.
+enum { NWF_GROUND = 1, NWF_SAVE = 2, NWF_MAINFIELD = 4, NWF_DEAD = 8, NWF_LOADING = 16 };
+typedef struct { uint8_t op, target; uint32_t nonce; uint8_t flags; float live[3], live_deg, save[3], save_deg; } NetWarpMsg;
+
+static inline int net_pack_warp(uint8_t player, uint16_t seq, const NetWarpMsg *m, uint8_t *out, int cap) {
+    if (!m || !out || !m->nonce || (m->op != NWO_ASK && m->op != NWO_SPOT && m->op != NWO_NOTE)) return -1;
+    int len = m->op == NWO_SPOT ? NET_WARP_SPOT_LEN : NET_WARP_HEAD;
+    if (cap < len) return -1;
+    net_hdr(out, NET_WARP, player, seq);
+    uint8_t *p = out + NET_HDR;
+    p[0] = m->op, p[1] = m->target, net_w32(p + 2, m->nonce);
+    if (m->op == NWO_SPOT) {
+        p[6] = m->flags;
+        for (int j = 0; j < 3; j++) net_w32f(p + 7 + 4 * j, m->live[j]), net_w32f(p + 23 + 4 * j, m->save[j]);
+        net_w32f(p + 19, m->live_deg), net_w32f(p + 35, m->save_deg);
+    }
+    return len;
+}
+// -> true = a valid NET_WARP packet (nonce 0 = not valid). A SPOT's numbers are passed on as they came (the receiver checks them:
+// sora_warp_core.h wsp_choose drops a NaN / out-of-range spot)
+static inline bool net_unpack_warp(const uint8_t *in, int len, uint8_t *player, uint16_t *seq, NetWarpMsg *m) {
+    int t = 0;
+    if (!in || !m || in[3] != NET_WARP || !net_unpack_ex(in, len, &t, player, seq, NULL, NULL, NULL, NULL)) return false;
+    const uint8_t *p = in + NET_HDR;
+    memset(m, 0, sizeof *m);
+    m->op = p[0], m->target = p[1], m->nonce = net_r32(p + 2);
+    if (!m->nonce) return false;
+    if (m->op == NWO_SPOT) {
+        m->flags = p[6];
+        for (int j = 0; j < 3; j++) m->live[j] = net_r32f(p + 7 + 4 * j), m->save[j] = net_r32f(p + 23 + 4 * j);
+        m->live_deg = net_r32f(p + 19), m->save_deg = net_r32f(p + 35);
+    }
+    return true;
+}
+
+// ---- (s272 duel, co-op item 6) NET_DUEL: two players' duel (sora_net_duel.h, sora_duel.h; pure parts sora_duel_core.h) ----
+// Packet = hdr (player, seq = this kind's OWN u16 counter) + u8 op + u8 target (the player id it is for; RING: 0 = everyone)
+//          + u32 duel id (the asker's nonce, never 0) + body:
+//   op 1 ASK    (len 13): "duel?" (asker -> friend)
+//   op 2 ANSWER (len 29): u8 answer (1 accept, 2 decline / no answer, 3 busy), u8 why (busy: DUG_*), f32 centre x y z (the ring,
+//                         between the two at the accept, BotW units), u16 radius cm (friend -> asker)
+//   op 3 HIT    (len 51): u16 hit seq, u16 Power (atkp / spell power, 100 = a plain hit), u16 S (the attacker's Str + Keyblade Str,
+//                         or Mag + Keyblade Mag for a spell), u8 flags (1 spell, 2 finisher), u8 src (0 blade, 1 Fire, 2 Blizzard,
+//                         3 Thunder), u16 boost % (Combo / element Boost, 0 none), u8 reaction class, u8 0, f32 from x y z (his
+//                         feet), f32 at x y z (where it met), u16 atkp row (its hit sound; spells: their row) (attacker ->
+//                         victim: the victim's game takes the damage)
+//   op 4 END    (len 17): u8 reason (DUE_*), u8 result as the SENDER sees it (DUR_*), u16 his HP permille (either -> other)
+//   op 5 TIME   (len 15): u16 HP permille at his time limit (either -> other)
+//   op 6 RING   (len 31): u8 player a, u8 player b, u8 phase (0 gone, 1 countdown, 2 fight), u8 0, f32 centre x y z, u16 radius cm
+//                         (each duelist -> every peer, every 2 s: a third player draws the ring)
+// A NEW type, NET_VERSION unchanged (as NET_WARP): an older game counts it "bad" and goes on; the asker then gets no ANSWER and
+// gives up after 12.5 s ("no answer: duels off there, or an older build"). UDP: ANSWER / HIT / END / TIME go DU_RESENDS more
+// times with the same seq (the receiver drops the copies: per duel id / hit seq); in a Melty room every one is a reliable event.
+typedef struct {
+    uint8_t op, target;
+    uint32_t id;
+    uint8_t ans, why;                   // ANSWER
+    float c[3];                         // ANSWER / RING: the ring's centre
+    uint16_t radius_cm;                 // ANSWER / RING
+    uint16_t hseq, power, stat, boost, atkp;  // HIT
+    uint8_t flags, src, react;          // HIT
+    float from[3], at[3];               // HIT
+    uint8_t reason, result;             // END
+    uint16_t pm;                        // END / TIME
+    uint8_t a, b, phase;                // RING
+} NetDuelMsg;
+enum { NDH_SPELL = 1, NDH_FINISH = 2 };
+static const uint8_t NET_DUEL_LEN[7] = {0, NET_DUEL_HEAD, NET_DUEL_ANSWER_LEN, NET_DUEL_HIT_LEN, NET_DUEL_END_LEN, NET_DUEL_TIME_LEN, NET_DUEL_RING_LEN};
+static inline int net_pack_duel(uint8_t player, uint16_t seq, const NetDuelMsg *m, uint8_t *out, int cap) {
+    if (!m || !out || !m->id || m->op < NDO_ASK || m->op > NDO_RING) return -1;
+    int len = NET_DUEL_LEN[m->op];
+    if (cap < len) return -1;
+    net_hdr(out, NET_DUEL, player, seq);
+    uint8_t *p = out + NET_HDR;
+    memset(p, 0, (size_t)(len - NET_HDR));
+    p[0] = m->op, p[1] = m->target, net_w32(p + 2, m->id);
+    uint8_t *b = p + 6;
+    if (m->op == NDO_ANSWER) {
+        b[0] = m->ans, b[1] = m->why;
+        for (int j = 0; j < 3; j++) net_w32f(b + 2 + 4 * j, m->c[j]);
+        net_w16(b + 14, m->radius_cm);
+    } else if (m->op == NDO_HIT) {
+        net_w16(b, m->hseq), net_w16(b + 2, m->power), net_w16(b + 4, m->stat);
+        b[6] = m->flags, b[7] = m->src, net_w16(b + 8, m->boost), b[10] = m->react;
+        for (int j = 0; j < 3; j++) net_w32f(b + 12 + 4 * j, m->from[j]), net_w32f(b + 24 + 4 * j, m->at[j]);
+        net_w16(b + 36, m->atkp);
+    } else if (m->op == NDO_END) {
+        b[0] = m->reason, b[1] = m->result, net_w16(b + 2, m->pm);
+    } else if (m->op == NDO_TIME) {
+        net_w16(b, m->pm);
+    } else if (m->op == NDO_RING) {
+        b[0] = m->a, b[1] = m->b, b[2] = m->phase;
+        for (int j = 0; j < 3; j++) net_w32f(b + 4 + 4 * j, m->c[j]);
+        net_w16(b + 16, m->radius_cm);
+    }
+    return len;
+}
+// -> true = a valid NET_DUEL packet: id != 0, the answer code in range, every float finite (a NaN centre / hit point is dropped)
+static inline bool net_unpack_duel(const uint8_t *in, int len, uint8_t *player, uint16_t *seq, NetDuelMsg *m) {
+    int t = 0;
+    if (!in || !m || len < NET_HDR || in[3] != NET_DUEL || !net_unpack_ex(in, len, &t, player, seq, NULL, NULL, NULL, NULL)) return false;
+    const uint8_t *p = in + NET_HDR, *b = p + 6;
+    memset(m, 0, sizeof *m);
+    m->op = p[0], m->target = p[1], m->id = net_r32(p + 2);
+    if (!m->id) return false;
+    bool ok = true;
+    if (m->op == NDO_ANSWER) {
+        m->ans = b[0], m->why = b[1];
+        for (int j = 0; j < 3; j++) m->c[j] = net_r32f(b + 2 + 4 * j), ok = ok && isfinite(m->c[j]);
+        m->radius_cm = net_r16(b + 14);
+        ok = ok && m->ans >= 1 && m->ans <= 3;  // (DUA_ACCEPT .. DUA_BUSY, sora_duel_core.h)
+    } else if (m->op == NDO_HIT) {
+        m->hseq = net_r16(b), m->power = net_r16(b + 2), m->stat = net_r16(b + 4);
+        m->flags = b[6], m->src = b[7], m->boost = net_r16(b + 8), m->react = b[10], m->atkp = net_r16(b + 36);
+        for (int j = 0; j < 3; j++) {
+            m->from[j] = net_r32f(b + 12 + 4 * j), m->at[j] = net_r32f(b + 24 + 4 * j);
+            ok = ok && isfinite(m->from[j]) && isfinite(m->at[j]);
+        }
+    } else if (m->op == NDO_END) {
+        m->reason = b[0], m->result = b[1], m->pm = net_r16(b + 2);
+    } else if (m->op == NDO_TIME) {
+        m->pm = net_r16(b);
+    } else if (m->op == NDO_RING) {
+        m->a = b[0], m->b = b[1], m->phase = b[2];
+        for (int j = 0; j < 3; j++) m->c[j] = net_r32f(b + 4 + 4 * j), ok = ok && isfinite(m->c[j]);
+        m->radius_cm = net_r16(b + 16);
+    }
+    return ok;
 }

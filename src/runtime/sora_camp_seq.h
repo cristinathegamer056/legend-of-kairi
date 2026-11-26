@@ -330,8 +330,9 @@ typedef struct CsDesc {  // = AnimatedSequenceDesc; start / loop / end = -1 none
     int16_t stack_index;
     float stack_w, stack_h;
     int msg_key;
-    char text[24];
+    char text[64];  // (dbgtext: was 24 = 23 chars; the Debug page's help line takes the user's own text, up to 63)
     uint8_t anchor, nkids;
+    uint8_t text_long;  // (s288 port of #51) 1 = show all of text (63 chars, '\n' = new line); 0 = the first 23 chars, as with text[24]
     uint32_t flags;
     const struct CsDesc *kids;
 } CsDesc;
@@ -453,8 +454,9 @@ static void cs_text(const CampSeq *s, CsOut *o, const uint8_t *msg, int len, flo
 static int cs_node_msg_(const CampSeq *s, const CsNode *n, uint8_t *buf, int cap, const uint8_t **out) {
     if (n->d.text[0]) {  // MessageText: plain text through Encoders.InternationalSystem
         int len = 0;
-        for (int i = 0; i < (int)sizeof n->d.text && n->d.text[i] && len < cap; i++) {
-            uint8_t b = cs_ascii(s, n->d.text[i]);
+        int lim = n->d.text_long ? (int)sizeof n->d.text : 23;  // (s288 port: off = exactly the old 23 visible chars)
+        for (int i = 0; i < lim && n->d.text[i] && len < cap; i++) {
+            uint8_t b = n->d.text_long && n->d.text[i] == '\n' ? 0x02 : cs_ascii(s, n->d.text[i]);  // (dbgtext: '\n' = the font's new line)
             if (b) buf[len++] = b;
         }
         *out = buf;

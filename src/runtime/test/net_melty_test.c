@@ -1846,8 +1846,8 @@ static void test_notes(void) {
     env_set("SORA_ROOT", NULL);
     boot(5);
     CHECK(FK.ad_setup_n == 1 && FK.ad_setup_after_start == 0 && FK.start_n == 1);
-    CHECK(!strcmp(FK.ad_addon, "savage-wind/legend-of-kairi") && !strcmp(FK.ad_ver, "dev+net11") && !strcmp(FK.ad_pay, "kairi-sn11") && FK.ad_m == 1.0f);
-    CHECK(NET_VERSION == 11);  // (the strings above say 11: a new NET_VERSION changes them by itself; this line only pins the test)
+    CHECK(!strcmp(FK.ad_addon, "savage-wind/legend-of-kairi") && !strcmp(FK.ad_ver, "dev+net12") && !strcmp(FK.ad_pay, "kairi-sn12") && FK.ad_m == 1.0f);
+    CHECK(NET_VERSION == 12);  // (the strings above say 12: a new NET_VERSION changes them by itself; this line only pins the test)
     // FRAME: the first call has no frame time (nothing sent), then each frame hands this frame's counts, which are cleared
     g_nnote.on_screen = 9;
     net_note_frame(SORA_MELTY_FRAME_FOCUSED);
@@ -1861,7 +1861,7 @@ static void test_notes(void) {
     net_note_frame(0);
     CHECK(FK.ad_frame_n == 2 && FK.ad_drawn == 0 && FK.ad_on == 0);  // (nobody drawn this frame: 0, not last frame's)
     net_set_on(false);
-    // the release id Melty's setup wrote into the game folder (SORA_ROOT): "<16 hex>+net11", with or without a trailing slash
+    // the release id Melty's setup wrote into the game folder (SORA_ROOT): "<16 hex>+net12", with or without a trailing slash
     char path[600];
     snprintf(path, sizeof path, "%s/.melty-ready.json", g_tmp);
     FILE *f = fopen(path, "wb");
@@ -1869,17 +1869,17 @@ static void test_notes(void) {
     if (f) fputs("{\"ready\": \"savage-wind-kairi-melty-v2:8FFF2CA146B9805A\", \"at\": \"2026-11-11T10:00:00\"}", f), fclose(f);
     env_set("SORA_ROOT", g_tmp);
     boot(5);
-    CHECK(FK.ad_setup_n == 1 && !strcmp(FK.ad_ver, "8fff2ca146b9805a+net11"));
+    CHECK(FK.ad_setup_n == 1 && !strcmp(FK.ad_ver, "8fff2ca146b9805a+net12"));
     net_set_on(false);
     char slash[600];
     snprintf(slash, sizeof slash, "%s/", g_tmp);
     env_set("SORA_ROOT", slash);
     boot(5);
-    CHECK(FK.ad_setup_n == 1 && !strcmp(FK.ad_ver, "8fff2ca146b9805a+net11"));
+    CHECK(FK.ad_setup_n == 1 && !strcmp(FK.ad_ver, "8fff2ca146b9805a+net12"));
     net_set_on(false);
     remove(path);
     boot(5);
-    CHECK(FK.ad_setup_n == 1 && !strcmp(FK.ad_ver, "dev+net11"));  // (no marker: a dev / GitHub copy)
+    CHECK(FK.ad_setup_n == 1 && !strcmp(FK.ad_ver, "dev+net12"));  // (no marker: a dev / GitHub copy)
     net_set_on(false);
     env_set("SORA_ROOT", NULL);
     // a start that fails: setup was called (before it), FRAME never goes (NET.melty false), counts still cleared

@@ -260,7 +260,7 @@ def main():
     shutil.copytree(a.kit, os.path.join(out, "kit"), ignore=shutil.ignore_patterns("__pycache__"))
     n_tools = 0
     for rel in tracked("tools/sorabuild") + tracked("tools/installer"):
-        if rel in SKIP_TOOLS:
+        if rel in SKIP_TOOLS or rel.startswith("tools/installer/linux/"):  # (s284: the Linux package is made by package_linux.sh, not shipped in the Windows zip)
             continue
         dst = os.path.join(out, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)

@@ -99,6 +99,7 @@ void rt_unwind_point(void);        // guest threads: unwind to thread_main if a 
 
 // ---- ui (runtime/nvn/metal.m)
 int ui_run(void);  // window loop; returns the reboot kind requested (the window stays open)
+void ui_quit(void);  // (nvn/vulkan/device.c) window closed / SIGTERM: end the process (Linux: without the exit teardown)
 
 // ---- helpers
 void guest_call(Cpu *c, uint64_t addr);   // call guest function at addr (saves/restores x30)

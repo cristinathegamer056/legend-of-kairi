@@ -281,9 +281,51 @@ static const uint8_t *find4(const uint8_t *p, const uint8_t *end, const char *ma
 }
 unsigned char *items_icon(int i, int *w, int *h) {
     const GameItem *it = items_at(i);
-    if (!it) return NULL;
+    return it ? items_icon_actor(it->actor, w, h) : NULL;
+}
+// (botwpic) some items have no sbitemico of their own: ActorInfo's itemUseIconActorName names the actor whose picture they use
+// (botwpic test 1: Armor_007_Upper, Armor_037_Upper / _Lower). The map actor -> that name, read once.
+static struct { char *actor, *icon; } *g_icn;
+static int g_nicn;
+static pthread_once_t g_icn_once = PTHREAD_ONCE_INIT;
+static void icon_map_read(void) {
+    size_t zn = 0, n = 0;
+    uint8_t *z = fs_game_file("Actor/ActorInfo.product.sbyml", &zn), *d = z ? yaz0_unpack(z, zn, &n) : NULL;
+    free(z);
+    if (!d || n < 16 || memcmp(d, "YB", 2)) { free(d); return; }
+    Byml b = {d, n, rd32(d + 4), rd32(d + 8)};
+    uint8_t t; uint32_t actors;
+    if (!byml_get(&b, rd32(d + 12), "Actors", &t, &actors) || t != 0xc0) { free(d); return; }
+    uint32_t na = byml_count(&b, actors);
+    const uint8_t *types = d + actors + 4;
+    uint32_t vals = actors + 4 + ((na + 3) & ~3u);
+    g_icn = calloc(na ? na : 1, sizeof *g_icn);
+    for (uint32_t i = 0; g_icn && i < na && vals + 4 * i + 4 <= n; i++) {
+        if (types[i] != 0xc1) continue;
+        uint32_t a = rd32(d + vals + 4 * i);
+        const char *actor = byml_get_str(&b, a, "name"), *icon = byml_get_str(&b, a, "itemUseIconActorName");
+        if (!actor || !icon || !*icon || !strcmp(actor, icon)) continue;
+        g_icn[g_nicn].actor = copy(actor, strlen(actor)), g_icn[g_nicn].icon = copy(icon, strlen(icon)), g_nicn++;
+    }
+    free(d);
+    LOG("[items] %d items use another item's picture (itemUseIconActorName)\n", g_nicn);
+}
+static unsigned char *icon_file(const char *actor, int *w, int *h);
+unsigned char *items_icon_actor(const char *actor, int *w, int *h) {
+    if (!actor || !*actor || strlen(actor) > 64) return NULL;
+    pthread_once(&g_icn_once, icon_map_read);
+    for (int i = 0; i < g_nicn; i++)
+        if (!strcmp(g_icn[i].actor, actor)) {
+            unsigned char *px = icon_file(g_icn[i].icon, w, h);
+            if (px) return px;
+            break;
+        }
+    return icon_file(actor, w, h);
+}
+static unsigned char *icon_file(const char *actor, int *w, int *h) {
+    if (!actor || !*actor || strlen(actor) > 64) return NULL;
     char path[128];
-    snprintf(path, sizeof path, "UI/StockItem/%s.sbitemico", it->actor);
+    snprintf(path, sizeof path, "UI/StockItem/%s.sbitemico", actor);
     size_t zn = 0, n = 0;
     uint8_t *z = fs_game_file(path, &zn), *d = z ? yaz0_unpack(z, zn, &n) : NULL, *out = NULL;
     free(z);

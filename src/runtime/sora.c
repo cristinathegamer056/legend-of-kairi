@@ -84,6 +84,7 @@ void sora_draw_off(void);
 void sora_hud_set(float hp, float hp_max, float mp, float mp_max);    // (runtime/sora_hud.c)
 void sora_hud_off(void);
 int linkpos_enemies(uint64_t *actor, float (*pos)[3], int32_t *life, int max);
+int linkpos_enemy_name(uint64_t actor, char *buf, int n);
 void linkpos_damage_enemy(uint64_t actor, int n, int f54);
 void linkpos_damage_enemy_ex(uint64_t actor, int n, int f54, int f40);  // f40: 0 none, 1 fire, 2 ice, 3 electric
 int linkpos_link_heal(int q);  // quarter hearts (Cure)
@@ -113,6 +114,14 @@ enum { LINK_NONE, LINK_GROUND, LINK_AIR, LINK_OTHER };  // (linkpos.c)
 #include "sora_params_mickey.h"  // (s110 b22-mickey: KH2 Mickey P_EX200, SORABAKE_FORM=mickey PRTY/PTYA 28)
 #include "sora_params_anti.h"   // (s89 anti: Anti Form's, tools_s89/anti sorabake SORABAKE_FORM=anti, S89_HELPER_ANTI.md)
 #include "sora_hud.h"  // (sora_hud_menu: the command menu, helper M)
+static bool mm_live_key(const char *key, int v);  // (s268: sora_net_minimap.h, included further down)
+static bool warp_live_key(const char *key, int v);  // (s269 warpcore: sora_warp.h, included further down)
+static bool warp_live_line(const char *ln);
+static bool fmw_live_key(const char *key, int v);  // (s272 4b: sora_fmwarp.h, included further down)
+static bool du_live_key(const char *key, int v);  // (s272 duel, co-op item 6: sora_duel.h, included further down)
+static bool du_live_line(const char *ln);
+static bool du_spell(int kind, int power, const float c[3], float r, float lo, float hi);
+static void du_thunder_aim(uint64_t target, const float pos[3], const float dir[2], float at[3]);
 #include "sora_sfx.h"  // (KH2 sound effects, helper A: S35_HELPER_A_SFX.md)
 #include "sora_fx.h"   // (KH2 visual effects, helper X: S35_HELPER_X_FX.md)
 // (s131 orbs) a per-slot generation: every DLL spawn bumps it, so a holder of an old handle (orbs, save rings) can tell the slot is now another effect's
@@ -200,6 +209,45 @@ static int sfx_play_at_g(int id, float gain, const float pos[3]) { int h = sora_
 static inline bool fx_mine(int h, uint32_t gen) { return h >= 0 && h < 32 && g_fx_gen[h] == gen; }
 void sora_draw_shadow(float floor_y, float strength);  // (sora_draw.c: the blob shadow, helper S)
 void sora_draw_ghost(float alpha);  // (sora_draw.c, s48: his body where the scene hides it, e.g. under water)
+void sora_draw_actor_weapon(int id, bool shown);  // (sora_draw.c: the weapon groups, KH2 group attr 0x100, shown / skipped)
+int sora_draw_body(void);
+// (kbfield) user: "the keyblade to physically disappear from Sora's hands when he is not in battle, similar to how it behaves in
+// kh2 when there are no enemies around". Variants (sora_params.h): 0 battle, 1 battle no weapon, 2 field (no weapon), 3 field +
+// weapon. The field walk / run used to be 3 (the arms still hold the Keyblade: user "his animation as if he's still holding
+// it"); with kbfield, out of battle (bstance off) idle / walk / run take 2 first (mot_st; bake: idle 2, walk 6, run 10). While
+// the drawn motion is variant 2 (also jump / fall / land, which only have 2), out of battle and no special plays, his Keyblade
+// groups are skipped. Swings / spells / Guard have battle slots only, so the Keyblade is back for them. The puppet path (Link has
+// the pad: climb, chest playback with chestkb) always shows it (its own keyblade_hide rule). No KH2 appear / vanish effect yet.
+// SAVAGEWIND_SORA_KB_FIELD=1 / live "set kbfield 1" = on; 0 = always in his hand (the old look).
+// (s288 port) its battle stance range (user: 34 m) is behind this key too: g_bs_kbf_cm (live "kbfieldcm"); kbfield 0 = the old 15 m
+// (g_bs_cm). While it hides the Keyblade, net_fill sends NF_WEAPON = 0 (g_kbf_hidden), so friends see empty hands as well.
+static int g_kbfield = 1;  /* (s288: the user played it, "batch 3 all works": default ON) */
+static bool g_kbf_hidden;  // (s288 port) kbf_set's last hide: net_fill's NF_WEAPON
+// (kbtoggle) user: "a toggle to have sora's keyblade appear and disappear ... the left stick button". L3 (Switch LSTICK) flips
+// g_kb_drawn. (user, test 1: "he has the keyblade out but not in his battle stance") On, out of battle: the FIELD stance with the
+// Keyblade = KH2's variant 3 (field + weapon: walk 7, run 11; idle has none, so the field idle 2 with the Keyblade shown); off = the
+// field no-weapon variant 2, Keyblade hidden (kbfield). The battle stance stays enemies / hits only, and shows the Keyblade anyway. While Sora drives (not in a menu, not in Link's own states) L3 does
+// not reach BotW (it was BotW's crouch under him). SAVAGEWIND_SORA_KB_TOGGLE=1 / live "set kbtoggle 1" = on; 0 = L3 is BotW's.
+// (s288 port) only while kbfield is on: kbfield 0 = L3 stays BotW's crouch even with kbtoggle 1 (KB_L3_MINE).
+#define BTN_L3 (1ull << 4)  // Switch LSTICK (script_parse names[] order)
+static int g_kbtoggle = 1;  /* (s288: the user played it, "batch 3 all works": default ON) */
+#define KB_L3_MINE (g_kbtoggle && g_kbfield)
+static bool g_kb_drawn;
+static int g_kbdfx_bone = -3, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side, g_kbdfx_orient = 1, g_kbdfx_dir = 1, g_kbdfx_lenpct = 100;  // (kbdrawfx placement knobs; see kbdfx_blade_mid)
+static int g_kbdrawfx = 1, g_kbdfx_last = -1;  /* (s288: the user played it: default ON) */  // (kbdrawfx: the option, the last drive-path Keyblade hidden state; see kbdfx_tick)
+static void kbf_set(bool hide) {
+    static int last_body = -1, last_hide = -1;
+    int body = sora_draw_body();
+    g_kbf_hidden = hide;  // (s288 port: NF_WEAPON)
+    // (s288 port) never hidden by us = no call at all (kbfield 0 = exactly the old draw calls: a "shown" on a body switch could undo
+    // another hide, e.g. sora_plimit.h df_kb while Donald rides)
+    if (!hide && last_hide != 1) return;
+    if (body == last_body && (int)hide == last_hide) return;
+    if (last_body >= 0 && last_body != body && last_hide == 1) sora_draw_actor_weapon(last_body, true);  // (a body switch: the old one shows again)
+    sora_draw_actor_weapon(body, !hide);
+    if (last_hide != (int)hide) LOG("[sora] kbfield: Keyblade %s\n", hide ? "hidden (field motion)" : "shown");
+    last_body = body, last_hide = hide;
+}
 #include "sora_dream.h"   // (s54 dream: KH2's Dream Weapon picker = dream_weapon / dream_giveup; S54_HELPER_DREAM.md)
 static int g_kbpop = 1;  // (s92 b6-formfx) live "set kbpop": the "Keyblade obtained" panel (sora_unlock.h)
 static void skt_slot_load(int slot);   // (s110 skate, runtime/sora_skate.h: the skateboard's place per save slot)
@@ -211,6 +259,15 @@ static bool sm_out(void);  // (s136 summon, sora_summon.h: Chicken Little is out
 static void sm_hit_refill(float drain);  // (s148 sumlv, sora_summon.h: a hit Sora lands while a summon is out refills its gauge)
 #include "sora_sumlv.h"   // (s148 sumlv: KH2 Summon EXP + Summon Level)
 #include "sora_drive.h"   // (s67 drive: KH2's Drive gauge, Drive Forms slice 1; S64_HELPER_DRIVE_RECON.md 6)
+// (dbgjump) the Debug Menu's High Jump / Aerial Dodge rows (sora_dbgmenu.h): base Sora's level is at least this (0 = Off = KH2's rule
+// alone: his level = Valor's / Master's growth - 1). Read by sora_valor_lv.h vl_base_jump_h and sora_bdodge.h bd_lv; never saved.
+// The contributor's pick was LV3 from the start (DBM_GROW_DEF 3: "High Jump and Aerial Dodge be on by default in the debug menu");
+// (s288 port) DBM_GROW_DEF 0: Off = KH2's rule alone, nobody gets High Jump / Aerial Dodge / Quick Run LV3 for free. The rows (or live
+// dbmhjump / dbmadodge / dbmqrun 1..3) raise them for the session.
+#define DBM_GROW_DEF 0  /* (s288 port: OFF until the user plays it) */
+static int g_dbm_hjump = DBM_GROW_DEF, g_dbm_adodge = DBM_GROW_DEF;
+static int g_dbm_qrun = DBM_GROW_DEF;  // (qrun) the Quick Run row, the same rule (sora_qrun.h qr_lv: Wisdom's growth - 1)
+static bool qr_live_set(const char *key, int v);  // (qrun, sora_qrun.h: live qrun)
 #include "sora_valor_lv.h" // (s70: Valor EXP + form levels)
 #include "sora_light.h"  // (s121 a1 light: time of day / weather light for Sora + party; S121_HELPER_LIGHTDLL.md)
 // s54: the map warp's blue glow (sora_draw.c sora_draw_tint). Looked up in the exe by name, not imported: an exe linked
@@ -241,6 +298,13 @@ static float smooth01(float a, float b, float x) {
 
 // KH2 motion ids (mset slot = id * 4 + variant; SORA_DRIVER_RECON.md 1.2) - what the renderer will play
 enum { MOT_IDLE = 0, MOT_WALK = 1, MOT_RUN = 2, MOT_JUMP = 3, MOT_FALL = 4, MOT_LAND = 5, MOT_ROLL = 209 };
+// (hjanim) KH2's High Jump motion: re:0x3B59B0 (the jump start 0x422630 asks it for the height + the motion) answers motion 3 and
+// the prty jump height, and when the High Jump level (FUN_140401680) is above 0: that level's fmab height and motion 0xC9 = 201
+// (P_EX100 slot 806 B003, 64 GFR, takes off at GFR 4 like A003). Base Sora only here: Valor's own motion 3 already is B003, the
+// other forms have none. User report: High Jump works but Sora has no High Jump animation.
+// On by default (tested in game); SAVAGEWIND_SORA_HJ_ANIM=0 / live "set hjanim 0" = the plain jump motion (as before).
+enum { MOT_HIGH_JUMP = 201 };
+static int g_hjanim = 1;  /* (s288: the user played it, "batch 3 all works": default ON) */
 // S32 glide port (recon/S32_glide_port_draft.c): KH2's ACTION 17 hover / 18 glide in Sora's own servo
 enum { ACT_IDLE, ACT_JUMP, ACT_GLIDE_HOVER = 17, ACT_GLIDE = 18 };  // KH2 registry ids (re:0x750D30), as in PHH
 #define ACT_AIR(a) ((a) == ACT_JUMP || (a) == ACT_GLIDE_HOVER || (a) == ACT_GLIDE)  // ACT_FLAGS bit 0
@@ -386,6 +450,19 @@ static void mk_ball_tick(float kh, float to_u);  // (s117 pearl: Mickey's Pearl 
 static void mk_hit(int atkp, uint64_t actor);  // a hit of his: Drive gauge
 static void mk_dchg_loop(void);  // (s110m review: the held D-Charge's loop, before the motion end check)
 #include "sora_wisdom_lv.h" // (s75: Wisdom EXP per kill + form levels; needs IN_WISDOM)
+// (watersplash) user: "when Sora is walking or running on water, have his footsteps make splashes". On each of Sora's KH2
+// walk / run steps (exe sora_sfx_steps_fired) while wading (water depth > 2 cm), the exe plays BotW's own foot contact effect
+// on the water surface above his feet (linkpos_foot_effect: a type-0xf contact record, material Water, no stepping actor:
+// the game's contact effect manager plays its own FootEffect for water). (Test 2: "FootEffect" etc. are not in Link's own xlink
+// table, the game emits them on its contact system actor.) SAVAGEWIND_SORA_WATER_SPLASH=0/1 / live "set watersplash 0/1";
+// default 1.
+static int g_watersplash = 1;  /* (s288: Claude tested it in game: shallow run steps splash, up to 0.45 m; default ON) */  // (their test: "almost every step makes a splash")
+static int g_splash_walk = 45, g_splash_run = 60;  // (contact speed x10)
+static int g_splashmode = 1;  // (v8) 1 = our own emit with the handle checked (linkpos_foot_effect2), 0 = the game's contact path
+static int g_botwsteps = 1;  /* (s288: Claude tested it in game: sand steps -> "step bank bs/Sand/n: 4 sounds"; default ON) */  // (kh2steps, see g_stepdiag) BotW surface footsteps
+static int g_stepgain = 100;      // their gain x100
+static const char *g_step_bank;   // this frame's surface bank (NULL = none / KH2)
+static bool g_floor_wet;          // (watersplash) the floor itself is material Water (a wet platform, no wading depth)
 #include "sora_kbfx.h"      // (s89 kbfx: each Keyblade's own swing ribbon + hit sparks; S89_HELPER_KBFX.md)
 #include "sora_kbspan.h"    // (s247 kbspan: each KH2 Keyblade's ribbon reaches its own tip; tools/kbspan_gen.py)
 #include "sora_wpn.h"       // (s128 wpn: Link's equipped BotW melee weapon in Sora's hand; recon/S128_PLAN.md)
@@ -483,13 +560,83 @@ static const Mot *mot_of(int id) {
 // (set_motion / play / the S.mot refreshes / the blend's from-pose); the menus, the inventory Sora, the puppet's rest pose and
 // the hand pose keep mot_of (field). g_bs_on = bs_tick's (below glide_pose_draw). Live "set bstance 0" = off (default 1
 // since s260: the user verified it, "worked great").
+static int g_slam1 = 1;  /* (s288: the user played it, "it all seems to work": default ON) */  // (slam0x1: see THROW_SANE_U)
+static int g_evstick = 1;  /* (s288: the user played it, "it all seems to work": default ON) */  // (evstick, sora_chestev.h: a right-stick camera turn is no chest event)
+static int g_trimenu = 1;  /* (s288: the user played it, "it all seems to work": default ON) */  // (trimenu: see g_tri_pickup)
+static int g_hflip = 1, g_hflip_tail = 200;  /* (s288: horse: the user did not play it, the contributor's videos show it working; user OK: default ON) */  // (hflip: see the riding block; on by default, user tested)
+static bool g_hflip_fall;
+#define HFLIP_MAX_MS 900
+#define HFLIP_MIN_MS 250
+#define HFLIP_FLOOR_U 0.1f
+static int g_holdinv = 1;  /* (s288: the user played it, "those all work": default ON) */  // (holdinv: see hold_tick, after sora_carry.h)
+static volatile bool g_hold_on;  // (holdinv: items held from the inventory right now; pad_tap gives BotW the d-pad then)
+// (rollinv) user: "In KH2, Sora's dodge roll gave him brief invincibility. Is it possible to give dodge roll here the same
+// function?" At the roll's start Sora gets g_rollinv invulnerable KH frames (60 a second): the Reaction Command Dodge's own
+// counter g_rc_inv (sora_guard.h), so the exe drops every hit on Link meanwhile (no life lost, no flinch; a swallowed hit is
+// only logged: no guard spark / sound / motion). GUESS 20 (1/3 s from the start; KH2's exact window not traced).
+// SAVAGEWIND_SORA_ROLL_INV=<KH frames> / live "set rollinv <KH frames>" (0 = none); the contributor tested 20.
+// (s288 port, user ruling 2026-11-25) the frames also block a friend's duel hits (sora_duel.h du_take_hit counts g_rc_inv).
+static int g_rollinv = 20;  /* (s288: the user played it, "seemed like they all worked": default ON) */
+// (kh2steps, stage 1 = diagnosis) user chose option 2: KH2's footsteps per surface. BotW's ground ray returns the hit's
+// material (exe linkpos_raycast_mat); this logs it under Sora's feet on every change ('[steps] floor ...'), with the water
+// depth, so the material numbers can be matched to grass / stone / sand / snow / wood / water by walking on them.
+// SAVAGEWIND_SORA_STEP_DIAG=1 / live "set stepdiag 0/1"; default 0.
+static int g_stepdiag;
+// (kh2steps stage 2) Sora's KH2 footsteps (same frames as KH2) play BotW's own step sound for the floor under him: the ground
+// ray's material (raw & 63, sub (raw >> 6) & 15, BotW's PhysicsSubMaterialTable order) -> a pack bank "bs/<bank>"; wading
+// (water depth > 0.02 m) -> WaterShallow (< 0.25) / WaterMdlDepth (< 0.5) / WaterDeep. Needs the exe's sora_sfx_step_surface
+// + linkpos_raycast_mat and an sfx.bin with the steps (sorabuild sfx_botwsteps); anything missing = KH2's steps.
+// SAVAGEWIND_SORA_BOTW_STEPS=0/1 / live "set botwsteps 0/1", "set stepgain <x100>" (default 100); default 1 (user tested:
+// "the sound sounds fine"; level = the pack's, set by the user's in-game pick).
+// (declared above sora_kbfx.h: g_botwsteps, g_stepgain, g_step_bank)
+static int g_footik = 1, g_footik_log;  /* (s288: Claude tested it in game for the user: the uphill knee bends on a slope; default ON) */  // (footik: see fik_apply)
+static int g_firelight = 1;  /* (s288: Claude tested it in game on the PC (NVIDIA) + the helper on the Steam Deck (AMD / RADV): default ON) */  // (firelight: see firelight_tick)
+static int g_flamefront = 1;  /* (s288: Claude tested it in game on the PC (NVIDIA) + the helper on the Steam Deck (AMD / RADV): default ON) */  // (flamefront: see flamefront_tick)
+static int g_updraft = 1;  /* (s288: Claude tested it in game for the user: a column lifted 118 -> 185, a campfire 118 -> 131; default ON) */  // (updraft: see sora_updraft.h / updraft_field_ok)
+static int g_updraft_k = 50, g_updraft_mf = 1;
 static int g_bstance = 1;  // live "set bstance 0 / 1"
+// (malnoflinch) user: "Whenever Sora steps on Ganon's black goop, or malice, Sora gets stuck on the hurt animation ... until
+// he dies". Each malice tick (2 quarter hearts every ~130 frames) played KH2's flinch, which owns him (no move) until its
+// free frames; the next tick came first, so he never got out. With this on, a hit whose BotW call was malice's (exe
+// linkpos_player_dmg_last: a2 6, f54 0 = no reaction size; within MALNF_AGE frames of the life drop) takes the life but
+// plays no flinch. SAVAGEWIND_SORA_MALICE_NOFLINCH=1 / live "set malnoflinch 0/1"; default 1 (user tested, on by default). Log '[sora] malice: ...'.
+static int g_malnoflinch = 0;  /* (s288 port: OFF until the user plays it) */
+#define MALNF_AGE 20
+static bool malice_hit(void) {  // (the hit just seen was a malice tick)
+    static int (*fn)(int *);
+    static bool tried;
+    if (!tried) {
+        tried = true, fn = (int (*)(int *))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_player_dmg_last");
+        if (!fn) LOG("[sora] malnoflinch: this exe has no linkpos_player_dmg_last (NEEDS EXE RELINK): malice still flinches\n");
+    }
+    int a[4], age = fn ? fn(a) : -1;
+    return age >= 0 && age <= MALNF_AGE && a[0] == 6 && a[2] == 0;
+}
 static bool g_bs_on;   // a fight is on right now (or its hold still runs); always false with bstance 0
 static float g_bs_cm = 1500.0f, g_bs_hold = 3.0f, g_bs_left;  // range (cm), hold (s), KH frames of the hold left (bs_tick)
+static float g_bs_kbf_cm = 3400.0f;  // (s288 port, kbfield's range: user 34 m, after 20 m and 30 m; live "kbfieldcm"; used only while kbfield is on)
+#define BS_RANGE_CM (g_kbfield ? g_bs_kbf_cm : g_bs_cm)
 static int g_bs_log = 1;
+// (bsnoanimal) user: Sora drew the Keyblade and took the battle stance for animals that never attack (deer, birds, boars):
+// linkpos's enemy list holds BotW's animals too. bs_tick skips every Animal_* except Animal_Wolf_* / Animal_Bear_* (they
+// attack Link), the same rule as the party's pnoanimal. Only the stance: lock-on, targeting and hits still take animals.
+// SAVAGEWIND_SORA_BS_NOANIMAL=0 / live "set bsnoanimal 0" = every listed actor, as before. Default 1.
+static int g_bs_noanimal = 1;  /* (s288: the user played it, "those all work": default ON) */
+static bool bs_animal_skip(uint64_t actor) {
+    char nm[64];
+    if (!g_bs_noanimal || !actor || !linkpos_enemy_name(actor, nm, sizeof nm) || strncmp(nm, "Animal_", 7)) return false;
+    if (!strncmp(nm + 7, "Wolf_", 5) || !strncmp(nm + 7, "Bear_", 5)) return false;
+    static uint64_t said[32];  // (each animal logged once: two in range alternated every frame -> 138k lines)
+    static int ns;
+    bool known = false;
+    for (int i = 0; i < 32 && !known; i++) known = said[i] == actor;
+    if (!known && g_bs_log) said[ns++ & 31] = actor, LOG("[sora] bsnoanimal: %s is no fight (no battle stance)\n", nm);
+    return true;
+}
 static const Mot *mot_st(int id) {
-    static const int var[] = {0, 1, 3, 2};
-    return g_bs_on && id >= MOT_IDLE && id <= MOT_RUN ? mot_var(id, var) : mot_of(id);
+    static const int var[] = {0, 1, 3, 2}, nowpn[] = {2, 3, 0, 1}, wpn[] = {3, 2, 0, 1};  // (kbfield: field = no-weapon variant 2 first; kbtoggle drawn: field + weapon 3 first)
+    if (id < MOT_IDLE || id > MOT_RUN) return mot_of(id);
+    return g_bs_on ? mot_var(id, var) : g_kbfield ? mot_var(id, g_kb_drawn ? wpn : nowpn) : mot_of(id);
 }
 
 static uint32_t mot_bits(const Mot *m, float t) {
@@ -536,6 +683,33 @@ static bool g_thr_delta_ok;
 // points at Link). While this is set the exe is asked to draw gear of that name where BotW has it (linkpos_gear_show, the bow's
 // route), until a weapon of that name is equipped again (then it is the hand's) or a load.
 static char g_thr_name[48];
+// (bowtorch) the torch in the bow mode: holding R2 = the bow mode (Sora takes Link's pose, the exe draws only Link's BOW on Sora's
+// hand); X there makes Link take out his melee weapon - the Torch - and Square lights it at a fire, but the torch stayed hidden
+// (user report + epictest bowlog: Link's state word is 0x18000001 / 0x18000000 for the bow AND the torch, so it cannot tell).
+// With this on: while the Torch (Weapon_Sword_043) is equipped and the bow mode is on, the torch counts as IN HIS HAND when the exe
+// sees it within g_bt_dist u of Link's right weapon bone (Weapon_R, bone 50; linkpos_gear_pos); then the throw's hand fit runs
+// (palms onto Link's, closed fingers, the grip delta) and the exe draws only the torch, moved onto Sora's grip (lit when BotW lights
+// it); else the bow as before. Default ON (user tested in game: torch in hand, no flicker, lit with fire, bow unchanged);
+// SAVAGEWIND_SORA_BOW_TORCH=0 / live "set bowtorch 0" = off; "set bowtorchd <cm>".
+static int g_bowtorch = 1;  /* (s288: Claude tested it in game for the user (he asked): the torch drawn in Sora's hand in the bow mode, R2 + Square; default ON) */
+static float g_bt_dist = 0.3f;
+static bool g_bt_hand;  // (rag_retarget: the torch is in Link's hand now)
+// (btvis) the lit torch still showed no fire with Link hidden by his model only (linkfx). GUESS: the fire follows Link's view mask
+// bit 0 (hide_link clears it; BotW copies Link's mask onto his gear, s113) as the Slate did. While the torch is in his hand that bit
+// stays on (his body stays invisible through opacity). User tests: the fire shows with it; Link's SHADOW draws then, and nothing
+// tried removed it but not the fire (mDepthShadowCascade 0; his model has ONE unit; mAttributeFlags values) - the user keeps it.
+// Live "set btvis 0" = the old hide.
+static int g_bt_vis = 1;
+// (btjump) user: with the torch out in the bow mode Triangle did not jump. The bow mode turns Triangle into BotW's A (s251: no
+// hop on Triangle + R1). With this on, while the torch is in Link's hand Triangle reaches BotW as its X = Link's jump, unless R1
+// is held (the s251 case). Default ON (user tested in game: Link jumps with the torch out, lit or not);
+// SAVAGEWIND_SORA_BT_JUMP=0 / live "set btjump 0" = off.
+static int g_bt_jump = 1;  /* (s288: Claude tested it in game for the user: R2 + Triangle jumped; default ON) */
+// (bowjump) the same for the bow itself (user, after testing btjump: "do the same thing for the bow"): in the bow mode without the
+// torch Triangle = Link's jump too (BotW: a jump while aiming), unless R1 is held. Default ON (user tested in game: jumps while
+// aiming, no hop with R1 held); SAVAGEWIND_SORA_BOW_JUMP=0 / live "set bowjump 0" = off.
+// (s288 port) a controls change: with btjump / bowjump on, Triangle while aiming is no longer BotW's A (pick up / talk / open).
+static int g_bow_jump = 1;  /* (s288: Claude tested it in game for the user: R2 + Triangle jumped; default ON) */
 static int g_bowmimic = 1;   // (s250) live "set bowmimic 0 / 1": while ZR draws Link's bow, Sora takes Link's pose (default 1 since s251: the user verified it, "mimics links pose good")
 static int g_bowlog;         // (s250 diag) live "set bowlog 1": log Link's state word + the held buttons at each change
 static int g_rootyaw = 1;    // (s250: default ON, the user verified the finisher spin in game; set rootyaw 0 = off)
@@ -603,6 +777,7 @@ static float env_f(const char *name, float dflt) {
     const char *v = getenv(name);
     return v && *v ? strtof(v, NULL) : dflt;
 }
+#include "sora_shield.h"  // (shielddef: Link's equipped shield Guard / 10 -> Sora's Def; sl_def_tick, Status page)
 
 static int hits_file(const char *path, HitSlot *tab, int *ntab) {  // (s69: one SKRH file -> a slot table; 0 = none)
     path = sora_path(path);
@@ -684,10 +859,33 @@ static void hits_load(void) {
     hits_file("D:/SoraBotW/data/forms/anti_hits_l.bin", g_ahslots[1], &g_nahslots[1]);
     LOG("[sora] Anti hit bakes: track 0 %d slots, track 1 %d slots\n", g_nahslots[0], g_nahslots[1]);
     g_dmg_base = env_f("SAVAGEWIND_SORA_DMG", g_dmg_base);
+    g_bs_noanimal = env_f("SAVAGEWIND_SORA_BS_NOANIMAL", (float)g_bs_noanimal) != 0;  // (bsnoanimal)
     g_mp_charge_time = env_f("SAVAGEWIND_SORA_MP_CHARGE", g_mp_charge_time);
     g_cure_pct = env_f("SAVAGEWIND_SORA_CURE_PCT", g_cure_pct);
     g_hit_r = env_f("SAVAGEWIND_SORA_HIT_R", g_hit_r), g_hit_h = env_f("SAVAGEWIND_SORA_HIT_H", g_hit_h);
     g_hit_pad = env_f("SAVAGEWIND_SORA_HIT_PAD", g_hit_pad);
+    g_slam1 = env_f("SAVAGEWIND_SORA_SLAM_0X1", (float)g_slam1) != 0;  // (slam0x1)
+    g_evstick = env_f("SAVAGEWIND_SORA_EV_STICK", (float)g_evstick) != 0;  // (evstick, sora_chestev.h)
+    if (g_evstick) LOG("[sora] chestev: evstick on: a camera turned by the right stick is no chest event\n");
+    g_trimenu = env_f("SAVAGEWIND_SORA_TRI_MENU", (float)g_trimenu) != 0;  // (trimenu)
+    g_hflip = env_f("SAVAGEWIND_SORA_HORSE_FLIP", (float)g_hflip) != 0;  // (hflip)
+    g_holdinv = env_f("SAVAGEWIND_SORA_HOLD_INV", (float)g_holdinv) != 0;  // (holdinv)
+    g_rollinv = (int)env_f("SAVAGEWIND_SORA_ROLL_INV", (float)g_rollinv);  // (rollinv)
+    g_rollinv = g_rollinv < 0 ? 0 : g_rollinv > 120 ? 120 : g_rollinv;
+    g_malnoflinch = env_f("SAVAGEWIND_SORA_MALICE_NOFLINCH", (float)g_malnoflinch) != 0;  // (malnoflinch)
+    if (g_malnoflinch) LOG("[sora] malnoflinch: malice takes life with no flinch\n");
+    g_stepdiag = env_f("SAVAGEWIND_SORA_STEP_DIAG", (float)g_stepdiag) != 0;  // (kh2steps diag)
+    g_botwsteps = env_f("SAVAGEWIND_SORA_BOTW_STEPS", (float)g_botwsteps) != 0;  // (kh2steps)
+    g_watersplash = env_f("SAVAGEWIND_SORA_WATER_SPLASH", (float)g_watersplash) != 0;  // (watersplash)
+    g_footik = env_f("SAVAGEWIND_SORA_FOOT_IK", (float)g_footik) != 0;  // (footik)
+    g_footik_log = env_f("SAVAGEWIND_SORA_FOOT_IK_LOG", (float)g_footik_log) != 0;
+    g_lightsat = (int)env_f("SAVAGEWIND_SORA_LIGHT_SAT", (float)g_lightsat);  // (lightsat, sora_light.h)
+    if (g_lightsat != 100) LOG("[light] lightsat %d%%: the bodies' saturation after the light\n", g_lightsat);
+    g_firelight = env_f("SAVAGEWIND_SORA_FIRE_LIGHT", (float)g_firelight) != 0;  // (firelight)
+    g_flamefront = env_f("SAVAGEWIND_SORA_FLAME_FRONT", (float)g_flamefront) != 0;  // (flamefront)
+    g_updraft = env_f("SAVAGEWIND_SORA_UPDRAFT", (float)g_updraft) != 0;  // (updraft, s288 port)
+    g_updraft_mf = env_f("SAVAGEWIND_SORA_UPDRAFT_MF", (float)g_updraft_mf) != 0;
+    if (g_updraft) LOG("[sora] updraft on (columns %s)\n", g_updraft_mf ? "on the main field only" : "anywhere");
     const char *fin = getenv("SAVAGEWIND_SORA_FIN_F54");
     if (fin && *fin) g_fin_f54 = (int)strtol(fin, NULL, 0);
     LOG("[sora] hit bake %s: %d slots (damage base %.1f, finisher f54 %#x, enemy cylinder r %.2f h %.2f pad %.2f)\n",
@@ -890,6 +1088,48 @@ static int brk_blade(const HitWin *win, const float prev[6], const float now[6],
     }
     return hits;
 }
+// (swhit) the Keyblade sweep vs BotW hit-switches (the Goron cannon lever): a hit asks the exe to set the switch's "attack
+// received" float (linkpos_break.h) for one frame; BotW's own SwitchHit then flips it and the cannon turns. User report: the
+// Keyblade bounced off the lever (wall repel). Tested: 22 hits, the cannon turned, no repel off it.
+// On by default; SAVAGEWIND_SORA_SWHIT=0 / live "set swhit 0" = it bounces off as before. "set swhitv <x100>" the value
+// (default 1.0), "set swhitr <cm>" / "set swhith <cm>" the lever's cylinder (GUESS 80 / 300 cm; it connected in the test).
+static int g_swhit = 1;  /* (s288: the user: "im sure the levers work we can pass on testing it": default ON) */
+// (shrineswitch) the shrines' crystal switches too (exe names "SwitchHit" / "SwitchHitOnce", same SwitchHit AI as the lever; user:
+// "Sora couldn't hit the switch with his Keyblade" in a shrine, the log: repel 1 m from Dungeon056's SwitchHit).
+// On by default (user tested in Dungeon056: "Sora's keyblade works on the switches now!"); SAVAGEWIND_SORA_SWHIT_DGN=0 / live
+// "set swhitdgn 0" = the lever only. An old exe lists only the lever (NEEDS EXE RELINK).
+static int g_swhit_dgn = 1;  /* (s288: the user: "im sure the levers work we can pass on testing it": default ON) */
+static float g_swhit_v = 1.0f, g_swhit_r = 0.8f, g_swhit_h = 3.0f;
+static int swh_blade(const HitWin *win, const float prev[6], const float now[6], float to_u) {
+    static LinkposSwitchesFn list;
+    static LinkposSwitchHitFn hit;
+    static int tried;
+    if (!g_swhit) return 0;
+    if (!tried) {
+        tried = 1;
+        HMODULE exe = GetModuleHandleA(NULL);
+        list = (LinkposSwitchesFn)(void *)GetProcAddress(exe, "linkpos_switches");
+        hit = (LinkposSwitchHitFn)(void *)GetProcAddress(exe, "linkpos_switch_hit");
+        LOG("[sora] swhit: %s\n", list && hit ? "on (the Goron cannon lever)" : "not in this exe (NEEDS EXE RELINK)");
+    }
+    if (!list || !hit) return 0;
+    LinkposBreakable b[8];
+    int n = list(b, 8), hits = 0;
+    for (int i = 0; i < n; i++) {
+        int k = 0;
+        while (k < S.nhit && S.hit_actor[k] != b[i].actor) k++;
+        if (!g_swhit_dgn && strncmp(b[i].name, "FldObj_GoronCannonSwitch", 24)) continue;  // (shrineswitch off: the lever only)
+        if (k < S.nhit || !sweep_hits_rh(prev, now, b[i].pos, g_swhit_r, g_swhit_h)) continue;
+        if (S.nhit < 16) S.hit_actor[S.nhit++] = b[i].actor;  // (once per swing window)
+        int ok = hit(b[i].actor, g_swhit_v);
+        LOG("[sora] swhit: blade on %s %llx (motion %d clock %.1f): %s\n", b[i].name, (unsigned long long)b[i].actor, S.motion, S.clock,
+            ok ? "attack value written" : "refused by the exe");
+        sora_fx_event(kbfx_name("hit"), now + 3, S.face, to_u);
+        kbse_hit(win->atkp, 1.0f, b[i].pos);
+        S.hit = true, hits++;  // (no wall repel off the lever)
+    }
+    return hits;
+}
 // A spell's area vs the breakables: a cylinder (r, from y0 - below to y0 + above) at c.
 static int brk_spell(int how, const float c[3], float r, float below, float above) {
     LinkposBreakable b[32];
@@ -937,6 +1177,138 @@ static bool fire_fns(void) {
         LOG("[sora] fire world: %s\n", FW.objs && FW.ignite && FW.spark && FW.burst ? "on" : "not in this exe (off until the next exe link)");
     }
     return FW.objs && FW.ignite && FW.spark && FW.burst;
+}
+// (firelight) user: "is there a way we can have sora react to lightning from lava and fire?" (fire first, lava later). Each frame
+// the nearest BURNING fire object (the fire-world list: campfires, cooking pots, torches, lamps, candles, burning ivy;
+// linkpos_fire_burning) within FL_SCAN u of Link lights the bodies: the exe's sora_draw_point_light at its flame (FL_FLAME_Y u
+// above its feet), warm FL_RGB, reach g_fl_reach / 10 u, strength g_fl_k % with a soft flicker; fades in / out over FL_FADE s
+// (a new fire = fade out, then in). Link's own held torch is his gear, not on that list (not lit here: GUESS for later).
+// SAVAGEWIND_SORA_FIRE_LIGHT=1 / live "set firelight 0/1", "set firelightk <%>" (100), "set firelightr <tenths of u>" (60);
+// default 0 (s288 port; the PR: 1, its tester: campfires + the held torch). Log '[firelight] ...'.
+#define FL_SCAN 9.0f
+#define FL_FLAME_Y 0.6f
+#define FL_FADE 0.35f
+#define FL_HELD 1ull      // (the held fire's id: never an actor address)
+#define FL_TORCH_Y 0.35f  // u above the held weapon's origin (GUESS: the torch head)
+static int g_fl_torch = 1;  // live "set firelighttorch 0/1"
+static const float FL_RGB[3] = {1.0f, 0.55f, 0.22f};
+static int g_fl_k = 100, g_fl_reach = 60;
+static void firelight_tick(void) {
+    static int (*burning)(uint64_t);
+    static int (*held)(float *);
+    static void (*send)(const float *, int);
+    static int tried;
+    static uint64_t cur;
+    static float cur_p[3], w;
+    static double last;
+    static bool sent_off = true;
+    if (!tried) {
+        HMODULE exe = GetModuleHandleA(NULL);
+        tried = 1, burning = (int (*)(uint64_t))(void *)GetProcAddress(exe, "linkpos_fire_burning");
+        send = (void (*)(const float *, int))(void *)GetProcAddress(exe, "sora_draw_point_light");
+        held = (int (*)(float *))(void *)GetProcAddress(exe, "linkpos_held_fire");  // (a burning torch / branch in Link's hand)
+        LOG("[firelight] %s\n", send && burning ? "ready" : !send ? "this exe has no sora_draw_point_light (NEEDS EXE RELINK)" : "no linkpos_fire_burning in this exe");
+    }
+    if (!send) return;
+    LARGE_INTEGER qf, qn;
+    QueryPerformanceFrequency(&qf), QueryPerformanceCounter(&qn);
+    double now = (double)qn.QuadPart / (double)qf.QuadPart;
+    float dt = last > 0 && now - last < 0.25 ? (float)(now - last) : 0;
+    last = now;
+    uint64_t best = 0;
+    float bp[3] = {0, 0, 0}, lp[3] = {0, 0, 0};  // (s288 review: the log reads it when only the torch lit)
+    if (g_firelight && burning && fire_fns() && linkpos_link_pos(lp)) {  // (a load: the fire list is empty)
+        LinkposFireObj fo[48];
+        int n = FW.objs(fo, 48);
+        float bd = FL_SCAN * FL_SCAN;
+        for (int i = 0; i < n; i++) {
+            float dx = fo[i].pos[0] - lp[0], dy = fo[i].pos[1] - lp[1], dz = fo[i].pos[2] - lp[2], d = dx * dx + dy * dy + dz * dz;
+            if (d < bd && burning(fo[i].actor) == 1) bd = d, best = fo[i].actor, memcpy(bp, fo[i].pos, sizeof bp);
+        }
+    }
+    // (torch light) user: "Can we add the held torch as a light too?" A burning weapon in Link's hand (the exe's linkpos_held_fire;
+    // Sora holds it in bowtorch) wins over any fire object: it is the one in his hand. Its flame is at the weapon's origin + FL_TORCH_Y
+    // (GUESS: the torch's head), so the flame offset below is taken back. Key FL_HELD = the slot's id for the fade logic.
+    bool held_lit = false;
+    if (g_firelight && held && g_fl_torch) {
+        float hp[3];
+        if (held(hp) == 1) held_lit = true, best = FL_HELD, bp[0] = hp[0], bp[1] = hp[1] + FL_TORCH_Y - FL_FLAME_Y, bp[2] = hp[2];
+    }
+    (void)held_lit;
+    // (the weight goes to 0 before a different fire takes over, so the light never jumps across the scene)
+    float step = dt > 0 ? dt / FL_FADE : 1.0f;
+    if (best && (best == cur || w <= 0)) {
+        if (best != cur) LOG("[firelight] lit by a fire %.1f u away\n", sqrtf((bp[0] - lp[0]) * (bp[0] - lp[0]) + (bp[2] - lp[2]) * (bp[2] - lp[2])));
+        if (best != cur && best == FL_HELD) LOG("[firelight] lit by the fire in Link's hand (torch)\n");
+        cur = best, memcpy(cur_p, bp, sizeof cur_p);
+        w = w + step > 1 ? 1 : w + step;
+    } else {
+        w = w - step < 0 ? 0 : w - step;
+        if (w <= 0 && cur) LOG("[firelight] off (no burning fire within %.0f u)\n", FL_SCAN), cur = 0;
+    }
+    if (w <= 0) {
+        if (!sent_off) {
+            float z[8] = {0};
+            send(z, 8), sent_off = true;
+        }
+        return;
+    }
+    float fl = 0.88f + 0.06f * sinf((float)now * 11.0f) + 0.04f * sinf((float)now * 23.7f + 1.3f) + 0.02f * sinf((float)now * 5.1f);
+    float k = (float)g_fl_k / 100.0f * w * fl;
+    float out[8] = {cur_p[0], cur_p[1] + FL_FLAME_Y, cur_p[2], (float)g_fl_reach / 10.0f, FL_RGB[0], FL_RGB[1], FL_RGB[2], k};
+    send(out, 8), sent_off = false;
+}
+// (flamefront) user: "sora will stand behind a fire, a campfire for example, but despite being behind the flames, sora model
+// still overlaps the flames". (Option 1, the bodies drawn inside BotW's scene, was tried and scrapped: BotW's HDR / depth
+// copies / reduced effect buffers.) Each frame the two burning fire objects nearest Link (fire-world list +
+// linkpos_fire_burning, within FF_SCAN u) go to the exe as flame discs (centre + radius by the object's kind, GUESSES), plus a
+// burning weapon in Link's hand when the exe reports one (linkpos_held_fire, from the fire-light work); the body shader puts
+// those flames' own pixels back over him where they are nearer the camera (sora_draw_flame_front). SAVAGEWIND_SORA_FLAME_FRONT=1
+// / live "set flamefront 0/1", "set flamefrontk <%>" (strength, 100), "set flamefrontt <x100>" (how bright a flame pixel is,
+// 60); default 0 (s288 port; the PR: 1, its tester: "The campfire flames are now in front of Sora properly!").
+#define FF_SCAN 14.0f
+static int g_ff_k = 100, g_ff_t = 60;
+static void ff_shape(const char *n, float *up, float *r) {  // (the flame's centre above the object's feet, its radius; u)
+    if (strstr(n, "FireWood")) *up = 0.5f, *r = 0.7f;
+    else if (strstr(n, "CookSet")) *up = 0.4f, *r = 0.6f;
+    else if (strstr(n, "Candle")) *up = 0.15f, *r = 0.15f;
+    else *up = 0.6f, *r = 0.35f;  // (torches, lamps, burning ivy)
+}
+static void flamefront_tick(void) {
+    static void (*send)(const float *, int);
+    static int (*burning)(uint64_t), (*held)(float *);
+    static int tried;
+    if (!tried) {
+        HMODULE exe = GetModuleHandleA(NULL);
+        tried = 1, send = (void (*)(const float *, int))(void *)GetProcAddress(exe, "sora_draw_flame_front");
+        burning = (int (*)(uint64_t))(void *)GetProcAddress(exe, "linkpos_fire_burning");
+        held = (int (*)(float *))(void *)GetProcAddress(exe, "linkpos_held_fire");
+        LOG("[flamefront] %s%s\n", send ? "ready" : "this exe has no sora_draw_flame_front (NEEDS EXE RELINK)",
+            send && !held ? " (no held-fire export: a torch in hand is not covered)" : "");
+    }
+    if (!send) return;
+    float out[10] = {0}, lp[3], bd[2] = {1e30f, 1e30f};
+    static int last_n = -1;
+    int nf = 0;
+    if (g_flamefront && burning && fire_fns() && linkpos_link_pos(lp)) {
+        LinkposFireObj fo[48];
+        int n = FW.objs(fo, 48);
+        for (int i = 0; i < n; i++) {
+            float dx = fo[i].pos[0] - lp[0], dy = fo[i].pos[1] - lp[1], dz = fo[i].pos[2] - lp[2], d = dx * dx + dy * dy + dz * dz;
+            if (d > FF_SCAN * FF_SCAN || (d >= bd[0] && d >= bd[1]) || burning(fo[i].actor) != 1) continue;
+            int k = d < bd[0] ? 0 : 1;
+            if (k == 0) bd[1] = bd[0], memcpy(out + 4, out, 4 * sizeof(float));
+            float up, r;
+            ff_shape(fo[i].name, &up, &r);
+            bd[k] = d, out[k * 4] = fo[i].pos[0], out[k * 4 + 1] = fo[i].pos[1] + up, out[k * 4 + 2] = fo[i].pos[2], out[k * 4 + 3] = r;
+        }
+        float hp[3];
+        if (held && held(hp) == 1) out[4] = hp[0], out[5] = hp[1] + 0.35f, out[6] = hp[2], out[7] = 0.3f;  // (the torch in hand: slot 1)
+        nf = (out[3] > 0) + (out[7] > 0);
+    }
+    if (nf != last_n) LOG("[flamefront] %d flame(s) sent%s\n", nf, nf ? " (they go back over the bodies where nearer the camera)" : ""), last_n = nf;
+    out[8] = g_flamefront ? (float)g_ff_k / 100.0f : 0.0f, out[9] = (float)g_ff_t / 100.0f;
+    send(out, 10);
 }
 // c = the caster's feet; r, h = the Fire cylinder (u); who = "sora" / "donald" (the log)
 // (s176 fire sync) remote = 1: the Fire was cast on ANOTHER game (NET_FIRE): the world only - fire objects ignite, sparks at every
@@ -1151,6 +1523,7 @@ static void floor_probe(const float p[3], bool grounded) {
 }
 
 static void play(int m);  // (repel_try, s51: defined below)
+static bool logchop_at(const HitWin *win, const float c[3], const float now[6], float to_u);  // (logchop, world section)
 static bool repel_try(const HitWin *win, int w, const float now[6], const float prev[6], const float feet[3], float to_u) {
     // (S.hit: this swing already hit an enemy - re:0x3D0BB0 skips the wall test then, WALL_REPEL_RECON.md 10)
     if (!g_repel || !repel_row(win->atkp) || R.swing == S.swing || S.hit || !blade_in_wall(now, prev, feet)) return false;
@@ -1159,6 +1532,7 @@ static bool repel_try(const HitWin *win, int w, const float now[6], const float 
         if (!(said++ % 20)) LOG("[sora] blade ray hit an enemy body at %.2f %.2f %.2f: no repel\n", RC.pos[0], RC.pos[1], RC.pos[2]);
         return false;
     }
+    if (logchop_at(win, RC.pos, now, to_u)) return false;  // (logchop: the blade met a felled log: chopped, no repel)
     bool air = ACT_AIR(S.act);
     int from = S.motion, slot = S.mot ? S.mot->slot : -1;
     R.swing = S.swing + 1;  // (play() below counts the repel as the next swing: the latch holds through it)
@@ -1242,14 +1616,28 @@ static float g_hit_clk[2][16];
 // (BotW add() flags: 1 count, 2 launch angle, 4 no arrow refresh; 3), "set stasisr <cm>" / "set stasish <cm>" (100 / 200).
 #include "linkpos_world.h"
 static int g_tree_on = 1, g_tree_k = 100, g_tree_fin = 200, g_st_on = 1, g_st_fin = 1, g_st_fl = 3;
+// (logchop) user: "have Sora's keyblade cut knocked tree down into wood ... it just deflects like he's hitting a wall".
+// A felled tree is a trunk actor lying on the ground (exe linkpos_trunks: Obj_Tree*_Trunk with its LumberjackTree node in
+// mode 1); BotW turns it into Bundles of Wood on one real weapon hit. A Keyblade hit on it (points every TRUNK_STEP m along
+// its axis, each a cylinder g_trunk_r around the log) = linkpos_trunk_hit (the chop flag BotW's axe hit raises) + the
+// hit spark / sound, and no wall repel. SAVAGEWIND_SORA_LOG_CHOP=1 / live "set logchop 0/1", "set trunklen <cm>" (600),
+// "set trunkr <cm>" (100), "set logchoplog 1"; default 1.
+static int g_logchop = 1;  /* (s288: the user played it: default ON) */  // (tested in game: "The bundle of wood finally appears when hitting a log")
+static int g_logchop_log;  // (live "set logchoplog 1": the 'LOG miss' lines)
+static float g_trunk_len = 8.0f, g_trunk_r = 1.0f;
+#define TRUNK_STEP 0.75f
+#define TRUNK_SETTLE_MS 1500
 static float g_tree_r = 0.9f, g_tree_h = 3.0f, g_st_r = 1.0f, g_st_h = 2.0f;
-static struct { LinkposTreesFn trees; LinkposTreeHitFn tree_hit; LinkposStasisObjsFn st_objs; LinkposStasisHitFn st_hit; int tried; } WD;
+static struct { LinkposTreesFn trees; LinkposTreeHitFn tree_hit; LinkposStasisObjsFn st_objs; LinkposStasisHitFn st_hit; int tried;
+                LinkposTrunksFn trunks; LinkposTrunkHitFn trunk_hit; } WD;
 static void world_fns(void) {
     if (WD.tried) return;
     WD.tried = 1;
     HMODULE exe = GetModuleHandleA(NULL);
     WD.trees = (LinkposTreesFn)(void *)GetProcAddress(exe, "linkpos_trees");
     WD.tree_hit = (LinkposTreeHitFn)(void *)GetProcAddress(exe, "linkpos_tree_hit");
+    WD.trunks = (LinkposTrunksFn)(void *)GetProcAddress(exe, "linkpos_trunks");  // (logchop)
+    WD.trunk_hit = (LinkposTrunkHitFn)(void *)GetProcAddress(exe, "linkpos_trunk_hit");
     WD.st_objs = (LinkposStasisObjsFn)(void *)GetProcAddress(exe, "linkpos_stasis_objs");
     WD.st_hit = (LinkposStasisHitFn)(void *)GetProcAddress(exe, "linkpos_stasis_hit");
     LOG("[sora] world: trees %s, Stasis %s\n", WD.trees && WD.tree_hit ? "on" : "not in this exe",
@@ -1286,6 +1674,10 @@ static void st_cache(uint64_t actor) {
         return;
     }
 }
+static bool world_hit_already(uint64_t actor) {  // (logchop: the same test, without counting it)
+    for (int k = 0; k < S.nhit; k++) if (S.hit_actor[k] == actor) return true;
+    return false;
+}
 static bool world_seen(uint64_t actor) {  // (already hit in this window; else counts it)
     int k = 0;
     while (k < S.nhit && S.hit_actor[k] != actor) k++;
@@ -1320,6 +1712,44 @@ static int world_blade(const HitWin *win, const float prev[6], const float now[6
             S.hit = true, hits++;
         }
     }
+    if (g_logchop && WD.trunks && WD.trunk_hit) {  // (logchop) felled trunks: one hit = BotW's chop into wood
+        LinkposTrunk t[16];
+        int n = WD.trunks(t, 16);
+        for (int i = 0; i < n; i++) {
+            // (test 1: the felling swing hit the trunk as it spawned, still falling: flag set, no wood; later swings
+            // missed it = the hit volume off) a trunk younger than TRUNK_SETTLE_MS is left alone; points both ways
+            // along the axis; a miss within 8 m logs where the tip was relative to the axis ('LOG miss').
+            if (world_hit_already(t[i].actor) || t[i].age_ms < TRUNK_SETTLE_MS) continue;
+            bool hit = false;
+            for (float d = -g_trunk_len; d <= g_trunk_len && !hit; d += TRUNK_STEP) {
+                float c[3] = {t[i].pos[0] + t[i].axis[0] * d, t[i].pos[1] + t[i].axis[1] * d - g_trunk_r, t[i].pos[2] + t[i].axis[2] * d};
+                float dx = c[0] - feet[0], dz = c[2] - feet[2];
+                if (dx * dx + dz * dz > 36) continue;
+                hit = sweep_hits_rh(prev, now, c, g_trunk_r, 2 * g_trunk_r);
+            }
+            if (!hit) {
+                float v[3] = {now[3] - t[i].pos[0], now[4] - t[i].pos[1], now[5] - t[i].pos[2]};
+                float along = v[0] * t[i].axis[0] + v[1] * t[i].axis[1] + v[2] * t[i].axis[2];
+                float px = v[0] - along * t[i].axis[0], py = v[1] - along * t[i].axis[1], pz = v[2] - along * t[i].axis[2];
+                float off = sqrtf(px * px + py * py + pz * pz);
+                static uint64_t last_miss_ms;
+                if (g_logchop_log && off < 8 && GetTickCount64() - last_miss_ms > 250)
+                    last_miss_ms = GetTickCount64(),
+                    LOG("[sora] LOG miss %s: origin %.2f %.2f %.2f axis %.2f %.2f %.2f, tip %.2f %.2f %.2f = %.2f along, %.2f off the axis\n",
+                        t[i].name, t[i].pos[0], t[i].pos[1], t[i].pos[2], t[i].axis[0], t[i].axis[1], t[i].axis[2], now[3], now[4], now[5], along, off);
+                continue;
+            }
+            world_seen(t[i].actor);  // (counted now: one chop per window)
+            int r = WD.trunk_hit(t[i].actor);
+            LOG("[sora] LOG hit %llx %s by %s: %s\n", (unsigned long long)t[i].actor, t[i].name, fin ? "finisher" : "swing",
+                r > 0 ? "chop" : "refused");
+            if (r <= 0) continue;
+            wpn_wear(1);
+            sora_fx_event(kbfx_name(fin ? "hit_finish" : "hit"), now + 3, S.face, to_u);
+            kbse_hit(win->atkp, 1.0f, now + 3);
+            S.hit = true, hits++;
+        }
+    }
     if (g_st_on && WD.st_objs && WD.st_hit) {
         LinkposStasisObj o[16];
         int n = WD.st_objs(o, 16);
@@ -1341,6 +1771,57 @@ static int world_blade(const HitWin *win, const float prev[6], const float now[6
         }
     }
     return hits;
+}
+// (logchop, test 4) the sweep runs before the blade reaches the log (misses ~2-3 m off the axis) while the wall repel's
+// contact lies ~0.75 m from it: a repel contact within g_trunk_r + LOGCHOP_PAD of a settled trunk's axis = a log hit.
+#define LOGCHOP_PAD 0.4f
+static bool logchop_at(const HitWin *win, const float c[3], const float now[6], float to_u) {
+    world_fns();
+    if (!g_logchop || !WD.trunks || !WD.trunk_hit) return false;
+    LinkposTrunk t[16];
+    int n = WD.trunks(t, 16);
+    for (int i = 0; i < n; i++) {
+        if (t[i].age_ms < TRUNK_SETTLE_MS || world_hit_already(t[i].actor)) continue;
+        float v[3] = {c[0] - t[i].pos[0], c[1] - t[i].pos[1], c[2] - t[i].pos[2]};
+        float along = v[0] * t[i].axis[0] + v[1] * t[i].axis[1] + v[2] * t[i].axis[2];
+        if (along < -g_trunk_len || along > g_trunk_len) continue;
+        float px = v[0] - along * t[i].axis[0], py = v[1] - along * t[i].axis[1], pz = v[2] - along * t[i].axis[2];
+        float off = sqrtf(px * px + py * py + pz * pz);
+        if (off > g_trunk_r + LOGCHOP_PAD) continue;
+        world_seen(t[i].actor);  // (counted now: one chop per window)
+        int r = WD.trunk_hit(t[i].actor);
+        bool fin = win->kind != ATKP_KIND_NORMAL;
+        LOG("[sora] LOG hit %llx %s by %s (wall contact %.2f along, %.2f off the axis): %s\n", (unsigned long long)t[i].actor,
+            t[i].name, fin ? "finisher" : "swing", along, off, r > 0 ? "chop" : "refused");
+        if (r <= 0) return false;
+        wpn_wear(1);
+        sora_fx_event(kbfx_name(fin ? "hit_finish" : "hit"), c, S.face, to_u);
+        kbse_hit(win->atkp, 1.0f, now + 3);
+        S.hit = true;
+        return true;
+    }
+    return false;
+}
+// (s288 port) once a frame: tell the exe which of these PRs' lists to keep (linkpos.c exe_asked: an export not called for
+// 60 frames = its opacity-hook / damage-hook bookkeeping stops). Keys off = no call = the exe as before. An old exe: no symbol, nothing.
+static void s288_exe_asks(void) {
+    static LinkposSwitchesFn sw;
+    static int (*gear)(const char *, float *), (*dmg)(int *);
+    static int tried;
+    if (!tried) {
+        tried = 1;
+        HMODULE exe = GetModuleHandleA(NULL);
+        sw = (LinkposSwitchesFn)(void *)GetProcAddress(exe, "linkpos_switches");
+        gear = (int (*)(const char *, float *))(void *)GetProcAddress(exe, "linkpos_gear_pos");
+        dmg = (int (*)(int *))(void *)GetProcAddress(exe, "linkpos_player_dmg_last");
+    }
+    if (g_swhit && sw) sw(NULL, 0);
+    if (g_bowtorch && gear) gear(NULL, NULL);
+    if (g_malnoflinch && dmg) dmg(NULL);
+    if (g_logchop) {
+        world_fns();
+        if (WD.trunks) WD.trunks(NULL, 0);
+    }
 }
 
 // (s122b worlddiag) every 120 frames while something changed: the exe's tree / Stasis lists and BotW's stasis pool read
@@ -1389,6 +1870,7 @@ static void world_diag(void) {
 
 static void kbbeam_swing(int blade, const HitWin *win, const float prev[6], const float seg[6], const float feet[3], float to_u);  // (s216 beam: sora_kbbeam.h; s217: + prev for the roll)
 static float kh_step(void);  // (s247 kbfx2: kbfx_shed's rate is per second of game time)
+static int du_blade(int blade, const HitWin *win, int w, const float prev[6], const float now6[6], const float feet[3], float to_u);  // (s272 duel: sora_duel.h)
 static int blade_hits_one(int blade, float clock_old, float to_u) {  // (after the clock step; S.mot = the playing attack)
     const HitSlot *h = (S.special == SP_ATTACK || S.special == SP_LIMIT) && S.mot ? hit_slot(S.mot->slot, blade) : NULL;  // (s89: + Limit commands)
     float lm[12];
@@ -1413,6 +1895,7 @@ static int blade_hits_one(int blade, float clock_old, float to_u) {  // (after t
         kbbeam_swing(blade, win, prev, now, feet, to_u);  // (s216 beam: the Sealing Blade's full-health crescent, once per swing; s217: prev = the roll)
         if (g_bh.n < 0) g_bh.n = linkpos_enemies(g_bh.actor, g_bh.pos, g_bh.life, 64);
         hits += brk_blade(win, prev, now, to_u);  // (s55: boxes first; a hit sets S.hit, so no repel off the box)
+        hits += swh_blade(win, prev, now, to_u);  // (swhit: the Goron cannon lever, also before the repel)
         hits += bb_blade(win, prev, now, feet, to_u);  // (s217: explosive barrels, one hit; 0 while barrelboom is off)
         hits += world_blade(win, prev, now, feet, to_u);  // (s122: trees + Stasis'd objects, also before the repel)
         if (repel_try(win, w, now, prev, feet, to_u)) return hits;  // (the blade met the wall first: no enemy hits; S.mot
@@ -1483,6 +1966,7 @@ static int blade_hits_one(int blade, float clock_old, float to_u) {  // (after t
                 S.mot->slot, blade ? " (left blade)" : "", w, win->start, win->end, win->atkp, win->power, win->kind, S.clock, dmg, f54, now[3], now[4],
                 now[5], pos[i][0], pos[i][1], pos[i][2]);
         }
+        hits += du_blade(blade, win, w, prev, now, feet, to_u);  // (s272 duel: the duel opponent's body, only in a duel's fight; 0 otherwise)
     }
     return hits;
 }
@@ -1551,6 +2035,7 @@ static volatile uint64_t g_script_base;  // the windows' frame 0: world entry (0
 static float g_live_stop = -1;           // live "set stop": SAVAGEWIND_SORA_ENEMY_STOP
 static int g_swim_ghost = 35;  // live "set ghost <alpha x100>": his body under the water while swimming (0 = off)
 static int g_puppet = 1, g_climb = 1, g_wstick = -1;  // live "set puppet / climb / wstick" (session 28: Link's own states)
+static int g_jumpclimb = 1;  /* (s288: the user played it, "it all seems to work": default ON) */  // (jumpclimb, the climb try) live "set jumpclimb 0/1": no climb try while the jump winds up
 // s85f #1: a talk / pickup / scripted stretch (Link's state word 0 held, see sora frame): live "set evzero <n>" presents
 // of 0 in a row without screen 0x4a, "set evzero4a <n>" with it (0x4a = the message window, last/prev.log old man)
 static int g_ev_zero = 15, g_ev_zero4a = 4;
@@ -1774,6 +2259,63 @@ static int g_wheel = 1;   // live "set wheel 0/1": BotW's stamina wheel with Lin
 static volatile int g_glide;
 static volatile uint64_t g_glide_until, g_glide_cancel_until;
 static int g_glide_on = 1;                   // live "set glide 0/1"
+// (glidebtn) user: "Sora's glide ability is set to X (PS Cross = Switch B), originally it was the square button": KH2's
+// Glide is held Square in the air. With glidebtn 1, Square (Switch Y, the roll's button; the roll and the guard are ground
+// only) pressed in a jump arms the glide and its hold keeps it; Cross in the air is the Aerial Dodge only, at once (no
+// tap / hold wait). 0 = Cross (as before). Default ON (user tested in game: Square glides, Cross = the dodge at once,
+// the roll / guard on the ground and the updraft lift unchanged); SAVAGEWIND_SORA_GLIDE_BTN=0 / live "set glidebtn 0" = Cross.
+static int g_glide_btn = 1;  /* (s288: the user played it, "it all seems to work": default ON) */
+#define GLIDE_BTN (g_glide_btn ? BTN_ROLL : BTN_JUMP)
+// (updraft) user: "Sora's glide cannot increase height in a stream of air that a paraglider would normally react to". The
+// main map's updraft columns: sora_updraft.h (s288 port: the table is built on the player's PC into data/levels/updrafts.txt,
+// no game data in the source). While Sora glides (ACT_GLIDE / ACT_GLIDE_HOVER) inside one he is pushed by g_updraft_k % of
+// it (GUESS 50: BotW's paraglider does not take the wind area's whole speed). (s288 port) the columns only on the main
+// field (updraft_field_ok; g_updraft_mf 0 = anywhere, the PR as written). SAVAGEWIND_SORA_UPDRAFT=1 / live "set updraft
+// 0/1", "set updraftk <%>", "set updraftmf 0/1" (SAVAGEWIND_SORA_UPDRAFT_MF). Fire updrafts (below) are real burning
+// objects, not map coordinates: not gated.
+#include "sora_updraft.h"
+// (s288 port) the main field? The area text (sora_area.h, VERIFIED s190: "MainField" on the overworld, a shrine's / Divine
+// Beast's name inside them); when that is not known, the world manager's stage type light_tick reads (sora_world_env e[1]:
+// 1 on the main field in every s287 / s288 log line, MEASURED; other values GUESS). Neither known = no column lift.
+static bool updraft_field_ok(void) {
+    if (!g_updraft_mf) return true;
+    const char *a = area_now();
+    if (a && *a) return !strcmp(a, "MainField");
+    static bool (*env)(float *);
+    static int tried;
+    if (!tried) tried = 1, env = (bool (*)(float *))(void *)GetProcAddress(GetModuleHandleA(NULL), "sora_world_env");
+    float e[4] = {0};
+    return env && env(e) && (int)(e[1] + 0.5f) == 1;
+}
+// (updraft, fire) user tested at a campfire: BotW's fire updraft is a chemical element (not a map column). Above a BURNING
+// campfire / cooking pot (linkpos's fire-object list: FireWood / CookSet; linkpos_fire_burning) within g_fireup_r u
+// across and g_fireup_h u above its feet, the push is g_fireup_push u/s straight up (all GUESSES; the same g_updraft_k %).
+// Live "set fireup 0/1", "set fireupr / fireuph / fireupv <dm>" (tenths of a unit).
+static int g_fireup = 1, g_fireup_r = 15, g_fireup_h = 150, g_fireup_push = 200;
+// the up push (u/s) when p is in the updraft of a burning campfire / pot, else -1 (else its list index)
+static int fireup_at(const float p[3], float push[3]) {
+    static LinkposFireObjsFn objs;
+    static LinkposFireBurningFn burning;
+    static int tried;
+    if (!tried) {
+        tried = 1;
+        objs = (LinkposFireObjsFn)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_fire_objects");
+        burning = (LinkposFireBurningFn)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_fire_burning");
+        LOG("[sora] updraft: fire updrafts %s\n", objs && burning ? "on (campfires / cooking pots)" : "MISSING (exe without linkpos_fire_burning)");
+    }
+    if (!objs || !burning) return -1;
+    LinkposFireObj o[48];
+    int n = objs(o, 48);
+    float r = g_fireup_r / 10.0f, h = g_fireup_h / 10.0f;
+    for (int i = 0; i < n; i++) {
+        if (!strstr(o[i].name, "FireWood") && !strstr(o[i].name, "CookSet")) continue;
+        float dx = p[0] - o[i].pos[0], dy = p[1] - o[i].pos[1], dz = p[2] - o[i].pos[2];
+        if (dx * dx + dz * dz > r * r || dy < 0 || dy > h || burning(o[i].actor) != 1) continue;
+        push[0] = push[2] = 0, push[1] = g_fireup_push / 10.0f;
+        return i;
+    }
+    return -1;
+}
 // (s58) live "set glidestam 0/1/2": the KH2 glide pays BotW's paraglider stamina (glidestam_tick). 1 = through Link's
 // own stamina delta (BotW's accounting), 2 = a direct PlayerInfo write (fallback), 0 = off (the s32 port: free)
 static int g_glidestam = 1;
@@ -1783,6 +2325,11 @@ static volatile uint64_t g_glide_cancel = 1ull << 1;  // live "set gcancel <mask
 #define BTN_GLIDE (1ull << 2)  // Switch X: BotW's jump, the paraglider in the air
 
 static int g_tri_pickup = 1;  // live "set tri 0/1": the pad's own X (PS5 triangle) reaches BotW as A (pick up / talk)
+// (trimenu) user: "when I open the sheikah slate map for the shrine, triangle usually lets you leave the area, but pressing it
+// simulates a O button press". The tri rule above had no pause test (its neighbours do), so in BotW's map / pause menus
+// Triangle still reached BotW as A. With this on, a BotW menu (PAUSE_STATE != 0) gets the pad's own X there.
+// SAVAGEWIND_SORA_TRI_MENU=1 / live "set trimenu 0/1"; default 1 (user tested, on by default).
+// (g_trimenu: declared above the env reader, next to g_bstance)
 static volatile int g_link_owns;  // Link's own state (swim, climb...): X stays BotW's X (swim dash, wall jump: s49)
 #include "sora_prompt.h"  // (s194: BotW's A prompt drawn as Switch X's binding while Sora drives; live "set promptx")
 #include "items.h"  // (s260: the exe's item list + item get, the one Savage Wind's Cheats tab uses)
@@ -1825,6 +2372,14 @@ static void camp_abort(const char *why);
 static bool camp_live_set(const char *key, int v);
 #include "sora_title.h"  // (s199 title: Sora mode off on BotW's title after a quit to it; TITLE.on is read in pad_tap)
 
+// (ridel) BotW's L while Link rides: pad_tap keeps L from BotW (KH2's L1 = the shortcut menu), so on a horse L1 (BotW's soothe)
+// did nothing and wild horses could not be tamed (user report). While Link's state word (actor +0xcec) has bit 0x100000 = riding
+// (GUESS from the epictest logs: 0x100000 from the mount through the ride, left via 0x600002 / 0x100010; also seen on a Lynel's
+// back), L reaches BotW; the d-pad and ZL stay Sora's. Set per world frame by the tick (the state word is game-thread only).
+// On by default (tested in game); SAVAGEWIND_SORA_RIDE_L1=0 / live "set ridel 0" = L1 always KH2's (as before).
+#define LINK_SW_RIDING 0x100000u
+static int g_ride_l = 1;  /* (s288: horse: the user did not play it, the contributor's videos show it working; user OK: default ON) */
+static volatile int g_riding;  // (the tick: g_ride_l and Link riding now)
 static void pad_tap(uint64_t *b, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry) {
     uint64_t now = vk_frame_counter();
     px_pad(now);  // (s194 promptx: which button BotW's A glyph shows)
@@ -1880,19 +2435,28 @@ static void pad_tap(uint64_t *b, int32_t *lx, int32_t *ly, int32_t *rx, int32_t 
     // and the KH2 pause menu, which also sits on pause state 2, still eats the whole pad in camp_pad below)
     bool bmenu = *(volatile uint32_t *)(uintptr_t)PAUSE_STATE == 2 && g_menu_pass;
     *b &= ~BTN_TEST_ENEMY;
-    if (!bmenu && !g_slate_pass && !SLATE_LIVE(now)) *b &= ~BTN_MENU;  // (Sora's only: the game never sees them - the d-pad and L are KH2's menu; s93: unless the Slate)
+    // (holdinv test 2, user: "pressing the down d pad increases the distance to throw the ingredients, but when I press it, nothing
+    // happens") BotW's hold prompts use the d-pad ("Far"); while the items are held the d-pad is BotW's (L stays KH2's)
+    // (s288 merge #14 + #35) holdinv gives BotW the d-pad (L stays KH2's); ridel gives BotW L while Link rides
+    if (!bmenu && !g_slate_pass && !SLATE_LIVE(now)) {
+        uint64_t mm = g_hold_on ? BTN_SHORTCUT : BTN_MENU;
+        if (g_riding) mm &= ~BTN_SHORTCUT;
+        *b &= ~mm;  // (Sora's only: the game never sees them - the d-pad and L are KH2's menu; s93: unless the Slate)
+    }
     if (SLATE_LIVE(now) && now >= g_slate_l_from && now < g_slate_l_until) *b |= BTN_SHORTCUT;  // (s93: the L tap that uses the rune)
     if (!g_zl_pass && !bmenu) *b &= ~BTN_LOCK;  // (ZL is KH2's lock-on)
+    if (KB_L3_MINE && !g_link_owns && !*(volatile uint32_t *)(uintptr_t)PAUSE_STATE) *b &= ~BTN_L3;  // (kbtoggle: L3 is Sora's, after g_seen kept it)
     // (KH2's triangle = the reaction command: BotW gets A instead of the jump; Sora still saw the raw pad above, and
     // the climb try's own X pulse is kept)
     // (s110m review: while Mickey is out the held Triangle is his D-Charge: neither BotW's A (pick up / talk / open) nor its X jump)
     if (g_kbthrow && !g_link_owns && !g_fmots_on && !g_wpn_cur.def && !*(volatile uint32_t *)(uintptr_t)PAUSE_STATE) *b &= ~BTN_THROW;  // (s261 kbthrow: with the Keyblade out R1 is Sora's throw, never Link's inside a pick-up window; s263 review 1: not in a menu, R1 is BotW's tab there and the save point's jump to System)
     if (g_thr_on && raw_x && !*(volatile uint32_t *)(uintptr_t)PAUSE_STATE) *b &= ~BTN_CLIMB;  // (s261 wthrow: the held Triangle of the throw combo is nothing to BotW)
-    else if (raw_x && (mk_eat_x() || skt_eat_x() || rc_eat_x() || pl_eat_x() || sm_fps_eat_x()) && (!g_link_owns || g_bow_on) && !CLIMB_X(now) && !*(volatile uint32_t *)(uintptr_t)PAUSE_STATE) *b &= ~BTN_CLIMB;
+    else if (raw_x && (mk_eat_x() || skt_eat_x() || rc_eat_x() || pl_eat_x() || sm_fps_eat_x() || du_eat_x()) && (!g_link_owns || g_bow_on) && !CLIMB_X(now) && !*(volatile uint32_t *)(uintptr_t)PAUSE_STATE) *b &= ~BTN_CLIMB;
     // (s251 user: with bowmimic "when i press triangle+r1 he does a little hop before": the mimic hands the pad to Link, so his
     // Triangle = Switch X reached BotW as Link's jump [last60.log: state 0x18000002 right after held 0x204]. While the mimic is on
     // Triangle keeps the rule it has while Sora drives, as before s250)
-    else if (g_tri_pickup && raw_x && (!g_link_owns || g_bow_on) && !CLIMB_X(now)) *b = (*b & ~BTN_CLIMB) | BTN_ATTACK;
+    else if (g_bow_on && (g_bt_hand ? g_bt_jump : g_bow_jump) && raw_x && !(*b & BTN_THROW) && !*(volatile uint32_t *)(uintptr_t)PAUSE_STATE) {}  // (btjump / bowjump: Triangle = BotW's jump, so NOT BotW's A while aiming; s288 port: not in a BotW menu)
+    else if (g_tri_pickup && raw_x && (!g_link_owns || g_bow_on) && !CLIMB_X(now) && !(g_trimenu && *(volatile uint32_t *)(uintptr_t)PAUSE_STATE)) *b = (*b & ~BTN_CLIMB) | BTN_ATTACK;  // (trimenu: not in a BotW menu)
     bool gcl_menu = *(volatile uint32_t *)(uintptr_t)PAUSE_STATE != 0;  // (s88 review: no stick / X / B into a menu)
     if (g_climb_air && now < g_climb_until) {
         *b &= ~(BTN_JUMP | BTN_CLIMB);  // (the glide's try: no B, no X)
@@ -2003,6 +2567,7 @@ static void set_motion(int m) {
     }
 }
 
+static int g_air_ceil = 1;  /* (s288: the user played it, "it all seems to work": default ON) */  // (airceil: see fall_motion; live "set airceil 0" / SAVAGEWIND_SORA_AIR_CEIL=0 = the old Fall)
 static int g_play_trig;  // (s88 review) sounds the last play()'s frame-0 triggers started (fm_drive's voice check)
 static void play(int m) {  // a cut to the motion's start, also when it is already playing (the next swing)
     S.motion = m, S.clock = 0, S.mot = mot_st(m), S.swing++;
@@ -2211,6 +2776,7 @@ typedef struct {
     int32_t life;
     bool big;              // (s88) a big-body cylinder target (radius = the body's)
     bool air;              // held in the air by sora_airhold.h (Thunder pop, air hop, blow), not a slide
+    bool duel;             // (s275) the duel opponent's stand-in (actor = DU_ACTOR_TAG, no BotW actor: never dereference it)
 } Target;
 
 // (s66 user: after a Thunder pop the jump-up A331 needed him "really close") KH2's A331 Far is 260 cm of surface and its
@@ -2223,6 +2789,42 @@ static int g_big_air = 1;  // (s88) live "set bigair 0" = the old 50 cm point at
 // one of those). The yellow icon keeps the s47 user's 600 by its own display-only search (g_icon_range, 0 = the aim's).
 static float g_auto_range = KH_AUTO_RANGE;  // live "set autor <cm>"
 static float g_icon_range = 600;            // live "set iconr <cm>" (s47 user: the icon showed only up close at 300)
+// (lockpt) the lock-on icon at BotW's own attention point of the enemy (linkpos_enemy_attpos: Actor +0x430, its
+// AttClientList AttPos = a bone + offset per enemy type, e.g. Bokoblin Spine_1 + 0.75, Moblin / Lynel Spine_2 + 1.25,
+// Hinox Head, Guardian Root + 4.3) instead of 1 u above the feet (and, on big bodies, the aim point at Sora's height).
+// User report: "the lock on placement position for some enemies doesn't match how it is locked on in BotW".
+// 0 = old placement (s288 port: the default), 1 = BotW's marker (the contributor's pick): the attention point + the ModelList CursorOffsetY (Actor +0x490),
+// 2 = the attention point alone (for comparison). The "+ CursorOffsetY" is not traced in BotW's marker code; it is the
+// in-game match: the user compared both against BotW (1 "matches BotW better"; the point alone looked like the old
+// placement); log: Lynel chest +1.4 + 1.15 = icon 2.5 u, Hinox head +5.5 + 2.25 = 7.75 u above the feet.
+// SAVAGEWIND_SORA_LOCKPT=<0|1|2> / live "set lockpt <n>". An exe without the export, or a point farther than
+// LOCKPT_MAX_U from the enemy's feet (not a real attention point): the old placement.
+static int g_lockpt = 1;  /* (s288: the user played it, "seemed like they all worked": default ON) */
+#define LOCKPT_MAX_U 30.0f
+typedef int (*AttPosFn)(uint64_t, float *, float *);
+static bool lockpt_icon(uint64_t actor, const float feet[3], float out[3]) {
+    static AttPosFn fn;
+    static int tried;
+    if (!g_lockpt) return false;
+    if (!tried) {
+        tried = 1, fn = (AttPosFn)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_enemy_attpos");
+        LOG("[sora] lockpt %d: %s\n", g_lockpt, !fn ? "NOT in this exe: old placement"
+            : g_lockpt == 1 ? "BotW's marker (attention point Actor +0x430 + CursorOffsetY)" : "the attention point alone (Actor +0x430)");
+    }
+    float a[3], cy = 0;
+    if (!fn || !fn(actor, a, &cy)) return false;
+    float dx = a[0] - feet[0], dy = a[1] - feet[1], dz = a[2] - feet[2];
+    if (dx * dx + dy * dy + dz * dz > LOCKPT_MAX_U * LOCKPT_MAX_U) return false;
+    out[0] = a[0], out[1] = a[1] + (g_lockpt == 1 && cy > 0 && cy < 20 ? cy : 0), out[2] = a[2];
+    static uint64_t last_actor;
+    static ULONGLONG last_t;
+    ULONGLONG now = GetTickCount64();
+    if (actor != last_actor || now - last_t > 2000)  // (one line per new target, then every 2 s: does it follow the body?)
+        last_actor = actor, last_t = now,
+        LOG("[sora] lockpt %llx: attention point %+.2f %+.2f %+.2f u from the feet, CursorOffsetY %.2f -> icon %.2f u above the feet\n",
+            (unsigned long long)actor, dx, dy, dz, cy, out[1] - feet[1]);
+    return true;
+}
 static float g_part_r = 50.0f, g_part_h = 80.0f;  // enemy part radius / half-height, cm (from g_hit_r / g_hit_h)
 static bool g_targets_on = true;
 
@@ -2231,6 +2833,9 @@ static void targets_init(float to_u) {  // after hits_load(): the enemy cylinder
     g_part_r = g_hit_r / to_u, g_part_h = g_hit_h * 0.5f / to_u;
     LOG("[sora] targets %s (enemy part r %.0f h %.0f cm)\n", g_targets_on ? "on" : "off", g_part_r, g_part_h);
 }
+
+// (s275 duel lock-on, sora_duel.h) the opponent while a duel FIGHT runs: his tag, drawn feet (u) and HP % (1..100)
+static bool du_target(uint64_t *tag, float feet[3], int32_t *life_pct);
 
 // ------------------------------------------------------------------ the enemy list as KH2 targets
 static int targets_build(const float p[3], float to_u, Target *out, int max) {  // p = Sora's feet (u)
@@ -2245,7 +2850,7 @@ static int targets_build(const float p[3], float to_u, Target *out, int max) {  
         t->d[0] = (pos[i][0] - p[0]) / to_u, t->d[1] = (pos[i][2] - p[2]) / to_u;
         t->dy = -((pos[i][1] + g_hit_h * 0.5f) - p[1]) / to_u;  // centre above Sora's feet -> KH y down
         t->hd = sqrtf(t->d[0] * t->d[0] + t->d[1] * t->d[1]);
-        t->radius = g_part_r, t->height = g_part_h, t->big = false;
+        t->radius = g_part_r, t->height = g_part_h, t->big = false, t->duel = false;
         if (g_big_air) {  // (s88 Guardian air combos) a big body is a cylinder, not a 50 cm point at its origin: the aim, the
             // Far / dist test and the jump speed work from its SURFACE, at Sora's own height (clamped to the body), so
             // the jump stops at the shell and every air hit connects without repositioning (KH2: large actors' part
@@ -2270,6 +2875,20 @@ static int targets_build(const float p[3], float to_u, Target *out, int max) {  
         }
         const AhEnt *ah = ah_find(actor[i]);
         t->air = ah && ah->kind != AH_SLIDE;
+    }
+    // (s275, his picks) a duel: the other Sora is a full KH2 target (auto target, R1 lock + camera, turn / lunge / air jump
+    // toward him, his HP % as the enemy gauge). Sora's own part: a sphere 70 cm above the feet, radius 55 (DU_BODY_R_CM).
+    uint64_t dtag;
+    float df[3];
+    int32_t dlife;
+    if (m < max && du_target(&dtag, df, &dlife)) {
+        Target *t = &out[m++];
+        memset(t, 0, sizeof *t);
+        t->actor = dtag, t->life = dlife, t->duel = true;
+        t->d[0] = (df[0] - p[0]) / to_u, t->d[1] = (df[2] - p[2]) / to_u;
+        t->dy = -((df[1] - p[1]) / to_u + KH_SORA_PART_H);
+        t->hd = sqrtf(t->d[0] * t->d[0] + t->d[1] * t->d[1]);
+        t->radius = KH_SORA_PART_R, t->height = KH_SORA_PART_R;  // (GUESS: KH2's Sora part is a sphere; half-height = its radius)
     }
     return m;
 }
@@ -2305,13 +2924,55 @@ static float target_surface(const Target *e) {
     return sqrtf(e->hd * e->hd + dy * dy) - e->radius;
 }
 
+// (lockbotw) R1 lock-on reach per enemy type as in BotW, instead of KH2's LockOnRange 12 m / release 15 m for all.
+// User wish: "extend the distance of locking on to an enemy". BotW's reach = each enemy's LockOn AttClient (its
+// AttClientList "LockOn" entry, Actor/AttClient/<name>.batcl in its actor pack), first check (Radius, or FixedRadius
+// when larger: GUESS at how the two combine): AreaFan from the player, 20 m for 104 of 200 Enemy_* packs (Bokoblins,
+// Moblins, Lizalfos, Lynels, Yiga, ...), Guardian_Mini* 50, Guardian_* 60, Golem_* weak points 60 (Golem_Little 20),
+// SiteBoss_Bow* 40, GanonBeast weak point 50. Hinox (Enemy_Giant*, "ForestGiant"): AreaCylinderFan = 10 m all around
+// + 50 m within +-60 deg (Angle 1.047) ahead; "ahead" = the camera's direction here (GUESS: the file says only
+// FromPlayer). Release = reach x 1.25 (KH2's 15 / 12: GUESS, BotW's release not traced). Anything else: 20 m.
+// BotW's other checks (on screen, line of sight, +-10 m height) are not done (KH2's search has none either).
+// SAVAGEWIND_SORA_LOCK_BOTW=1 / live "set lockbotw 1" = on; 0 = KH2's 12 m / 15 m for all.
+// (s288 port) the duel opponent (Target.duel, actor DU_ACTOR_TAG) always keeps KH2's 12 m / 15 m.
+static int g_lock_botw = 1;  /* (s288: the user played it, "seemed like they all worked": default ON) */
+static float lock_reach(const Target *e, bool release) {  // cm, surface distance
+    if (!g_lock_botw || e->duel) return release ? KH_LOCK_RELEASE : KH_LOCK_RANGE;
+    static struct { uint64_t actor; float near_m, fan_m; } cache[32];
+    static int next;
+    float near_m = 20, fan_m = 0;  // fan_m > 0: farther reach only inside the Hinox fan
+    int k;
+    for (k = 0; k < 32 && cache[k].actor != e->actor; k++) {}
+    if (k < 32) near_m = cache[k].near_m, fan_m = cache[k].fan_m;
+    else {
+        char nm[48] = {0};
+        if (body_actor_name(e->actor, nm, (int)sizeof nm) > 0) {
+            static const struct { const char *pre; float near_m, fan_m; } REACH[] = {
+                {"Enemy_Guardian_Mini", 50, 0}, {"Enemy_Guardian", 60, 0}, {"Enemy_Golem_Little", 20, 0},
+                {"Enemy_Golem", 60, 0}, {"Enemy_SiteBoss_Bow", 40, 0}, {"Enemy_GanonBeast", 50, 0}, {"Enemy_Giant", 10, 50},
+            };
+            for (size_t r = 0; r < sizeof REACH / sizeof *REACH; r++)
+                if (!strncmp(nm, REACH[r].pre, strlen(REACH[r].pre))) { near_m = REACH[r].near_m, fan_m = REACH[r].fan_m; break; }
+            cache[next].actor = e->actor, cache[next].near_m = near_m, cache[next].fan_m = fan_m, next = (next + 1) % 32;
+            LOG("[sora] lockbotw %llx %s: reach %.0f m%s\n", (unsigned long long)e->actor, nm, near_m,
+                fan_m > 0 ? " (50 m inside +-60 deg ahead of the camera)" : "");
+        }  // (no name yet: 20 m, not cached - retried next time)
+    }
+    float m = near_m;
+    float cf[2];
+    if (fan_m > 0 && e->hd > 1 && linkpos_camera_fwd(cf) &&
+        (e->d[0] * cf[0] + e->d[1] * cf[1]) / e->hd >= cosf(60 * PI / 180))
+        m = fan_m;
+    return m * 100 * (release ? 1.25f : 1.0f);
+}
+
 // re:0x3BEA30: R1 with no target, the part nearest to Sora's point by surface distance within LockOnRange
 static const Target *target_lock(const Target *t, int n) {
     const Target *best = NULL;
     float best_d = 0;
     for (int i = 0; i < n; i++) {
         float d = target_surface(&t[i]);
-        if (d > KH_LOCK_RANGE) continue;  // (KH2's large actors have no limit: BotW has no flag for them yet)
+        if (d > lock_reach(&t[i], false)) continue;  // (KH2's large actors have no limit: BotW's per type with lockbotw)
         if (!best || d < best_d) best = &t[i], best_d = d;
     }
     return best;
@@ -2337,7 +2998,7 @@ static void lock_release(const char *why) {
 static void lock_tick(const Target *t, int n, float kh, uint32_t bits_prev, float face, bool r1) {
     const Target *cur = g_lock.actor ? target_of(t, n, g_lock.actor) : NULL;
     if (!cur && g_lock.actor) lock_release("target gone");
-    if (cur && g_lock.locked && target_surface(cur) > KH_LOCK_RELEASE) lock_release("out of range"), cur = NULL;
+    if (cur && g_lock.locked && target_surface(cur) > lock_reach(cur, true)) lock_release("out of range"), cur = NULL;
     if (r1 && g_lock.locked) { lock_release("R1"); return; }
     if (r1) {  // NONE -> search_lock, AUTO -> its target (re:0x3DCD70: no new search)
         const Target *p = cur ? cur : target_lock(t, n);
@@ -2345,7 +3006,7 @@ static void lock_tick(const Target *t, int n, float kh, uint32_t bits_prev, floa
             g_lock.actor = p->actor, g_lock.locked = true, g_lock.timer = 0;
             sora_sfx_event("lock_on", 1);
             LOG("[sora] lock-on %llx (%.0f cm surface, %s)\n", (unsigned long long)p->actor, target_surface(p), cur ? "auto target" : "search");
-        } else LOG("[sora] lock-on: nothing within %.0f cm\n", KH_LOCK_RANGE);
+        } else LOG("[sora] lock-on: nothing within %s\n", g_lock_botw ? "BotW's reach" : "1200 cm");
         return;
     }
     if (g_lock.locked) return;
@@ -2367,7 +3028,7 @@ static const Target *target_switch(const Target *t, int n, const Target *cur, fl
     float base = atan2f(cur->d[0], cur->d[1]), best_a = 0;
     const Target *best = NULL;
     for (int i = 0; i < n; i++) {
-        if (t[i].actor == cur->actor || target_surface(&t[i]) > KH_LOCK_RANGE) continue;
+        if (t[i].actor == cur->actor || target_surface(&t[i]) > lock_reach(&t[i], false)) continue;
         float a = wrap(atan2f(t[i].d[0], t[i].d[1]) - base) * sign;
         if (a > 0 && (!best || a < best_a)) best = &t[i], best_a = a;
     }
@@ -2999,6 +3660,7 @@ static void spell_spawn(int kind, const float feet[3], float face, uint64_t targ
     LOG("[sora] spell %s (%s, tier %d) at %.2f %.2f %.2f (target %llx)\n", KH_SPELLS[kind].name,
         SP_TIER_NAME[kind][o->tier], o->tier + 1, feet[0], feet[1], feet[2], (unsigned long long)target);
 }
+#include "sora_mgelem.h"  // (mgelem #61; s288 port: Blizzard freezes / Thunder shocks through BotW's own reaction, default OFF)
 static void spell_hit(SpellObj *o, uint64_t actor, const float epos[3], int power, int f54) {
     static const char *const HIT_FX[] = {"fire_hit", "blizzard_hit", "thunder_hit"};  // (KH_SPELLS order; Cure: none)
     if (o->kind >= 0 && o->kind < 3) {
@@ -3017,6 +3679,7 @@ static void spell_hit(SpellObj *o, uint64_t actor, const float epos[3], int powe
     if (o->kind == SPELL_THUNDER) ah_thunder_dmg(actor, &f54, &f40);  // (s55/s57 airhold: KH2 pop, no BotW ragdoll / shock)
     f54 = ah_f54(actor, epos, f54, to_u);  // (s55 airhold)
     linkpos_damage_enemy_ex(actor, d, f54, f40);
+    mgelem_hit(o->kind, actor);  // (mgelem #61, sora_mgelem.h: off = returns at once) BotW's own freeze / shock reaction
     {  // (s55 airhold) the spells' atkp rows, Lv1 (S55_HELPER_AIRHOLD.md 1.2): Thunder 250 = blow (30, 0), its finisher
        // code +1 = (45, 0); Fire 502 ticks = blow (6, 0), the last hit react 3; Blizzard 248 = react 3, strength 50
         int react = 3, kb1 = 0, kb2 = 0;
@@ -3191,6 +3854,7 @@ static void spell_tick(float kh, float to_u, const float feet[3]) {
                     if (life[i] > 0 && dx * dx + dz * dz < r * r && dy > -h && dy < 2 * h)
                         spell_hit(o, actor[i], pos[i], last ? SP_FIRE_LAST[o->tier] : 50, last ? 0x14 : 0x0f);
                 }
+                du_spell(o->kind, last ? SP_FIRE_LAST[o->tier] : 50, o->pos, r, -h, 2 * h);  // (s272 duel: the opponent in the ring of fire, only in a duel)
                 brk_spell(BRKHIT_FIRE, o->pos, r, h, 2 * h);  // (s55: wood in the ring burns at once)
                 bb_spell(BBHIT_FIRE, o->pos, r, h, 2 * h, feet);  // (s217: explosive barrels in the ring blow up)
                 fire_world(o->pos, last, r, h, "sora");  // (s59: BotW fire: campfires, pots, torches, enemies)
@@ -3239,6 +3903,7 @@ static void spell_tick(float kh, float to_u, const float feet[3]) {
                     if (life[i] > 0 && dx * dx + dz * dz < r * r && dy > -2 * r && dy < 2 * r)
                         spell_hit(o, actor[i], pos[i], SP_POW[o->tier], 0x11), o->on = false;
                 }
+                if (o->on && du_spell(o->kind, SP_POW[o->tier], o->pos, r, -2 * r, 2 * r)) o->on = false;  // (s272 duel)
                 if (o->on && brk_spell(BRKHIT_ICE, o->pos, r, 2 * r, 2 * r)) o->on = false;  // (s55: Arrow rate; first hit ends it)
             }
             float sp[3] = {o->pos[0], o->pos[1] + 100 * to_u, o->pos[2]};
@@ -3249,6 +3914,7 @@ static void spell_tick(float kh, float to_u, const float feet[3]) {
             if (o->t < 6) continue;
             float at[3] = {o->pos[0] + o->dir[0] * 300 * to_u, o->pos[1], o->pos[2] + o->dir[1] * 300 * to_u};
             for (int i = 0; i < n; i++) if (actor[i] == o->target) memcpy(at, pos[i], sizeof at);
+            du_thunder_aim(o->target, o->pos, o->dir, at);  // (s272 duel: no enemy target = the opponent when near and ahead)
             float r = SP_THU_R[o->tier] * to_u;  // (s87c tier burst)
             for (int i = 0; i < n; i++) {
                 float dx = pos[i][0] - at[0], dz = pos[i][2] - at[2], dy = pos[i][1] - at[1];
@@ -3256,6 +3922,7 @@ static void spell_tick(float kh, float to_u, const float feet[3]) {
                     dx * dx + dz * dz < r * r)
                     spell_hit(o, actor[i], pos[i], SP_POW[o->tier], 0x14);
             }
+            du_spell(o->kind, SP_POW[o->tier], at, r, -2 * r, 2 * r);  // (s272 duel)
             brk_spell(BRKHIT_THUNDER, at, r, 2 * r, 2 * r);  // (s55: BotW's lightning rule)
             bb_spell(BBHIT_THUNDER, at, r, 2 * r, 2 * r, feet);  // (s217: explosive barrels in the burst blow up)
             char nb[48];
@@ -3357,11 +4024,132 @@ static void hurt_log(int life) {
     }
     prev = life;
 }
+// (hudev) user: "during cutscenes and when speaking with npcs the kh2 hud still displays ... when there is a cutscene, or
+// when you are speaking with npcs or reading a sign, the kh2 hud disappears". BotW hides its own HUD there. Hidden while:
+// g_event (Link's state word 0 held = talks / pickups / scripted stretches, state 0x1 = warps / story events, the chest
+// camera), the message window (screen 0x4a, g_msg_screen) or a freeze screen (g_frz_id, item popups) is up. GUESS that this
+// covers every case: signs / cutscenes may use other screens ('screen diff' log lines show them; add them here).
+// SAVAGEWIND_SORA_HUD_EV=0 / live "set hudev 0" = the HUD stays up (the old behaviour); default 1 (user tested, user's choice).
+static int g_hudev = 1;  /* (s288: the user played it, "those all work": default ON) */
+// (hudslide) user: "when Sora slides, the kh2 hud disappears" / "Sliding down a steep slope ... The kh2 hud should stay up
+// during those slides". F5 mark 075646 (Vah Rudania's tilted floor): BotW gives Link state word 0 for the slide, the word of
+// a talk / chest / cutscene, so g_event hid the HUD. BotW's own HUD stays up there. A slide = Link moving faster than
+// HSLIDE_SPEED m/s over a floor steeper than HSLIDE_NY (normal y) within HSLIDE_DOWN m below his feet (log: 7 m/s, n.y 0.5..0.7);
+// a talk / sign / chest keeps him still. Held HSLIDE_HOLD_MS after the last such frame (airborne bumps). Only the "event"
+// reason is lifted (a message window / freeze screen still hides it). SAVAGEWIND_SORA_HUD_SLIDE=1 / live "set hudslide 0/1"; default 1 (user tested, on by default).
+static int g_hudslide = 1;  /* (s288: the user played it, "those all work": default ON) */
+// (hudclimb) user: "when Sora was finishing his climbing ladder animation the kh2 hud disappeared". Log: Link state 0x10
+// (climbing) -> a state-0 stretch (the pull-up at the top, ~0.5 s) -> 0x18000000; state 0 = g_event, which hid the HUD. Now a
+// state-0 stretch that STARTS within HCLIMB_GAP_MS of a climbing frame is the climb-up: the HUD stays up for it (at most
+// HCLIMB_MAX_MS, then a real event hides it as before). SAVAGEWIND_SORA_HUD_CLIMB=0/1 / live "set hudclimb 0/1"; default 1
+// (tested in game: the HUD stays up at the top of a ladder).
+static int g_hudclimb = 1;  /* (s288: the user played it, "those all work": default ON) */
+// (hudgrace) user: the KH2 HUD disappeared "at a certain point when I was messing with the log". Log: Sora stepped up onto a
+// rolling felled log, Link's state word went 0 for ~20 presents (a stagger on the moving log) = g_event, HUD hidden and back.
+// Real events last much longer, and talks open the message window (hidden at once on its own). So a state-0 stretch only
+// hides the HUD after g_hudgrace ms (message windows / freeze screens still at once). SAVAGEWIND_SORA_HUD_GRACE=<ms> / live
+// "set hudgrace <ms>" (0 = off); default 400.
+static int g_hudgrace = 400;  /* (s288: the user played it, "those all work": default ON) */  // (tested in game: "The HUD stays up as it should now")
+#define HCLIMB_GAP_MS 600
+#define HCLIMB_MAX_MS 3000
+#define HSLIDE_SPEED 2.5f
+#define HSLIDE_NY 0.92f
+#define HSLIDE_DOWN 1.5f
+#define HSLIDE_HOLD_MS 2000  // (test 2: was 600; also bridges the gaps between a slope's state-0 stretches)
+#define HSLIDE_START_MS 500
+// (hudslide test 2, user: "during the slides the kh2 hud somewhat flickers in and out") Log: one slope = several state-0
+// stretches (0 <-> 0x18000000), and each new stretch hid the HUD until two fresh position samples showed the speed (the
+// samples were only taken inside a stretch). Now: sampled every frame (QPC ms); inside a stretch a slide frame (fast + steep)
+// keeps it up for HSLIDE_HOLD_MS, and a stretch that starts on steep ground (HSLIDE_START_MS) is a slide from its first frame.
+static double hsl_ms(void) {
+    static LARGE_INTEGER f;
+    LARGE_INTEGER n;
+    if (!f.QuadPart) QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&n);
+    return (double)n.QuadPart * 1000.0 / (double)f.QuadPart;
+}
+static double g_hsl_at;  // (the last slide frame, ms; 0 = none)
+static bool g_hsl_steep;  // (the floor under Link is steep this frame)
+static void hud_slide_sample(void) {  // (every hud_update: speed + floor)
+    static float lp[3];
+    static double lt;
+    static bool have;
+    float p[3];
+    double now = hsl_ms();
+    g_hsl_steep = false;
+    if (!g_hudslide || !linkpos_link_pos(p)) { have = false; return; }
+    float v = 0;
+    bool fast = false;
+    if (have && now - lt > 1.0) {
+        float dx = p[0] - lp[0], dy = p[1] - lp[1], dz = p[2] - lp[2], dt = (float)(now - lt) / 1000.0f;
+        v = sqrtf(dx * dx + dy * dy + dz * dz) / g_k / dt;
+        fast = dt < 0.5f && v > HSLIDE_SPEED;
+    }
+    if (!have || now - lt > 1.0) memcpy(lp, p, sizeof lp), lt = now, have = true;
+    float a[3] = {p[0], p[1] + 0.3f * g_k, p[2]}, b[3] = {p[0], p[1] - HSLIDE_DOWN * g_k, p[2]}, h[3], n[3];
+    g_hsl_steep = linkpos_raycast(a, b, h, n) && n[1] > 0.2f && n[1] < HSLIDE_NY;
+    if (g_event && fast && g_hsl_steep) {
+        if (!g_hsl_at || now - g_hsl_at > HSLIDE_HOLD_MS) LOG("[sora] hudslide: Link sliding (%.1f m/s, floor n.y %.2f): KH2 HUD stays up\n", v, n[1]);
+        g_hsl_at = now;
+    }
+}
+static bool hud_sliding(void) {  // (inside a state-0 stretch: a slide, not an event)
+    static bool was_ev;
+    static double ev_at;
+    double now = hsl_ms();
+    if (g_event && !was_ev) ev_at = now;
+    was_ev = g_event;
+    if (g_hsl_at && now - g_hsl_at <= HSLIDE_HOLD_MS) return true;
+    return g_event && g_hsl_steep && now - ev_at <= HSLIDE_START_MS;  // (a stretch starting on steep ground, before the speed shows)
+}
+static bool hud_climbup(void) {  // (hudclimb: this state-0 stretch began right after Link climbed)
+    static double climb_at, ev_at;
+    static bool was_ev, from_climb;
+    double now = hsl_ms();
+    if (linkpos_link_state_word() == 0x10) climb_at = now;
+    if (g_event && !was_ev) {
+        ev_at = now;
+        from_climb = climb_at && now - climb_at <= HCLIMB_GAP_MS;
+        if (from_climb && g_hudclimb) LOG("[sora] hudclimb: climb-up at the top (state 0 %.0f ms after climbing): KH2 HUD stays up\n", now - climb_at);
+    }
+    was_ev = g_event;
+    return g_hudclimb && g_event && from_climb && now - ev_at <= HCLIMB_MAX_MS;
+}
+static bool hud_ev_hidden(void) {
+    static int last = -1;
+    if (!g_hudev) {  // (s288 port: hudev off = no slide raycast / climb watch either; one "shown again" if it was hiding)
+        if (last == 1) LOG("[sora] hudev: off, KH2 HUD shown again\n");
+        last = 0;
+        return false;
+    }
+    hud_slide_sample();
+    bool sliding = g_hudslide && hud_sliding();  // (every frame: it tracks the stretch starts)
+    if (hud_climbup()) sliding = true;  // (hudclimb: the pull-up at the top of a climb is not an event either)
+    {  // (hudgrace) a short state-0 blip is no event
+        static double ev_from;
+        static bool was, logged;
+        double now = hsl_ms();
+        if (g_event && !was) ev_from = now, logged = false;
+        was = g_event;
+        if (g_hudgrace > 0 && g_event && now - ev_from < g_hudgrace) {
+            if (!logged && !g_msg_screen && g_frz_id < 0) logged = true, LOG("[sora] hudgrace: state-0 stretch, the HUD waits %d ms\n", g_hudgrace);
+            sliding = true;
+        }
+    }
+    const char *why = !g_hudev ? NULL : g_event && !sliding ? "event" : g_msg_screen ? "message window 0x4a" : g_frz_id >= 0 ? "freeze screen" : NULL;
+    if ((why != NULL) != last) {
+        if (why || last == 1) LOG("[sora] hudev: KH2 HUD %s%s (Link state %#x, freeze screen %d)\n", why ? "hidden: " : "shown again", why ? why : "",
+                                  linkpos_link_state_word(), g_frz_id);
+        last = why != NULL;
+    }
+    return why != NULL;
+}
 static void hud_update(void) {
     enemy_place_sync();  // (s92 hud)
     int life = linkpos_link_life();
     hurt_log(life);
     if (life <= 0) { sora_hud_off(); sora_sfx_loop("danger", false); return; }
+    bool ev_hide = hud_ev_hidden();  // (hudev; s288 port: the HP / MP below are still kept up to date while it hides)
     if (life > g_hud_life_max) g_hud_life_max = life;
     // (s57: the max seen since the last hot reload made Cure +2 at 6 / 12; BotW's own max hearts, quarter hearts)
     static unsigned gdt_n;
@@ -3372,6 +4160,12 @@ static void hud_update(void) {
     float mp = mp_charging() ? -(MP.charge_total - MP.charge) / MP.charge_total * MP.mp_max : MP.mp;  // (< 0: pink, progress)
     float hud_hp = (float)life, hud_hpm = (float)g_hud_life_max, hud_mpm = MP.mp_max;
     mk_hud(&hud_hp, &hud_hpm, &mp, &hud_mpm);  // (s110m: Mickey's 60 HP / 100 MP while he is out)
+    if (ev_hide) {  // (hudev) hidden in a talk / cutscene / popup: co-op's net_fill + the camp rows still read g_hud_last / AB
+        g_hud_last[0] = (float)life, g_hud_last[1] = (float)g_hud_life_max, g_hud_last[2] = mp, g_hud_last[3] = MP.mp_max;
+        AB.hp = (int)life, AB.hp_max = (int)g_hud_life_max;
+        sora_hud_off(), sora_sfx_loop("danger", false);  // (s288 review: a low-HP alarm must not keep looping under a hidden HUD)
+        return;
+    }
     // (s111 roxcmd: KH2's Roxas has no MP: the exe draws no MP bar at mp_max 0; review: only the HUD call - g_hud_last below
     // keeps the real MP so the camp's status rows do not read "MP 0 / max" for Roxas)
     sora_hud_set(hud_hp, hud_hpm, ROXCMD ? 0 : mp, ROXCMD ? 0 : hud_mpm);
@@ -3561,19 +4355,34 @@ static void mg_other(const char *why) {
 // guard-piercing attack at the end of a combo with Attack." The exact code conditions are not traced: Counterguard (press
 // during Guard) is the text's own; Retaliating's press window and the three combo ones are GUESS (recon/S106_HELPER_COMBOABIL2.md).
 // Live "set t0 0" = off. Each entry plays only through ptya_ability_ok (equipped, base Sora, motion + hits baked).
-static int g_t0 = 1;
+// (t0sq, user: "retaliation slash and upper slash require pressing square ... they are mapped to the circle button") The
+// msgdump "Attack" above was a button glyph: Retaliating / Upper / Horizontal Slash and Finishing Leap read {09:de}, the
+// glyph KH2 uses for Square ("Use {09:db} to jump continuously and {09:de} in midair to glide!", sys.bar); only
+// Counterguard's text spells "Attack". With t0sq (s288 port: default 0) those four fire from Square (BTN_ROLL): Square while a
+// combo runs (S.special SP_ATTACK) or in Retaliating's knock-back window becomes that frame's attack press (no Guard /
+// roll); in a combo it plays the ability the GUESS rules below allow, else nothing (no plain swing). A plain Attack
+// press no longer turns into them. Live "set t0sq 0" = the s106 rules (Attack, Upper / Horizontal Slash on the 2nd hit).
+static int g_t0 = 1, g_t0sq = 1;  /* t0sq (s288: the user played it, "seemed like they all worked": default ON); env SAVAGEWIND_SORA_T0_SQUARE */
 static const KhPtya *t0_entry(int id) {
     if (!g_t0 || PTYA != kh_ptya) return NULL;
     int i = ptya_index(id);
     return i >= 0 && ptya_ability_ok(&PTYA[i]) ? &PTYA[i] : NULL;
 }
-// a press while Guard plays (Counterguard, id 39) / while getting up from a knock-back with no ragdoll left (Retaliating, id 40)
-static const KhPtya *t0_reaction(void) {
+static bool t0_retal_win(void) {  // getting up from a knock-back with no ragdoll left (Retaliating Slash's window)
+    return S.special == SP_DAMAGE && S.motion >= MOT_AIR_FLINCH_FRONT && S.motion <= MOT_BLOW_BACK + 1 && linkpos_link_ragdoll() <= 0;
+}
+// a press while Guard plays (Counterguard, id 39: Attack) / in Retaliating's window (id 40: Square with t0sq; sq = the
+// press came from Square)
+static const KhPtya *t0_reaction(bool sq) {
     if (!g_t0 || PTYA != kh_ptya) return NULL;
-    if (S.special == SP_GUARD && S.motion == MOT_GUARD_REFLECT) return t0_entry(39);  // (review: only after a real block, not any guard)
-    if (S.special == SP_DAMAGE && S.motion >= MOT_AIR_FLINCH_FRONT && S.motion <= MOT_BLOW_BACK + 1 && linkpos_link_ragdoll() <= 0)
-        return t0_entry(40);
+    if (!sq && S.special == SP_GUARD && S.motion == MOT_GUARD_REFLECT && !g_gparry_reg) return t0_entry(39);  // (review: only after a real block, not any guard)
+    if (sq == (g_t0sq != 0) && t0_retal_win()) return t0_entry(40);
     return NULL;
+}
+// (t0sq) this frame's Square press is a Type 0 ability's: true = the caller makes it the attack press
+static bool t0_square(void) {
+    if (!g_t0 || !g_t0sq || PTYA != kh_ptya || berserk_on()) return false;
+    return S.special == SP_ATTACK || (t0_retal_win() && t0_entry(40));
 }
 static float t0_near(const Target *t, int n) {  // surface distance of the nearest target, -1 = none
     float best = -1;
@@ -3584,20 +4393,64 @@ static float t0_near(const Target *t, int n) {  // surface distance of the neare
     }
     return best;
 }
+// (t0sq) Square's pick over combo pick e (d = t0_near): Upper / Horizontal Slash on a non-finisher step, Finishing Leap on
+// the ground finisher step, NULL = none (no log: t0_override and the dry run t0_square_fires share it)
+static const KhPtya *t0_sq_pick(const KhPtya *e, bool air, float d) {
+    bool fin = (e->flag & PTYA_FINISHER) || e->id == 3;
+    if (!air && !fin && d >= 0 && d < 180) return t0_entry(12);
+    if (air && !fin && d >= 0 && d < 260) return t0_entry(38);
+    if (!air && fin && d >= 0 && d < 650) return t0_entry(37);
+    return NULL;
+}
 // GUESS rules, applied to the pick: Upper Slash = the 2nd ground swing, Horizontal Slash = the 2nd air swing (a target within
 // the Type 2 reach), Finishing Leap = the plain ground finisher when the nearest target is 120..650 cm away (a leap closes it).
-static const KhPtya *t0_override(const KhPtya *e, bool air, const Target *t, int n) {
-    if (!e || !g_t0 || PTYA != kh_ptya || berserk_on()) return e;
+// (t0sq) with Square (sq), in place of any pick: Upper / Horizontal Slash on a non-finisher step of the ground / air combo (target within
+// 180 / 260 cm), Finishing Leap on the ground finisher step (target within 650 cm); none of them = NULL (no swing). A
+// plain Attack press (!sq) keeps the pick.
+static const KhPtya *t0_override(const KhPtya *e, bool air, const Target *t, int n, bool sq) {
+    if (!e || !g_t0 || PTYA != kh_ptya || berserk_on()) return sq ? NULL : e;
+    if (g_t0sq && !sq) return e;
     float d = t0_near(t, n);
     const KhPtya *o = NULL;
     // (review: only over a plain swing: not jump-to-target / wall entries or another ability's pick)
     bool plain = e->ability == 0 && (air || e->jump <= 0) && e->id != 1;
+    if (sq) {  // (t0sq test 2, user: "I can upper slash on an enemy multiple times until the combo ends") Square takes
+        // ANY step the combo would play next, whatever the pick: after an Upper Slash the enemy is up and the pick is the
+        // jump-to-target entry (ptya 33), which the plain test refused (every later Square of the combo did nothing)
+        bool fin = (e->flag & PTYA_FINISHER) || e->id == 3;
+        o = t0_sq_pick(e, air, d);
+        if (o) LOG("[combo] Square: ptya id %d -> %d (motion %d -> %d, hit %d, nearest target %.0f cm)\n", e->id, o->id, e->motion, o->motion, S.d74, d);
+        else LOG("[combo] Square: no Type 0 ability here (ptya id %d, %s %s, hit %d, nearest target %.0f cm)\n", e->id,
+                 air ? "air" : "ground", fin ? "finisher step" : "combo step", S.d74, d);
+        return o;
+    }
     if (!plain) return e;
     if (!air && !(e->flag & PTYA_FINISHER) && S.d74 == 2 && d >= 0 && d < 180) o = t0_entry(12);
     else if (air && !(e->flag & PTYA_FINISHER) && S.d74 == 2 && d >= 0 && d < 260) o = t0_entry(38);
     else if (!air && e->id == 3 && d >= 120 && d < 650) o = t0_entry(37);
     if (o) LOG("[combo] Type 0 override: ptya id %d -> %d (motion %d -> %d, hit %d, nearest target %.0f cm) GUESS rule\n", e->id, o->id, e->motion, o->motion, S.d74, d);
     return o ? o : e;
+}
+// (s288 port, t0sq) would this Square press really fire a Type 0 ability? A dry run of the attack press in
+// sora_mod_frame_body (its gate, aironce, t0_reaction, combo_gate + ptya_select_t + Square's pick, mot_of), with S.d74 / d75 /
+// hit put back. false = Square stays Square (Guard / Dodge Roll / Quick Run out of a combo, as with t0sq off).
+static bool t0_square_fires(uint32_t bits, bool is_free, const Target *tg, int ntg, const float p[3]) {
+    if (!((S.act == ACT_IDLE || ACT_AIR(S.act)) && S.takeoff <= 0 && !S.air_frames)) return false;
+    bool air = ACT_AIR(S.act), new_combo = S.special != SP_ATTACK;
+    bool cont = S.hit || g_combo_master || ab_on(AB.on, AB_COMBO_MASTER);
+    bool restart = !new_combo && !((bits & (RB_ALLOW_FINISHER | RB_ALLOW_COMBO)) && cont);
+    if (g_air_once && air && (new_combo || restart) && S.air_done) return false;
+    const KhPtya *e = t0_reaction(true);
+    if (!e && !berserk_on()) {
+        int d74 = S.d74, d75 = S.d75;
+        bool hit = S.hit;
+        if (combo_gate(bits, is_free)) {
+            const KhPtya *pick = ptya_select_t(bits, air, tg, ntg, wall_ahead(p, S.face));
+            if (pick) e = t0_sq_pick(pick, air, t0_near(tg, ntg));
+        }
+        S.d74 = d74, S.d75 = d75, S.hit = hit;
+    }
+    return e && mot_of(e->motion);
 }
 
 // (s85g probe, user: "when the menu pops up showing me the new item i picked up i can move sora around and he will stay
@@ -3903,6 +4756,25 @@ static void goto_carry(bool hold) {
     RideFn fn = ride_fn();
     if (fn) hold ? fn(0, 0) : fn(g_ride_live, g_wind_live);
 }
+// (airnoride) the ground carry is off while Sora is in the air (jump / fall / glide). BotW keeps Link's body GROUND
+// for a while after Sora's take-off; linkpos read a one-frame jump spike there as a platform's carry (cap 10 u/s), and
+// that carry came back as the body's ground velocity every frame after: some plain jumps flew ~2.8x as far (user report,
+// epictest log: 12.6-14.3 m instead of 4.3-5.0 m for the same air time, "ext ground (ride)" lines all through the
+// jump). The wind / updraft push (the AIR sample) stays. A carry taken before take-off still runs its EXT_HOLD frames.
+// On by default (tested in game); off: SAVAGEWIND_SORA_AIR_NORIDE=0 / live "set airnoride 0".
+static int g_air_noride = 1;  /* (s288: the user played it, "it all seems to work": default ON) */
+static void air_carry(bool air, bool goto_hold) {
+    static int applied = -1;  // the ride value this function last wrote (-1 = none / goto took it over)
+    RideFn fn = ride_fn();
+    if (!fn) return;
+    if (goto_hold) { applied = -1; return; }  // (goto_carry owns the switch while it holds, and restores it after)
+    if (!g_air_noride && applied != 0) return;  // option off: never touch it (only undo our own "off")
+    int want = g_air_noride && air ? 0 : g_ride_live;
+    if (want == applied) return;
+    fn(want, -1);
+    if (want == 0 || applied == 0) LOG("[sora] airnoride: ground carry %s (%s)\n", want ? "back" : "off", air ? "in the air" : "landed");
+    applied = want;
+}
 // (s88 review) true while linkpos adds an updraft (ext y > 0.5 u/s): the glide / fall landing tests below would read
 // the rise as "the sink was stopped" and land him mid-air. Old exe (no export): never.
 static bool ride_updraft(void) {
@@ -3941,8 +4813,15 @@ void sora_draw_world(const float *bones, float face, float scale);
 // (s183 kairi-diag, sora_diag.h) every pose handed to the draw pass says "the body should be on screen"; set by these wrappers, read and
 // cleared once a frame by dg_tick (sora_mod_frame). playing / nolink are set by sora_mod_frame_body.
 static bool g_dg_posed, g_dg_playing, g_dg_nolink;
-#define sora_draw_pose(...) (g_dg_posed = true, sora_draw_pose(__VA_ARGS__))
-#define sora_draw_world(...) (g_dg_posed = true, sora_draw_world(__VA_ARGS__))
+static void fik_draw_pose(int slot, float clock, float face, float scale);  // (footik: below, after the rig helpers)
+static void fik_draw_world(const float *bones, float face, float scale);
+// The exe's own draw calls, taken before the macros below: further down 'sora_draw_pose' becomes kt_draw_pose (an object-like
+// macro that even '(sora_draw_pose)' expands), and kt_draw_pose calls back into fik_draw_pose -> endless loop (game froze at
+// 100% CPU the first time foot IK passed a pose on: Drive Forms, Mickey).
+static void (*const fik_exe_draw_pose)(int, float, float, float) = sora_draw_pose;
+static void (*const fik_exe_draw_world)(const float *, float, float) = sora_draw_world;
+#define sora_draw_pose(...) (g_dg_posed = true, fik_draw_pose(__VA_ARGS__))
+#define sora_draw_world(...) (g_dg_posed = true, fik_draw_world(__VA_ARGS__))
 // (s261 kbthrow) base Sora's body has no pose for Limit's Raid slots 924 - 939: while kbthrow is on they come from the Limit draw
 // actor's pose bake (the same 240 bones) and are drawn on the body shown through sora_draw_world. Every pose read / draw below
 // goes through these two.
@@ -4192,6 +5071,20 @@ static uint64_t link_bones_now(void) {  // [unit+0x198] re-resolved (heap: area 
 // s54: are Link's bones a real pose? (s28: save loads in state 0x1 gave none) Every translation finite and within
 // BONES_SANE_U of his feet, and not all on one point; *maxd = the farthest bone from the feet (u), -1 without bones
 #define BONES_SANE_U 3.0f
+// (throw0x1) the same check for the 0x1 frames of a carry's throw (sora_carry.h): the arm + object reach further. GUESS 6 u =
+// CARRY_HELD_DIST. Live "set throw1 0" = the old rule (0x1 = an event: Sora + the KH2 HUD hidden for the throw's ~1 s).
+#define THROW_SANE_U 6.0f
+static int g_throw1 = 1;  /* (s288: the user played it, "it all seems to work": default ON) */
+// (slam0x1) user: "When Sora attacks while jumping holding the torch, the kh2 hud disappears when he slams the weapon to the
+// ground". Log: Link air 0x2 -> 0x1 at the slam (BotW's plunge attack), then back to 0x18000001: the 0x1 read as an event
+// (HUD hidden, warp-out tint). A fast-travel warp's 0x1 comes out of the map screen (a pause), never straight from the air.
+// With this on, a 0x1 stretch entered directly from 0x2 with no pause in the last SLAM_PAUSE_GAP presents = the slam: no
+// event, no warp tint, the throw's wider bone limit. SAVAGEWIND_SORA_SLAM_0X1=1 / live "set slam1 0/1"; default 1 (user tested, on by default).
+// (g_slam1: declared above the env reader, next to g_bstance)
+static bool g_slam1_now;  // (this 0x1 stretch is a slam)
+static uint64_t g_slam_pause_at;  // (s288 review: the last paused frame; the slam block never runs while paused)
+#define SLAM_PAUSE_GAP 60
+static bool carry_on(void);  // (sora_carry.h, included below)
 static bool link_bones_sane(float *maxd) {
     uint64_t w = link_bones_now();
     float lm[12];
@@ -4263,6 +5156,154 @@ static void keyblade2_hide(float *bones) {
 }
 
 // (s110 roxpup) the same for the rig in use: the Keyblade's bones past the body collapse onto its parent bone (Roxas: 229.. on 178)
+// (footik) user: "Is it possible to give Sora's legs reaction to the collision of the game's environment? For example, If I'm
+// standing on a stair, and Sora's left foot is on the stairs, his leg would raise in accordance to the stairs." Foot IK on
+// the poses the drive path draws (g_fik_now: on the ground, no special move, base Sora; the puppet's are Link's, which BotW
+// already plants). Per leg: rays down at the heel and the toe (world, FIK_UP above .. FIK_DOWN below his feet; floors only)
+// give the ground's height under that foot in model cm (the pose's y 0 = Link's feet). The lower foot's offset (< 0) drops
+// the whole body (no leg stretches); each leg is then lifted by its offset minus that drop: a two-bone IK (hip -> knee ->
+// ankle, the knee kept in its animated plane) through the rig's subtree masks, the foot turned back to its animated angle.
+// Offsets / drop are smoothed (FIK_TAU s) and the whole effect ramps in over FIK_RAMP s. SAVAGEWIND_SORA_FOOT_IK=1 /
+// live "set footik 0/1", "set footiklog 0/1"; default 0 (s288 port; the PR: 1, its tester liked it). Log '[footik] ...'.
+static bool g_fik_now;  // (the drive path's draw block: the poses drawn now go through fik_apply)
+// (footik test 2, user: "some flickering running or walking up a slope") Log: the weight fell to 0 mid-run (the gate dropped:
+// the plain pose for a frame = the body / legs popped) and the ground values jumped frame to frame. Now: g_fik_gate (ground, no
+// special) only steers the weight, which fades in AND out over FIK_RAMP; slower smoothing (g_fik_tau ms for the legs, x FIK_DROP_X
+// for the body); a deadband of FIK_DEAD cm on each foot's ground; live "set footiktau <ms>", "set footikrun <%>" (the strength
+// while running, 100 = full).
+static bool g_fik_gate;
+static int g_fik_tau = 120, g_fik_run = 100;
+#define FIK_DROP_X 1.7f
+#define FIK_DEAD 1.5f
+#define FIK_UP 45.0f     // cm: highest step a foot is lifted onto
+#define FIK_DOWN 40.0f   // cm: lowest ground a foot reaches (the body drops for it)
+#define FIK_RAMP 0.15f   // s: fade in after it was off
+#define FIK_FLOOR_NY 0.6f
+static double fik_ms(void) {
+    static LARGE_INTEGER f;
+    LARGE_INTEGER n;
+    if (!f.QuadPart) QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&n);
+    return (double)n.QuadPart * 1000.0 / (double)f.QuadPart;
+}
+static int fik_entry(const RagRig *rg, int bone) {
+    for (int i = 0; i < rg->nmap; i++) if (rg->map[i].sora == bone) return i;
+    return -1;
+}
+// the ground under model point m (cm) -> its height in model cm; false = no floor in range
+static bool fik_ground(const float m[3], const float feet[3], float face, float scale, float *gy) {
+    float sn = sinf(face), c = cosf(face);
+    float wx = feet[0] + (c * m[0] + sn * m[2]) * scale, wz = feet[2] + (-sn * m[0] + c * m[2]) * scale;
+    float a[3] = {wx, feet[1] + FIK_UP * scale, wz}, b[3] = {wx, feet[1] - FIK_DOWN * scale, wz}, h[3], n[3];
+    if (!linkpos_raycast(a, b, h, n) || n[1] < FIK_FLOOR_NY) return false;
+    *gy = (h[1] - feet[1]) / scale;
+    return true;
+}
+static void m3mul(const float A[3][3], const float B[3][3], float O[3][3]) {
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) O[i][j] = A[i][0] * B[0][j] + A[i][1] * B[1][j] + A[i][2] * B[2][j];
+}
+// lift the ankle of the leg (hip, knee, ankle bones; thigh / shin / foot map entries) by `up` cm
+static void fik_leg(float *pose, const RagRig *rg, int hip, int knee, int ankle, int e_th, int e_sh, int e_ft, float up) {
+    float H[3], K[3], A[3], T[3];
+    memcpy(H, rpos(pose, hip), 12), memcpy(K, rpos(pose, knee), 12), memcpy(A, rpos(pose, ankle), 12);
+    T[0] = A[0], T[1] = A[1] + up, T[2] = A[2];
+    float hk[3] = {K[0] - H[0], K[1] - H[1], K[2] - H[2]}, ka[3] = {A[0] - K[0], A[1] - K[1], A[2] - K[2]};
+    float la = sqrtf(v3dot(hk, hk)), lb = sqrtf(v3dot(ka, ka));
+    float d[3] = {T[0] - H[0], T[1] - H[1], T[2] - H[2]}, lc = sqrtf(v3dot(d, d));
+    if (la < 1 || lb < 1 || lc < 1e-3f) return;
+    float lo = fabsf(la - lb) + 0.5f, hi = la + lb - 0.5f;
+    lc = lc < lo ? lo : lc > hi ? hi : lc;
+    v3norm(d);
+    float pole[3] = {hk[0] - v3dot(hk, d) * d[0], hk[1] - v3dot(hk, d) * d[1], hk[2] - v3dot(hk, d) * d[2]};
+    if (!v3norm(pole)) pole[0] = 0, pole[1] = 0, pole[2] = 1;  // (a straight leg: the knee bends forward, model +z)
+    float ca = (la * la + lc * lc - lb * lb) / (2 * la * lc);
+    ca = ca > 1 ? 1 : ca < -1 ? -1 : ca;
+    float sa = sqrtf(1 - ca * ca), K2[3];
+    for (int j = 0; j < 3; j++) K2[j] = H[j] + d[j] * la * ca + pole[j] * la * sa;
+    float u0[3] = {hk[0], hk[1], hk[2]}, u1[3] = {K2[0] - H[0], K2[1] - H[1], K2[2] - H[2]}, R1[3][3], R2[3][3];
+    if (!v3norm(u0) || !v3norm(u1)) return;
+    aim_rot(u0, u1, R1);
+    rot_subtree(pose, rg->mask[e_th], R1, H, rg->nbones);
+    const float *A1 = rpos(pose, ankle), *K1 = rpos(pose, knee);
+    float v0[3] = {A1[0] - K1[0], A1[1] - K1[1], A1[2] - K1[2]}, v1[3] = {T[0] - K1[0], T[1] - K1[1], T[2] - K1[2]}, kp[3];
+    memcpy(kp, K1, 12);
+    if (!v3norm(v0) || !v3norm(v1)) return;
+    aim_rot(v0, v1, R2);
+    rot_subtree(pose, rg->mask[e_sh], R2, kp, rg->nbones);
+    float R12[3][3], Ri[3][3], ap[3];  // (the foot back to its animated angle: the inverse = the transpose)
+    m3mul(R1, R2, R12);
+    for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) Ri[i][j] = R12[j][i];
+    memcpy(ap, rpos(pose, ankle), 12);
+    rot_subtree(pose, rg->mask[e_ft], Ri, ap, rg->nbones);
+}
+static void fik_apply(float *pose, int nb, float face, float scale) {
+    static float off[2], drop, w, held[2];
+    static double last_ms, log_ms;
+    const RagRig *rg = &g_rig_sora;
+    float lm[12];
+    if (!rg->ok || nb != rg->nbones || !linkpos_link_mtx(lm) || !(scale > 0)) return;
+    rmask_init((RagRig *)rg);
+    static int e[6] = {-2};
+    if (e[0] == -2) {
+        const int bones[6] = {SORA_J_HIP_L, SORA_J_KNEE_L, SORA_J_ANKLE_L, SORA_J_HIP_R, SORA_J_KNEE_R, SORA_J_ANKLE_R};
+        for (int i = 0; i < 6; i++) e[i] = fik_entry(rg, bones[i]);
+        LOG("[footik] rig entries thigh/shin/foot L %d %d %d R %d %d %d\n", e[0], e[1], e[2], e[3], e[4], e[5]);
+    }
+    for (int i = 0; i < 6; i++) if (e[i] < 0) return;
+    float feet[3] = {lm[3], lm[7], lm[11]};
+    double now = fik_ms();
+    float dt = last_ms > 0 && now - last_ms < 250 ? (float)(now - last_ms) / 1000.0f : 0;
+    if (dt == 0) off[0] = off[1] = drop = held[0] = held[1] = 0, w = 0;  // (after a gap: start from the animation)
+    last_ms = now;
+    float tau = (float)(g_fik_tau < 10 ? 10 : g_fik_tau) / 1000.0f;
+    float k = dt > 0 ? 1.0f - expf(-dt / tau) : 1.0f, kd = dt > 0 ? 1.0f - expf(-dt / (tau * FIK_DROP_X)) : 1.0f;
+    float wt = !g_fik_gate ? 0 : S.motion == MOT_RUN ? (float)g_fik_run / 100.0f : 1.0f;
+    wt = wt < 0 ? 0 : wt > 1 ? 1 : wt;
+    float step = dt / FIK_RAMP;  // (toward wt, no overshoot)
+    w = wt > w ? (w + step > wt ? wt : w + step) : (w - step < wt ? wt : w - step);
+    if (w <= 0 && !g_fik_gate) return;  // (faded out: the plain pose, no rays)
+    const int heel[2] = {SORA_J_HEEL_L, SORA_J_HEEL_R}, toe[2] = {SORA_J_TOE_L, SORA_J_TOE_R};
+    float want[2];
+    for (int l = 0; l < 2; l++) {  // (the higher ground of the heel / toe: a foot half over a step stands on it)
+        float g1 = 0, g2 = 0;
+        bool h1 = fik_ground(rpos(pose, heel[l]), feet, face, scale, &g1), h2 = fik_ground(rpos(pose, toe[l]), feet, face, scale, &g2);
+        float g = h1 && h2 ? (g1 > g2 ? g1 : g2) : h1 ? g1 : h2 ? g2 : 0;
+        g = g > FIK_UP ? FIK_UP : g < -FIK_DOWN ? -FIK_DOWN : g;
+        if (fabsf(g - held[l]) > FIK_DEAD) held[l] = g;  // (deadband: a slope's small bumps are not followed)
+        want[l] = held[l];
+        off[l] += (want[l] - off[l]) * k;
+    }
+    float dwant = off[0] < off[1] ? off[0] : off[1];
+    dwant = dwant < 0 ? dwant : 0;
+    drop += (dwant - drop) * kd;
+    float dy = drop * w;
+    if (fabsf(dy) > 0.05f)
+        for (int b = 0; b < nb; b++) pose[b * 12 + 10] += dy;
+    float up[2] = {(off[0] - drop) * w, (off[1] - drop) * w};
+    if (up[0] > 0.3f) fik_leg(pose, rg, SORA_J_HIP_L, SORA_J_KNEE_L, SORA_J_ANKLE_L, e[0], e[1], e[2], up[0]);
+    if (up[1] > 0.3f) fik_leg(pose, rg, SORA_J_HIP_R, SORA_J_KNEE_R, SORA_J_ANKLE_R, e[3], e[4], e[5], up[1]);
+    if (g_footik_log && now - log_ms > 500 && (fabsf(want[0]) > 1 || fabsf(want[1]) > 1))
+        log_ms = now, LOG("[footik] ground L %+.0f R %+.0f cm -> body %+.0f, lift L %.0f R %.0f cm (weight %.2f)\n",
+                          want[0], want[1], dy, up[0], up[1], w);
+}
+static float g_fik_buf[POSE_BUF_BONES * 12];
+static void fik_draw_world(const float *bones, float face, float scale) {
+    int nb = g_fik_now && g_footik ? sora_draw_bone_count() : 0;  // (s288 port: off = the exe call alone, as before)
+    if (!g_fik_now || !g_footik || nb <= 0 || nb > POSE_BUF_BONES) { fik_exe_draw_world(bones, face, scale); return; }
+    if (bones != g_fik_buf) memcpy(g_fik_buf, bones, (size_t)nb * 12 * sizeof(float));
+    fik_apply(g_fik_buf, nb, face, scale);
+    fik_exe_draw_world(g_fik_buf, face, scale);
+}
+static void fik_draw_pose(int slot, float clock, float face, float scale) {
+    int nb = g_fik_now && g_footik ? sora_draw_bone_count() : 0;  // (s288 port: off = the exe call alone, as before)
+    if (!g_fik_now || !g_footik || nb <= 0 || nb > POSE_BUF_BONES || !sora_draw_slot_pose(slot, clock, g_fik_buf)) {
+        fik_exe_draw_pose(slot, clock, face, scale);
+        return;
+    }
+    fik_apply(g_fik_buf, nb, face, scale);
+    fik_exe_draw_world(g_fik_buf, face, scale);
+}
 static void keyblade_hide_rig(float *bones, const RagRig *rg) {
     const float *palm = bones + rg->kb_parent * 12 + 9;
     for (int b = rg->nbody; b < rg->nbones; b++) {
@@ -4425,7 +5466,26 @@ static bool rag_retarget(int slot, float clock, float face, float scale, bool lo
     //     the middle of that closed hand, still good here) - Link's Weapon_R (bone 50): the bow's route (linkpos_gear_show).
     // Live "set wthrowfit 0" = the s261 look.
     g_thr_delta_ok = false;
-    if (g_thr_on && g_wthrow_fit && rg == &g_rig_sora && !form) {
+    if (rg == &g_rig_sora && !form) {  // (bowtorch) is the torch in Link's right hand (Weapon_R, bone 50) now?
+        static int (*gpos)(const char *, float *);
+        static int tried;
+        if (!tried) tried = 1, gpos = (int (*)(const char *, float *))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_gear_pos");
+        bool was = g_bt_hand;
+        float tw[3], dd = -1;
+        // (bowtorch flicker fix; user: "flickering with the torch back and forth to the bow"; log: 1248 switches, every "left" = -1 =
+        // the exe had no fresh position that frame, not a far one) a miss keeps the last answer for up to BT_MISS retargets (GUESS 20,
+        // about 1/3 s); only a torch SEEN away from the hand, the bow mode ending or a long miss takes it out of the hand.
+        enum { BT_MISS = 20 };
+        static int miss;
+        if (!g_bowtorch || !g_bow_on) g_bt_hand = false, miss = 0;
+        else if (gpos && gpos("Weapon_Sword_043", tw)) {
+            const float *w50 = lb + 50 * 16 + 12;
+            dd = sqrtf((tw[0] - w50[0]) * (tw[0] - w50[0]) + (tw[1] - w50[1]) * (tw[1] - w50[1]) + (tw[2] - w50[2]) * (tw[2] - w50[2]));
+            g_bt_hand = dd < g_bt_dist, miss = 0;
+        } else if (++miss > BT_MISS) g_bt_hand = false;
+        if (g_bt_hand != was) LOG("[bowtorch] the torch %s Link's hand (%.2f u from Weapon_R)\n", g_bt_hand ? "is in" : "left", dd);
+    }
+    if (((g_thr_on && g_wthrow_fit) || g_bt_hand) && rg == &g_rig_sora && !form) {  // (bowtorch: + the torch in the bow mode)
         static const struct { int sw, sm, si, sp, lw, lm, li, lp; } H[2] = {
             {SORA_J_WRIST_R, SORA_J_FINGER_MID_R, 185, 197, LINK_J_WRIST_R, LINK_J_FINGER_C_1_R, 38, 47},
             {SORA_J_WRIST_L, SORA_J_FINGER_MID_L, 93, 105, LINK_J_WRIST_L, LINK_J_FINGER_C_1_L, 14, 23}};
@@ -4784,7 +5844,7 @@ static void hide_link(bool h) {
     uint64_t u[64];
     int n = link_units(u, 64);
     // (s128b) Link's BotW weapon in Sora's hand needs the same bit (BotW copies Link's mask onto it): wpnvis 0 = off (sword invisible)
-    bool keep0 = h && g_slvis && (g_sh_vis_now || (g_wpnvis && g_wpn_cur.def && !g_wpn_fake && !g_wpn_name_fn));  // (s128b exe: the sword's own units instead)
+    bool keep0 = h && g_slvis && (g_sh_vis_now || (g_wpnvis && g_wpn_cur.def && !g_wpn_fake && !g_wpn_name_fn) || (g_bt_vis && g_bowtorch && g_bow_on && g_bt_hand));  // (btvis: + the torch)  // (s128b exe: the sword's own units instead)
     for (int i = 0; i < n; i++) {
         volatile uint16_t *vis = (volatile uint16_t *)(uintptr_t)(u[i] + 0xc);
         *vis = h && !keep0 ? (uint16_t)(*vis & ~1u) : (uint16_t)(*vis | 1u);
@@ -5120,6 +6180,13 @@ static bool land_veto(float z_up, const float p[3]) {
 // Live "set woguard 0 (s60) / 1 (swing or enemy near) / 2 (every drop)", "set wofloor <cm>", "set wosnap 0/1".
 static int g_wo_guard = 1, g_wo_snap = 1, g_wo_cap = 1;
 static float g_wo_floor_cm = 50.0f;
+// (ledgeslope) the ledge hold below first asks walkoff_floor: floor within g_wo_floor_cm under the feet = a steep slope,
+// not an edge -> no hold; the walk-off guard keeps him grounded instead (snap down at most FallMax per KH frame) and the
+// swing's root move goes on. User report (epictest log): on a ~44 deg mountain slope a finisher (motion 161) following a
+// knocked-back enemy downhill was held back and its root move cut, with the floor 18 cm under his feet ("pulled back").
+// A real drop (no floor in reach) is held as before. Only with the walk-off guard on (else nothing would keep him on the
+// slope). On by default (tested in game); off: SAVAGEWIND_SORA_LEDGE_SLOPE=0 / live "set ledgeslope 0".
+static int g_ledge_slope = 1;  /* (s288: the user played it, "it all seems to work": default ON) */
 static bool walkoff_floor(const float p[3], float *floor_u) {  // true: a floor (not a wall) within reach, its y (u)
     float a[3] = {p[0], p[1] + 0.3f, p[2]}, b[3] = {p[0], p[1] - g_wo_floor_cm * 0.01f * g_k, p[2]}, h[3] = {0}, n[3] = {0};
     if (!linkpos_raycast(a, b, h, n) || n[1] < g_ray_wall_ny) return false;
@@ -5284,6 +6351,8 @@ static void live_poll(const float p[3], uint64_t present) {
                 linkpos_move((ep[bi][0] - p[0]) * k, ep[bi][1] - p[1] + 0.3f, (ep[bi][2] - p[2]) * k);
                 LOG("[sora] live: at enemy %llx (%.2f u away)\n", (unsigned long long)ea[bi], d);
             } else LOG("[sora] live: at enemy: none\n");
+        } else if (warp_live_line(ln)) {  // (s269 warpcore: warpto / warpfriend / warp restore / warpnote, sora_warp.h)
+        } else if (du_live_line(ln)) {  // (s272 duel: duel ask / accept / decline / end / diag, sora_duel.h)
         } else if (!strcmp(ln, "goto off")) {
             if (GT.on) goto_carry(false);
             GT.on = false, drive_off();
@@ -5321,6 +6390,9 @@ static void live_poll(const float p[3], uint64_t present) {
         } else if (sscanf(ln, "set %15s %d", key, &v) == 2 && strcmp(key, "stop")) {
             if (!strcmp(key, "statelog")) g_statelog = v != 0;  // (s188: the once-a-second "[sora] state" line)
             else if (mtest_set_key(key, v)) {}  // (s201: "set mtest 0|1", "set mtestlog 0|1")
+            else if (gparry_live(key, v)) {}  // (gparry: two-tier guard, sora_guard.h)
+            else if (!strcmp(key, "t0sq")) g_t0sq = v != 0, LOG("[sora] live: t0sq %d (Retaliating / Upper / Horizontal Slash, Finishing Leap on %s)\n", g_t0sq, g_t0sq ? "Square" : "Attack");
+            else if (shield_live(key, v)) {}  // (shielddef, sora_shield.h)
             else if (!strcmp(key, "combo")) g_combo_master = v != 0;
             else if (!strcmp(key, "berserk")) g_berserk = v != 0, LOG("[sora] live: berserk %d (Berserk Charge: endless combo + Str+2 during MP Charge)\n", g_berserk);
             else if (!strcmp(key, "abilfx")) { g_af_on = v != 0; LOG("[sora] live: abilfx %d (KH2 fx + SE of the combo-ability attacks; fx.bin %s)\n", g_af_on, sora_fx_id("abil_fx_44") >= 0 ? "has abil_fx" : "WITHOUT abil_fx (fx_s107.bin not installed)"); }
@@ -5330,10 +6402,10 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "kbswap")) g_kbswap = v != 0, LOG("[sora] live: kbswap %d (picking a Keyblade another slot holds %s)\n", g_kbswap, g_kbswap ? "swaps the two" : "= error SE (the old rule)");  // (s118)
             else if (!strcmp(key, "eq2x") || !strcmp(key, "eq2y") || !strcmp(key, "eqtx") || !strcmp(key, "eqvx") || !strcmp(key, "eqky") ||
                      !strcmp(key, "eqpx") || !strcmp(key, "eqpy") || !strcmp(key, "eqax") || !strcmp(key, "eqhx") || !strcmp(key, "eqhy") ||
-                     !strcmp(key, "eqpt") || !strcmp(key, "eqpc")) {  // (s120b panel tuning)
+                     !strcmp(key, "eqpt") || !strcmp(key, "eqpc") || !strcmp(key, "eqcx") || !strcmp(key, "eqcy") || !strcmp(key, "eqcol")) {  // (s120b panel tuning; eqlayout: eqcx / eqcy / eqcol)
                 int *k = !strcmp(key, "eq2x") ? &g_eq2x : !strcmp(key, "eq2y") ? &g_eq2y : !strcmp(key, "eqtx") ? &g_eqtx : !strcmp(key, "eqvx") ? &g_eqvx :
                          !strcmp(key, "eqky") ? &g_eqky : !strcmp(key, "eqpx") ? &g_eqpx : !strcmp(key, "eqpy") ? &g_eqpy : !strcmp(key, "eqax") ? &g_eqax :
-                         !strcmp(key, "eqhx") ? &g_eqhx : !strcmp(key, "eqpt") ? &g_eqpt : !strcmp(key, "eqpc") ? &g_eqpc : &g_eqhy;
+                         !strcmp(key, "eqhx") ? &g_eqhx : !strcmp(key, "eqpt") ? &g_eqpt : !strcmp(key, "eqpc") ? &g_eqpc : !strcmp(key, "eqcx") ? &g_eqcx : !strcmp(key, "eqcy") ? &g_eqcy : !strcmp(key, "eqcol") ? &g_eqcol : &g_eqhy;
                 *k = (int)v, LOG("[sora] live: %s %d (Equipment panel text)\n", key, *k);
             }
             else if (!strcmp(key, "wpn")) g_wpn_on = v != 0, LOG("[sora] live: wpn %d (%s)\n", g_wpn_on, g_wpn_on ? "Link's BotW weapon in Sora's hand when equipped" : "off: the Keyblade always");  // (s128)
@@ -5343,6 +6415,12 @@ static void live_poll(const float p[3], uint64_t present) {
                 *p = (int)v, LOG("[sora] live: %s %d (Roxas only, added to the Sora value)\n", key, *p);
             }
             else if (!strcmp(key, "wpnfake")) g_wpn_fake = (int)v, LOG("[sora] live: wpnfake %d (%s)\n", g_wpn_fake, g_wpn_fake > 0 && g_wpn_fake <= WPN_N ? WPN_TAB[g_wpn_fake - 1].name : "off: the real equipped weapon");  // (s128)
+            else if (!strcmp(key, "eqshield")) g_eqshield = v != 0, LOG("[sora] live: eqshield %d (Equipment Shield row %s)\n", g_eqshield, g_eqshield ? "on" : "off");
+            else if (!strcmp(key, "botwpic")) g_botwpic = v != 0, LOG("[sora] live: botwpic %d (BotW item pictures in the Equipment page %s)\n", g_botwpic, g_botwpic ? "on" : "off");
+            else if (!strcmp(key, "eqlayout")) g_eqlayout = v != 0, eq_layout_apply(), LOG("[sora] live: eqlayout %d (Equipment page text: %s; eqtx %d eqvx %d)\n", g_eqlayout, g_eqlayout ? "the #63 places, 8 picker rows" : "the old places, 9 picker rows", g_eqtx, g_eqvx);  // (eqlayout #63)
+            else if (!strcmp(key, "eqarmor")) g_eqarmor = v != 0, LOG("[sora] live: eqarmor %d (Equipment Armor rows: %s)\n", g_eqarmor, g_eqarmor ? "pick / take off pieces" : "show only (s120)");
+            else if (!strcmp(key, "dbgtext")) g_dbgtext = v != 0, LOG("[sora] live: dbgtext %d (Debug page help: %s)\n", g_dbgtext, g_dbgtext ? "debug_menu_text.txt when it has the row" : "built-in");  // (#51)
+            else if (!strcmp(key, "eqtabs")) g_eqtabs = v != 0, LOG("[sora] live: eqtabs %d (Equipment picker: %s)\n", g_eqtabs, g_eqtabs ? "Keyblades / BotW Weapons tabs, L1 / R1" : "one list (s128)");
             else if (!strcmp(key, "eqlook")) g_eqlook = v != 0, LOG("[sora] live: eqlook %d (Equipment page: %s)\n", g_eqlook, g_eqlook ? "vanilla KH2 look" : "the old Customize-style page");
             else if (!strncmp(key, "wgz", 3) && key[3] >= '0' && key[3] <= '2' && !key[4]) g_wgz[key[3] - '0'] = (int)v, LOG("[sora] live: %s %d cm (BotW weapon type %c: model origin past the grip)\n", key, (int)v, key[3]);  // (s128)
             else if (!strcmp(key, "wparm")) g_wpitch_arm = (int)v, LOG("[sora] live: wparm %d deg (monster arms: extra pitch)\n", g_wpitch_arm);  // (s130)
@@ -5382,6 +6460,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "evzero")) g_ev_zero = v;
             else if (!strcmp(key, "evfreeze")) g_evfreeze = v != 0, LOG("[sora] chestev: live evfreeze %d\n", g_evfreeze);
             else if (!strcmp(key, "evrec")) g_evrec = v != 0, LOG("[sora] chestev: live evrec %d\n", g_evrec);
+            else if (!strcmp(key, "evstick")) g_evstick = v != 0, LOG("[sora] chestev: live evstick %d (%s)\n", g_evstick, g_evstick ? "the player's own camera turn is no event" : "any camera off Link");  // (evstick)
             else if (!strcmp(key, "evcam")) g_evcam = v;
             else if (!strcmp(key, "evang")) g_evang = v;
             else if (!strcmp(key, "evon")) g_evon = v;
@@ -5411,6 +6490,13 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "brk")) g_brk_on = v != 0;          // (s55 breakables)
             else if (!strcmp(key, "brkk")) g_brk_k = v / 100.0f;
             else if (!strcmp(key, "brkltn")) g_brk_ltn = v != 0;
+            else if (!strcmp(key, "logchop")) g_logchop = v != 0, LOG("[sora] logchop %d\n", g_logchop);  // (logchop)
+            else if (!strcmp(key, "trunklen")) g_trunk_len = v / 100.0f;
+            else if (!strcmp(key, "logchoplog")) g_logchop_log = v != 0;
+            else if (!strcmp(key, "trunkr")) g_trunk_r = v / 100.0f;
+            else if (!strcmp(key, "mgelem")) g_mgelem = v != 0, LOG("[sora] live: mgelem %d (Blizzard / Thunder: BotW freeze / shock %s)\n", g_mgelem, g_mgelem ? "on" : "off");  // (mgelem #61)
+            else if (!strcmp(key, "mgelemlog")) g_mgelem_log = v != 0;  // (mgelem: the per-hit lines)
+            else if (!strcmp(key, "pausesave")) g_sl_pause_save = v != 0, LOG("[sora] live: pausesave %d (a pause-menu Save writes the slot sidecar %s)\n", g_sl_pause_save, g_sl_pause_save ? "while still paused" : "at the unpause (old)");  // (dbgsave #60)
             else if (!strcmp(key, "tree")) g_tree_on = v != 0;        // (s122 world)
             else if (!strcmp(key, "treek")) g_tree_k = v;
             else if (!strcmp(key, "treefin")) g_tree_fin = v;
@@ -5433,6 +6519,15 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "firespkey")) g_fire_spk_y[1] = v / 100.0f;
             else if (!strcmp(key, "wofloor")) g_wo_floor_cm = (float)v;
             else if (!strcmp(key, "woguard")) g_wo_guard = v;
+            else if (!strcmp(key, "ledgeslope")) g_ledge_slope = v != 0;  // (no ledge hold on a slope: floor in reach)
+            else if (!strcmp(key, "airceil")) g_air_ceil = v != 0;  // (no ceiling stop -> Fall during an air swing / cast)
+            else if (!strcmp(key, "hjanim")) g_hjanim = v != 0;  // (base Sora's High Jump plays KH2's motion 201)
+            else if (!strcmp(key, "ridel")) g_ride_l = v != 0;  // (L1 = BotW's soothe while Link rides a horse)
+            else if (!strcmp(key, "swhit")) g_swhit = v != 0, LOG("[sora] swhit %d (%s)\n", g_swhit, g_swhit ? "the Keyblade flips the Goron cannon lever, game 1.9.0 only" : "off: it bounces off as before");  // (the Keyblade flips the Goron cannon lever)
+            else if (!strcmp(key, "swhitdgn")) g_swhit_dgn = v != 0, LOG("[sora] swhitdgn %d: %s\n", g_swhit_dgn, g_swhit_dgn ? "the Keyblade flips the shrines' crystal switches too" : "the Goron cannon lever only");  // (shrineswitch)
+            else if (!strcmp(key, "swhitv")) g_swhit_v = v / 100.0f;
+            else if (!strcmp(key, "swhitr")) g_swhit_r = v / 100.0f;
+            else if (!strcmp(key, "swhith")) g_swhit_h = v / 100.0f;
             else if (!strcmp(key, "wosnap")) g_wo_snap = v != 0;
             else if (!strcmp(key, "firer")) g_fire_obj_r = v / 100.0f;
             else if (!strcmp(key, "firebr")) g_fire_burst_r = v / 100.0f;
@@ -5473,8 +6568,10 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (party_set(key, v)) {}  // (s54 party3: party plog pray pfwd pslot pwarp pkdr plie pblow)
             else if (!strcmp(key, "climb")) g_climb = v != 0;
             else if (!strcmp(key, "gclimb")) g_gclimb = v != 0;
+            else if (!strcmp(key, "jumpclimb")) g_jumpclimb = v != 0, LOG("[sora] jumpclimb %d (%s)\n", g_jumpclimb, g_jumpclimb ? "no climb try in the jump wind-up" : "old: the wind-up may start a climb try");
             else if (!strcmp(key, "climbair")) g_climb_air_ok = v != 0, LOG("[sora] climbair %d (%s)\n", g_climb_air_ok, g_climb_air_ok ? "old: a climb try also in the air" : "no climb try in the air");
             else if (!strcmp(key, "glideclimb")) g_glideclimb = v < 0 ? 0 : v > 2 ? 2 : v;  // (s88 b3-climb)
+            else if (qr_live_set(key, v)) {}  // (qrun)
             else if (!strcmp(key, "bdodge")) g_bdodge = v != 0, LOG("[sora] base Aerial Dodge (tap B) %s\n", g_bdodge ? "on" : "off (old: B in the air = glide only)");
             else if (!strcmp(key, "bdodgef")) g_bd_tap = v < 0 ? 0 : v > 30 ? 30 : v, LOG("[sora] base dodge tap window: %d KH frames (60 Hz)\n", g_bd_tap);
             else if (!strcmp(key, "gclholdb")) g_gcl_holdb = v != 0, g_gcl_eatb = 0;  // (s89b: held glide B kept from BotW after a grab)
@@ -5486,12 +6583,18 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "eny")) g_eny = v, LOG("[sora] eny %d (enemy gauge centre line, HUD units; 0 = 22)\n", v);
             else if (!strcmp(key, "wall")) g_wall_on = v != 0, W.on = W.on && v;
             else if (!strcmp(key, "repel")) g_repel = v != 0, R.push = v ? R.push : 0;
+            else if (!strcmp(key, "wpnsheathe")) g_wpnsheathe = v != 0, LOG("[sora] live: wpnsheathe %d (%s)\n", g_wpnsheathe, g_wpnsheathe ? "a BotW weapon is put away with the Keyblade" : "a BotW weapon stays in his hand");  // (wpnsheathe)
             else if (!strcmp(key, "wpnvis")) g_wpnvis = v != 0, LOG("[sora] live: wpnvis %d\n", g_wpnvis);  // (s128b)
             else if (!strcmp(key, "slvis")) g_slvis = v != 0, LOG("[sora] slvis %d: %s\n", g_slvis, g_slvis ? "Link's view bit 0 kept while the Slate is shown (Slate drawn)" : "old hide (Slate invisible)");  // (s113)
             else if (!strcmp(key, "showlink")) g_show_link = v != 0, hide_link(!g_show_link), LOG("[sora] showlink %d (debug: Link + his gear drawn too)\n", g_show_link);  // (s99)
             else if (!strcmp(key, "bigair")) g_big_air = v != 0, LOG("[sora] bigair %d\n", g_big_air);
             else if (!strcmp(key, "rootyaw")) g_rootyaw = v != 0, LOG("[sora] rootyaw %d: %s\n", g_rootyaw, g_rootyaw ? "the body + blade turn by KH2's root yaw curve (finishers spin)" : "root yaw not drawn (old)");  // (s247)
             else if (!strcmp(key, "bowlog")) g_bowlog = v != 0;  // (s250 diag)
+            else if (!strcmp(key, "bowtorch")) g_bowtorch = v != 0, g_bt_hand = g_bt_hand && g_bowtorch, LOG("[bowtorch] bowtorch %d (%s)\n", g_bowtorch, g_bowtorch ? "the torch in the bow mode is drawn on Sora's hand" : "off");  // (the torch in the bow mode, drawn on Sora's hand)
+            else if (!strcmp(key, "bowtorchd")) g_bt_dist = v / 100.0f;
+            else if (!strcmp(key, "bowjump")) g_bow_jump = v != 0, LOG("[sora] live: bowjump %d\n", g_bow_jump);  // (bowjump)
+            else if (!strcmp(key, "btjump")) g_bt_jump = v != 0, LOG("[sora] live: btjump %d\n", g_bt_jump);  // (btjump)
+            else if (!strcmp(key, "btvis")) g_bt_vis = v != 0;  // (btvis: Link's view bit 0 kept while the torch is out)
             else if (!strcmp(key, "bowshow")) g_bowshow = v < 0 ? 0 : v > 2 ? 2 : v, LOG("[sora] bowshow %d: %s\n", g_bowshow, g_bowshow == 2 ? "Link's bow + arrows drawn during the bow mimic, moved onto Sora's left hand" : g_bowshow ? "Link's bow + arrows drawn during the bow mimic, where BotW holds them" : "off (bow + arrows hidden)");  // (s251)
             else if (!strcmp(key, "bowshowlog")) g_bowshowlog = v != 0;  // (s251 diag)
             else if (!strcmp(key, "wthrow")) g_wthrow = v != 0, LOG("[throw] wthrow %d: %s\n", g_wthrow, g_wthrow ? "hold R1 (+ Triangle) with a BotW weapon = Link's throw, Sora takes his pose" : "off (the old Triangle window only)");  // (s261)
@@ -5525,6 +6628,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "rstay")) g_repel_stay = v / 100.0f;
             else if (!strcmp(key, "rray")) g_rray = v != 0;
             else if (!strcmp(key, "guard")) g_guard = v != 0, LOG("[sora] guard %s\n", v ? "on (Square, stick neutral)" : "off (Square always rolls)");
+            else if (!strcmp(key, "guardlimit")) g_guard_limit = v != 0, LOG("[sora] guardlimit %d (%s)\n", v, v ? "Limit Form guards (its own K322)" : "no Guard in any Drive Form");
             else if (!strcmp(key, "guardgate")) g_guard_gate = v != 0, LOG("[sora] guardgate %d (%s)\n", v, v ? "Guard needs the Guard ability equipped (Abilities page); else Square rolls" : "Guard always available");
             else if (!strcmp(key, "guardinv")) g_guard_inv = v, LOG("[sora] guardinv %d (post-block invulnerable frames: 0 none, 1 enemy hits, 2 all)\n", v);
             else if (!strcmp(key, "bmswallow")) { g_bmswallow = v != 0; if (!v) g_camp_swallow = 0; LOG("[sora] bmswallow %d\n", g_bmswallow); }
@@ -5536,6 +6640,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "formse")) g_formse_on = v != 0, LOG("[sora] formse %d (form motions play the form's own mset SE triggers; 0 = the base Sora's)\n", v);
             else if (!strcmp(key, "kbpop")) g_kbpop = v != 0, LOG("[sora] kbpop %d (Keyblade obtained panel; 0 = log line only)\n", v);
             else if (!strcmp(key, "parry")) g_parry = v != 0, LOG("[sora] parry %s\n", v ? "on (Guard sends Guardian beams back)" : "off (beams explode on Sora)");
+            else if (!strcmp(key, "parrybits")) { parry_link_clear("parrybits"); g_parry_bits = (uint32_t)v & LINK_GUARD_BITS; LOG("[sora] parrybits %#x (Link guard bits the guard raises)\n", g_parry_bits); }  // (gparry reflect, sora_guard.h)
             else if (!strcmp(key, "parrylink")) { g_parry_link = v != 0; if (!g_parry_link) parry_link_clear("parrylink 0"); LOG("[sora] parrylink %s\n", v ? "on (Guard window raises Link's isGuard/isGuardJust: BotW reflects the beam)" : "off (Link's guard flags untouched)"); }
             else if (!strcmp(key, "parryfront")) g_parry_front = v, LOG("[sora] parryfront %d (0 none, 1 beam flies at his front, 2 nearest enemy in front)\n", v);
             else if (!strcmp(key, "parryrad")) g_parry_rad = v, LOG("[sora] parryrad %d cm\n", v);
@@ -5544,10 +6649,52 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "fray")) g_fray = v != 0;
             else if (!strcmp(key, "slope")) g_slope = v != 0;  // (s64 slope follow)
             else if (!strcmp(key, "lblend")) g_lblend = v != 0;  // (s64 idle / walk / run blend)
+            else if (!strcmp(key, "bsnoanimal")) g_bs_noanimal = v != 0, LOG("[sora] bsnoanimal %d\n", g_bs_noanimal);  // (no stance for animals)
             else if (!strcmp(key, "bstance")) g_bstance = v != 0;  // (s259 KH2's battle stance while a fight is on)
-            else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 1500.0f;  // (an enemy within this = a fight)
+            else if (!strcmp(key, "bstancecm")) g_bs_cm = v > 0 ? (float)v : 1500.0f;  // (an enemy within this = a fight; kbfield on uses kbfieldcm)
+            else if (!strcmp(key, "kbfieldcm")) g_bs_kbf_cm = v > 0 ? (float)v : 3400.0f, LOG("[sora] kbfieldcm %.0f (battle stance range while kbfield is on)\n", g_bs_kbf_cm);  // (s288 port)
             else if (!strcmp(key, "bstancehold")) g_bs_hold = v >= 0 ? (float)v / 10 : 3.0f;  // (tenths of a second he stays ready after it)
             else if (!strcmp(key, "bstancelog")) g_bs_log = v != 0;
+            else if (!strcmp(key, "throw1")) g_throw1 = v != 0;  // (throw0x1)
+            else if (!strcmp(key, "slam1")) g_slam1 = v != 0, LOG("[sora] slam1 %d (%s)\n", g_slam1, g_slam1 ? "a 0x1 straight from the air is the plunge slam" : "every 0x1 is an event");  // (slam0x1)
+            else if (!strcmp(key, "hudgrace")) g_hudgrace = v < 0 ? 0 : v > 3000 ? 3000 : v, LOG("[sora] hudgrace %d ms\n", g_hudgrace);  // (hudgrace)
+            else if (!strcmp(key, "hudclimb")) g_hudclimb = v != 0, LOG("[sora] hudclimb %d\n", g_hudclimb);  // (hudclimb)
+            else if (!strcmp(key, "hudslide")) g_hudslide = v != 0, LOG("[sora] hudslide %d (%s)\n", g_hudslide, g_hudslide ? "KH2 HUD stays up on a slope slide" : "a state-0 slide hides it like an event");  // (hudslide)
+            else if (!strcmp(key, "hudev")) g_hudev = v != 0, LOG("[sora] hudev %d (%s)\n", g_hudev, g_hudev ? "no KH2 HUD in talks / cutscenes / message windows" : "KH2 HUD always up");  // (hudev)
+            else if (!strcmp(key, "hflip")) g_hflip = v != 0, LOG("[sora] hflip %d (%s)\n", g_hflip, g_hflip ? "Link's flip off the horse, then Sora's Fall" : "off");  // (hflip)
+            else if (!strcmp(key, "hfliptail")) g_hflip_tail = v < 0 ? 0 : v > 900 ? 900 : v, LOG("[sora] hflip tail %d ms\n", g_hflip_tail);
+            else if (!strcmp(key, "holdinv")) g_holdinv = v != 0, LOG("[hold] holdinv %d (%s)\n", g_holdinv, g_holdinv ? "items held from the inventory: Link's pose + drawn" : "off");  // (holdinv)
+            else if (!strcmp(key, "kbtoggle")) g_kbtoggle = v != 0, g_kb_drawn = g_kb_drawn && g_kbtoggle, LOG("[sora] kbtoggle %d (%s)\n", g_kbtoggle, g_kbtoggle ? "L3 draws / puts away the Keyblade" : "L3 is BotW's");  // (kbtoggle)
+            else if (!strcmp(key, "kbfield")) g_kbfield = v != 0, g_kb_drawn = g_kb_drawn && g_kbfield, LOG("[sora] kbfield %d (%s)\n", g_kbfield, g_kbfield ? "no Keyblade in the field motions" : "Keyblade always in his hand");  // (kbfield)
+            else if (!strcmp(key, "rollinv")) g_rollinv = v < 0 ? 0 : v > 120 ? 120 : v, LOG("[sora] rollinv %d KH frames (%s)\n", g_rollinv, g_rollinv ? "the dodge roll is invulnerable for them" : "no roll invincibility");  // (rollinv)
+            else if (!strcmp(key, "adblock")) g_adblock = v < 0 ? 0 : v > 2 ? 2 : v, LOG("[sora] adblock %d (%s)\n", g_adblock, g_adblock == 2 ? "the Aerial Dodge deflects like a shield parry (reflects)" : g_adblock ? "the Aerial Dodge blocks hits" : "no Aerial Dodge block");  // (adblock, sora_guard.h)
+            else if (!strcmp(key, "malnoflinch")) g_malnoflinch = v != 0, LOG("[sora] malnoflinch %d (%s)\n", g_malnoflinch, g_malnoflinch ? "malice takes life, no flinch" : "malice flinches like a hit");  // (malnoflinch)
+            else if (!strcmp(key, "kbdfxbone")) g_kbdfx_bone = v, LOG("[sora] kbdrawfx anchor %d (-3 grip + turn, -1 blade middle, -2 tip, else that bone)\n", v);
+            else if (!strcmp(key, "kbdfxlen")) g_kbdfx_lenpct = v < 10 ? 10 : v > 300 ? 300 : v, LOG("[sora] kbdrawfx sweep length %d%%\n", g_kbdfx_lenpct);
+            else if (!strcmp(key, "kbdfxdir")) g_kbdfx_dir = v < 0 ? -1 : 1, LOG("[sora] kbdrawfx dir %d\n", g_kbdfx_dir);
+            else if (!strcmp(key, "kbdfxorient")) g_kbdfx_orient = v != 0, LOG("[sora] kbdrawfx turn %d (%s)\n", g_kbdfx_orient, g_kbdfx_orient ? "along the blade" : "his facing only");
+            else if (!strcmp(key, "kbdfxfwd")) g_kbdfx_fwd = v, LOG("[sora] kbdrawfx fwd %d cm\n", v);
+            else if (!strcmp(key, "kbdfxup")) g_kbdfx_up = v, LOG("[sora] kbdrawfx up %d cm\n", v);
+            else if (!strcmp(key, "kbdfxside")) g_kbdfx_side = v, LOG("[sora] kbdrawfx side %d cm\n", v);
+            else if (!strcmp(key, "kbdrawfx")) g_kbdrawfx = v < 0 ? 0 : v > 2 ? 2 : v, LOG("[sora] kbdrawfx %d (%s)\n", g_kbdrawfx, g_kbdrawfx == 1 ? "flash on draw + sheathe" : g_kbdrawfx == 2 ? "flash on draw only" : "off");  // (kbdrawfx)
+            else if (!strcmp(key, "stepdiag")) g_stepdiag = v != 0, LOG("[steps] stepdiag %d\n", g_stepdiag);  // (kh2steps diag)
+            else if (!strcmp(key, "splashwalk")) g_splash_walk = v < 1 ? 1 : v, LOG("[splash] walk speed %d\n", g_splash_walk);
+            else if (!strcmp(key, "splashrun")) g_splash_run = v < 1 ? 1 : v, LOG("[splash] run speed %d\n", g_splash_run);
+            else if (!strcmp(key, "splashmode")) g_splashmode = v != 0, LOG("[splash] mode %d (%s)\n", g_splashmode, g_splashmode ? "own emit" : "game contact path");
+            else if (!strcmp(key, "watersplash")) g_watersplash = v != 0, LOG("[splash] watersplash %d\n", g_watersplash);  // (watersplash)
+            else if (!strcmp(key, "botwsteps")) g_botwsteps = v != 0, LOG("[steps] botwsteps %d\n", g_botwsteps);  // (kh2steps)
+            else if (!strcmp(key, "stepgain")) g_stepgain = v < 0 ? 0 : v > 400 ? 400 : v, LOG("[steps] stepgain %d\n", g_stepgain);
+            else if (!strcmp(key, "footik")) g_footik = v != 0, LOG("[footik] footik %d (%s)\n", g_footik, g_footik ? "legs follow the ground" : "off");  // (footik)
+            else if (!strcmp(key, "footiklog")) g_footik_log = v != 0;  // (footik)
+            else if (!strcmp(key, "footiktau")) g_fik_tau = v < 10 ? 10 : v > 1000 ? 1000 : v, LOG("[footik] smoothing %d ms (body x%.1f)\n", g_fik_tau, FIK_DROP_X);
+            else if (!strcmp(key, "footikrun")) g_fik_run = v < 0 ? 0 : v > 100 ? 100 : v, LOG("[footik] strength while running %d%%\n", g_fik_run);
+            else if (!strcmp(key, "firelight")) g_firelight = v != 0, LOG("[firelight] firelight %d\n", g_firelight);  // (firelight)
+            else if (!strcmp(key, "firelighttorch")) g_fl_torch = v != 0, LOG("[firelight] held torch light %d\n", g_fl_torch);
+            else if (!strcmp(key, "firelightk")) g_fl_k = v < 0 ? 0 : v > 400 ? 400 : v, LOG("[firelight] strength %d%%\n", g_fl_k);
+            else if (!strcmp(key, "firelightr")) g_fl_reach = v < 5 ? 5 : v > 300 ? 300 : v, LOG("[firelight] reach %.1f u\n", g_fl_reach / 10.0f);
+            else if (!strcmp(key, "flamefront")) g_flamefront = v != 0, LOG("[flamefront] flamefront %d\n", g_flamefront);  // (flamefront)
+            else if (!strcmp(key, "flamefrontk")) g_ff_k = v < 0 ? 0 : v > 300 ? 300 : v, LOG("[flamefront] strength %d%%\n", g_ff_k);
+            else if (!strcmp(key, "flamefrontt")) g_ff_t = v < 0 ? 0 : v > 100 ? 100 : v, LOG("[flamefront] threshold %.2f\n", g_ff_t / 100.0f);
             else if (!strcmp(key, "eblend")) g_eblend = v != 0;  // (s66 swing / roll end blend)
             else if (!strcmp(key, "lphase")) g_lphase = v != 0;  // (s66 walk <-> run keeps the phase)
             else if (!strcmp(key, "slopemax")) g_slope_max = (float)v;
@@ -5573,6 +6720,14 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "kb")) g_puppet_kb = v != 0;
             else if (!strcmp(key, "ride") || !strcmp(key, "wind")) ride_wind_set(key[0] == 'r', v != 0);  // s88: platform carry / wind push
             else if (!strcmp(key, "glide")) g_glide_on = v != 0;
+            else if (!strcmp(key, "glidebtn")) g_glide_btn = v != 0, LOG("[sora] glidebtn %d (%s)\n", g_glide_btn, g_glide_btn ? "Square glides" : "Cross glides");  // (glidebtn)
+            else if (!strcmp(key, "updraft")) g_updraft = v != 0, LOG("[sora] updraft %d\n", g_updraft);  // (updraft)
+            else if (!strcmp(key, "updraftmf")) g_updraft_mf = v != 0, LOG("[sora] updraftmf %d (%s)\n", g_updraft_mf, g_updraft_mf ? "columns on the main field only" : "columns anywhere");
+            else if (!strcmp(key, "fireup")) g_fireup = v != 0, LOG("[sora] fireup %d\n", g_fireup);  // (updraft, fire)
+            else if (!strcmp(key, "fireupr")) g_fireup_r = v < 1 ? 1 : v, LOG("[sora] fireupr %d\n", g_fireup_r);
+            else if (!strcmp(key, "fireuph")) g_fireup_h = v < 1 ? 1 : v, LOG("[sora] fireuph %d\n", g_fireup_h);
+            else if (!strcmp(key, "fireupv")) g_fireup_push = v < 0 ? 0 : v, LOG("[sora] fireupv %d\n", g_fireup_push);
+            else if (!strcmp(key, "updraftk")) g_updraft_k = v < 0 ? 0 : v > 300 ? 300 : v, LOG("[sora] updraftk %d%%\n", g_updraft_k);
             else if (!strcmp(key, "glidestam")) g_glidestam = v < 0 ? 0 : v > 2 ? 2 : v;
             else if (!strcmp(key, "dodgestam")) g_dodgestam = v < 0 ? 0 : v > 1000 ? 1000 : v, LOG("[sora] Aerial Dodge stamina cost %d (1000 a wheel, 0 = free)\n", g_dodgestam);
             else if (!strcmp(key, "trailsmooth")) {  // (s97 b11-trail: the exe's ribbon smoothing; 0 old, 1 adaptive, 2..8 fixed)
@@ -5613,6 +6768,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "dodgeempty")) g_dodgeempty = v != 0, LOG("[sora] Aerial Dodge with no stamina: %s\n", g_dodgeempty ? "refused" : "allowed");
             else if (!strcmp(key, "stam")) glidestam_set(v);
             else if (!strcmp(key, "tri")) g_tri_pickup = v != 0;
+            else if (!strcmp(key, "trimenu")) g_trimenu = v != 0, LOG("[sora] trimenu %d (%s)\n", g_trimenu, g_trimenu ? "Triangle is BotW's own X in its menus / map" : "Triangle = A in menus too");  // (trimenu)
             else if (!strcmp(key, "promptx")) {  // (s194, sora_prompt.h; pad_tap sends the change)
                 if ((v != 0) != g_promptx) LOG("[sora] promptx %d: BotW's A prompt %s\n", v != 0, v ? "shows Switch X's button while Sora drives" : "stock (Switch A's button)");
                 g_promptx = v != 0;
@@ -5636,12 +6792,17 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (is_live_set(key, v)) {}
             else if (bb_live_set(key, v)) {}  // (s217 world: barrelboom / barrelboomlog)
             else if (kbbeam_live_set(key, v)) {}  // (s216 beam: kbbeam kbbeamlog kbbeamtest kbbeamspd kbbeamrange kbbeamr kbbeampow kbbeamcone kbbeamturn kbbeamfin kbbeamwall)
+            else if (mm_live_key(key, v)) {}  // (s268: mmicons / mmfake / mmlog; s269: mmhide / mmhidem / mmprobe)
+            else if (warp_live_key(key, v)) {}  // (s269 warpcore: warplog / warpnet / warpnx / warpny)
+            else if (fmw_live_key(key, v)) {}  // (s272 4b: fmprobe)
+            else if (du_live_key(key, v)) {}  // (s272 duel: duel / duellog / duelring / duelringpct / duelnear / dueltime / duelchase / duelfake*)
             else if (net_live_set(key, v)) {}  // (mp: net / netloop / netport)  // (s102 invsora / isx / isy / iss / isface / isyaw / ismask / isopa / isreq)
             else if (!strcmp(key, "invdiag")) invdiag_set(v);  // (s100 glitch #62: inventory-screen Link diag)
             else if (!strcmp(key, "savepic")) g_savepic = v != 0, LOG("[sora] savepic %s\n", g_savepic ? "on (pose held at the pause start for the save picture)" : "off (pose dropped while paused)");
             else if (!strcmp(key, "savepicn")) g_savepic_n = v < 0 ? 0 : v > 600 ? 600 : v, LOG("[sora] savepic: pose held %d presents into a pause\n", g_savepic_n);
             else if (!strcmp(key, "glidelv")) g_glide_lv = v < 1 ? 1 : v > 5 ? 5 : v;
             else if (!strcmp(key, "aironce")) g_air_once = v != 0;
+            else if (!strcmp(key, "airnoride")) g_air_noride = v != 0;  // (no ground carry in the air: air_carry)
             else if (!strcmp(key, "airmagic")) g_air_magic = v != 0;  // (s68 air casts)
             else if (!strcmp(key, "gcancel")) g_glide_cancel = (uint64_t)v;
             else if (!strcmp(key, "mp")) MP.mp = (float)v, MP.charge = MP.charge_total = 0;
@@ -5676,6 +6837,7 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (fl_live_set(key, v)) {}  // (s89 b4-final Final EXP: fexp / fexpmul / flvup)
             else if (fm_live_set(key, v)) {}  // (s68 drive: form / fmswap / fmtime)
             else if (sl_live_set(key, v)) {}  // (s54 levels: lv / exp / lvdmg / lvlog / khdmg / lvwin)
+            else if (sx_live_set(key, v, rt_log)) {}  // (s270 co-op item 5: sharexp / sharexpr / sharexpttl / sharexplog)
             else if (dream_live_set(key, v)) {}  // (s54 dream: dream / giveup / dreamui / dreamauto / dreamgu / dreamwait)
             else if (ah_live_set(key, v)) {}  // (s55 airhold: ah / ahlog / ahhop / ahblow / ahheld / ahhoph / ahthr / ahvmax / ahair)
             else if (!strcmp(key, "flick")) g_flick = v != 0;
@@ -5687,6 +6849,8 @@ static void live_poll(const float p[3], uint64_t present) {
             else if (!strcmp(key, "autor")) g_auto_range = (float)v;
             else if (!strcmp(key, "airreach")) g_air_reach = (float)v;  // (s66 jump-up reach on enemies in the air)
             else if (!strcmp(key, "iconr")) g_icon_range = (float)v;  // (s65 combo feel)
+            else if (!strcmp(key, "lockbotw")) g_lock_botw = v != 0, LOG("[sora] lockbotw %d (%s)\n", g_lock_botw, g_lock_botw ? "R1 reach per enemy type as in BotW" : "KH2's 12 m / 15 m");  // (R1 lock-on reach per enemy type as in BotW)
+            else if (!strcmp(key, "lockpt")) g_lockpt = v < 0 ? 0 : v > 2 ? 2 : v, LOG("[sora] lockpt %d (%s)\n", g_lockpt, g_lockpt == 1 ? "BotW's marker" : g_lockpt ? "the attention point alone" : "old placement");  // (lock-on icon at BotW's attention point)
             else if (!strcmp(key, "rwfall")) g_rw_fall = v != 0;
             else if (!strcmp(key, "wocap")) g_wo_cap = v != 0;
             else if (!strcmp(key, "finbig")) g_fin_big = v != 0;
@@ -6213,22 +7377,159 @@ static void glide_pose_draw(int from_motion, float from_clock, float face, float
 }
 
 // (s259 bstance) is a fight on? KH2's real test is enemy awareness (re:0x3AB690), which has no BotW twin yet, so this is the
-// party's stand-in (pc_battle, sora_party.h): a live enemy within g_bs_cm of Sora (default 1500 = PC_BATTLE_CM, so Donald /
-// Goofy and Sora change stance together), or a hit on Sora. He relaxes g_bs_hold seconds after the last such frame (GUESS 3 s:
+// party's stand-in (pc_battle, sora_party.h): a live enemy within BS_RANGE_CM of Sora (g_bs_cm 1500 = PC_BATTLE_CM, so Donald /
+// Goofy and Sora change stance together; (s288 port) kbfield on = g_bs_kbf_cm 3400: user 34 m, after 20 m and 30 m, the party stays 15 m), or a hit on Sora. He relaxes g_bs_hold seconds after the last such frame (GUESS 3 s:
 // the user's "a few seconds after"). At a switch on the ground the pose drawn last is frozen as the from-pose and the other
 // variant blends in over KH_LOOP_BLEND (GUESS: KH2's idle / walk / run blend, the s64 drawer), walk / run keeping the cycle's
 // phase; in a swing / the air nothing changes until the next idle / walk / run (set_motion picks the variant).
 // Live: set bstance 0 / 1, set bstancecm <cm>, set bstancehold <tenths of a second>, set bstancelog 0 / 1.
+// (kbdrawfx) user: "Could I add draw and sheathe effects". KH2's own Keyblade appear flash = fx.bin "keyblade_appear" (tools/
+// fxbake.py: W_EX010 element 0, KH2 re:0x3EFA60; baked since s35, never spawned before). Spawned whenever the Keyblade's
+// visibility flips while Sora drives (kbfield / kbtoggle / the battle stance): shown = draw, hidden = sheathe (the same flash on
+// the sheathe is a GUESS: KH2's rule there not traced). At the middle of the Keyblade bones (228..239) of the pose playing, then
+// moved with it while it lives. Not in Link's own states (climb, swim: the puppet path resets the edge), not for guests / forms.
+// No sound: no KH2 draw sound is in the extracted tables. SAVAGEWIND_SORA_KB_DRAWFX=1 / live "set kbdrawfx 0/1/2" (2 = draw only);
+// default 1 (user: on by default, flash on sheathe too). Log '[sora] kbdrawfx: ...' with the flash's height above his feet (checks the bone space).
+static int g_kbdfx_h = -1, g_kbdfx_left;  // (g_kbdrawfx, g_kbdfx_last: next to g_kbtoggle)
+// (kbdrawfx tune, user test 1: "the flash does show on the keyblade, but the placement needs to be adjusted") live knobs:
+// kbdfxbone = the anchor (-3 = the grip 228 with the turn below, else the blade middle; -1 = middle of the Keyblade bones,
+// -2 = its farthest bone from the grip = the tip, else that bone, 228 = grip, 178 = right palm); kbdfxfwd / kbdfxup /
+// kbdfxside = cm added in Sora's facing frame (+fwd ahead, +up, +side = his right).
+// (user test 2, F5 marks 062042 / 062045: the sparkle starts beside the blade and runs off sideways.) The recording
+// (fxrec kh2_fx.bin w_ex010.0: bound to W_EX010 bone 2, pax 0x441) is a sparkle that runs ~180 cm along the weapon's own
+// x (model -x after the bound flip) = grip -> tip, so KH2 turns it with the Keyblade. sora_fx_orient (exe) turns it so model
+// +x = the blade's grip -> tip (test 3: not -x); kbdfxorient 0 = yaw only (test 1). GUESS: bone 2's x = the blade axis; its roll is free here.
+// (kbdfx knobs: g_kbdfx_bone / _fwd / _up / _side, declared next to g_kbdrawfx)
+static float g_kbdfx_rot[9];
+static bool g_kbdfx_rot_ok;
+static float g_kbdfx_len;  // (the blade's grip -> tip, cm, for the log)
+static bool g_kbdfx_grip_used;  // (the last placement came from the drawn grip)
+// (user test 4, F5 marks 063528 / 063529: from the grip, but up toward his shoulder while the blade points down.) The
+// Keyblade bones span only ~27 cm and their farthest one is not on the blade line. The blade axis as DRAWN = the grip
+// bone 228's -Y column (sora_draw_grip_world; linkpos.c s128 weapon mount: "+Z (the blade) = grip -Y", tested in game).
+// With kbdfxbone -3 + the turn: the flash at the drawn grip, model +x along that axis (kbdfxdir -1 = the other way).
+bool sora_draw_grip_world(float out[12], float *scale, float vel_out[3]);
+static bool kbdfx_from_grip(float to_u, float out[3], float *h_cm) {
+    float gw[12], sc = 0, lm[12];
+    if (IN_GUEST || g_fmots_on) return false;  // (s288 port: not for guests / forms on this path either, as the bones path)
+    if (!g_kbdfx_orient || g_kbdfx_bone != -3 || !sora_draw_grip_world(gw, &sc, NULL) || !linkpos_link_mtx(lm)) return false;
+    // (user test 5, F5 marks 064059 / 064102: on the blade line, but from the grip AWAY from the teeth. So the recording's
+    // sweep runs toward model -x, as read from kh2_fx.bin first: model -x -> toward the tip = model +x -> grip +Y.)
+    float d = g_kbdfx_dir < 0 ? -1.0f : 1.0f, w[3] = {d * gw[1], d * gw[5], d * gw[9]};  // (world: +Y column = toward the pommel)
+    float l = sqrtf(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+    if (l < 1e-4f) return false;
+    float sn = sinf(S.face), c = cosf(S.face);
+    float x[3] = {(c * w[0] - sn * w[2]) / l, w[1] / l, (sn * w[0] + c * w[2]) / l};  // (world -> model: the fx's own yaw undone)
+    float ref[3] = {0, 1, 0};
+    if (fabsf(x[1]) > 0.9f) ref[1] = 0, ref[2] = 1;
+    float dt = ref[0] * x[0] + ref[1] * x[1] + ref[2] * x[2], y[3] = {ref[0] - dt * x[0], ref[1] - dt * x[1], ref[2] - dt * x[2]};
+    float yl = sqrtf(y[0] * y[0] + y[1] * y[1] + y[2] * y[2]);
+    if (yl < 1e-4f) return false;
+    y[0] /= yl, y[1] /= yl, y[2] /= yl;
+    float z[3] = {x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]};
+    float k = (float)g_kbdfx_lenpct / 100.0f;  // (kbdfxlen: the sweep's length along the blade, % of KH2's)
+    for (int r = 0; r < 3; r++) g_kbdfx_rot[r * 3 + 0] = x[r] * k, g_kbdfx_rot[r * 3 + 1] = y[r], g_kbdfx_rot[r * 3 + 2] = z[r];
+    g_kbdfx_rot_ok = true, g_kbdfx_len = -1;
+    // (the knobs in his facing frame, cm: +fwd ahead, +up, +side = his right (GUESS sign), as kbdfx_blade_mid)
+    float ox = -(float)g_kbdfx_side, oz = (float)g_kbdfx_fwd;
+    out[0] = gw[3] + (c * ox + sn * oz) * to_u, out[1] = gw[7] + (float)g_kbdfx_up * to_u, out[2] = gw[11] + (-sn * ox + c * oz) * to_u;
+    if (h_cm) *h_cm = (gw[7] - lm[7]) / to_u;
+    return true;
+}
+static bool kbdfx_blade_mid(float to_u, float out[3], float *h_cm) {
+    if ((g_kbdfx_grip_used = kbdfx_from_grip(to_u, out, h_cm))) return true;
+    static float b[POSE_BUF_BONES * 12];
+    float lm[12];
+    int nb = sora_draw_bone_count();
+    if (!S.mot || IN_GUEST || g_fmots_on || nb < SORA_RAG_BONES || nb > POSE_BUF_BONES || !linkpos_link_mtx(lm) ||
+        !sora_draw_slot_pose(S.mot->slot, S.clock, b)) return false;
+    float q[3] = {0, 0, 0};
+    {  // (the turn: model -x -> grip 228 -> tip (farthest Keyblade bone), model y -> the nearest to up across it)
+        const float *g = b + SORA_RAG_SORA_BONES * 12 + 9, *tp = g;
+        float best = -1;
+        for (int k = SORA_RAG_SORA_BONES; k < SORA_RAG_BONES; k++) {
+            const float *t = b + k * 12 + 9;
+            float d = (t[0] - g[0]) * (t[0] - g[0]) + (t[1] - g[1]) * (t[1] - g[1]) + (t[2] - g[2]) * (t[2] - g[2]);
+            if (d > best) best = d, tp = t;
+        }
+        g_kbdfx_len = sqrtf(best > 0 ? best : 0), g_kbdfx_rot_ok = false;
+        if (g_kbdfx_len > 1) {
+            // (user test 3, F5 marks 062939 / 062941: with model -x -> grip->tip the sparkle ran from the grip AWAY from the blade, the
+            // mirror line; so model +x -> grip->tip. kbdfxdir -1 = the test 3 direction.)
+            float k = (g_kbdfx_dir < 0 ? -1.0f : 1.0f) / g_kbdfx_len;
+            float x[3] = {(tp[0] - g[0]) * k, (tp[1] - g[1]) * k, (tp[2] - g[2]) * k};  // (model +x maps here)
+            float ref[3] = {0, 1, 0};
+            if (fabsf(x[1]) > 0.9f) ref[1] = 0, ref[2] = 1;  // (a blade near vertical: his forward is the reference)
+            float dt = ref[0] * x[0] + ref[1] * x[1] + ref[2] * x[2], y[3] = {ref[0] - dt * x[0], ref[1] - dt * x[1], ref[2] - dt * x[2]};
+            float yl = sqrtf(y[0] * y[0] + y[1] * y[1] + y[2] * y[2]);
+            if (yl > 1e-4f) {
+                y[0] /= yl, y[1] /= yl, y[2] /= yl;
+                float z[3] = {x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]};
+                for (int r = 0; r < 3; r++) g_kbdfx_rot[r * 3 + 0] = x[r], g_kbdfx_rot[r * 3 + 1] = y[r], g_kbdfx_rot[r * 3 + 2] = z[r];
+                g_kbdfx_rot_ok = true;
+            }
+        }
+    }
+    if (g_kbdfx_bone == -3 && g_kbdfx_orient) memcpy(q, b + SORA_RAG_SORA_BONES * 12 + 9, sizeof q);  // (with the turn: the grip)
+    else if (g_kbdfx_bone >= 0 && g_kbdfx_bone < nb) memcpy(q, b + g_kbdfx_bone * 12 + 9, sizeof q);
+    else if (g_kbdfx_bone == -2) {  // (the tip: the Keyblade bone farthest from the grip 228)
+        const float *g = b + SORA_RAG_SORA_BONES * 12 + 9;
+        float best = -1;
+        for (int k = SORA_RAG_SORA_BONES; k < SORA_RAG_BONES; k++) {
+            const float *t = b + k * 12 + 9;
+            float d = (t[0] - g[0]) * (t[0] - g[0]) + (t[1] - g[1]) * (t[1] - g[1]) + (t[2] - g[2]) * (t[2] - g[2]);
+            if (d > best) best = d, memcpy(q, t, sizeof q);
+        }
+    } else
+        for (int k = SORA_RAG_SORA_BONES; k < SORA_RAG_BONES; k++)
+            for (int j = 0; j < 3; j++) q[j] += b[k * 12 + 9 + j] / (float)(SORA_RAG_BONES - SORA_RAG_SORA_BONES);
+    // (the knobs, model space: +z = ahead of him, -x = his right, as KH2's model faces +z; GUESS on the side sign)
+    q[0] -= (float)g_kbdfx_side, q[1] += (float)g_kbdfx_up, q[2] += (float)g_kbdfx_fwd;
+    float face = S.face + rootyaw_at(S.clock), sn = sinf(face), c = cosf(face);  // (blade_world's model -> world)
+    out[0] = lm[3] + (c * q[0] + sn * q[2]) * to_u, out[1] = lm[7] + q[1] * to_u, out[2] = lm[11] + (-sn * q[0] + c * q[2]) * to_u;
+    if (h_cm) *h_cm = q[1];
+    return true;
+}
+static void kbdfx_orient(int h) {  // (the exe's sora_fx_orient, when it has one)
+    static void (*fn)(int, const float *);
+    static bool tried;
+    if (!tried) {
+        tried = true, fn = (void (*)(int, const float *))(void *)GetProcAddress(GetModuleHandleA(NULL), "sora_fx_orient");
+        if (!fn) LOG("[sora] kbdrawfx: this exe has no sora_fx_orient (NEEDS EXE RELINK): the flash turns with his facing only\n");
+    }
+    if (fn && h >= 0) fn(h, g_kbdfx_orient && g_kbdfx_rot_ok ? g_kbdfx_rot : NULL);
+}
+static void kbdfx_tick(bool hidden, float to_u) {
+    // (s288 port) through the wrappers fx_event_g / fx_move_g (friends see the flash; g_fx_gen bumped, so an orb / save ring
+    // that held the reused slot knows it is not theirs), and the slot is followed only while it is still ours (fx_mine).
+    static uint32_t gen;
+    float m[3], h = 0;
+    if (g_kbdfx_h >= 0) {
+        if (g_kbdfx_left-- > 0 && fx_mine(g_kbdfx_h, gen) && sora_fx_alive(g_kbdfx_h)) { if (kbdfx_blade_mid(to_u, m, NULL)) fx_move_g(g_kbdfx_h, m, S.face), kbdfx_orient(g_kbdfx_h); }
+        else g_kbdfx_h = -1;
+    }
+    if (g_kbdfx_last >= 0 && (int)hidden != g_kbdfx_last && (g_kbdrawfx == 1 || (g_kbdrawfx == 2 && !hidden)) && kbdfx_blade_mid(to_u, m, &h)) {
+        g_kbdfx_h = fx_event_g("keyblade_appear", m, S.face, to_u), g_kbdfx_left = 90;
+        gen = g_kbdfx_h >= 0 && g_kbdfx_h < 32 ? g_fx_gen[g_kbdfx_h] : 0;
+        kbdfx_orient(g_kbdfx_h);
+        LOG("[sora] kbdrawfx: %s flash (handle %d, slot %d, %.0f cm above his feet; anchor %d, fwd %d up %d side %d, dir %d len %d%%; blade %.0f cm, turn %s)\n", hidden ? "sheathe" : "draw",
+            g_kbdfx_h, S.mot ? S.mot->slot : -1, h, g_kbdfx_bone, g_kbdfx_fwd, g_kbdfx_up, g_kbdfx_side, g_kbdfx_dir, g_kbdfx_lenpct, g_kbdfx_len,
+            !g_kbdfx_orient ? "off" : !g_kbdfx_rot_ok ? "none (no blade)" : g_kbdfx_grip_used ? "along the drawn blade (grip -Y)" : "along the bones");
+    }
+    g_kbdfx_last = hidden;
+}
 static void bs_tick(const Target *tg, int ntg, float kh) {
     float nd = -1;
     bool fight = false, hit = false;
     if (g_bstance) {
         for (int i = 0; i < ntg; i++) {
             float d = sqrtf(tg[i].hd * tg[i].hd + tg[i].dy * tg[i].dy);
-            if (nd < 0 || d < nd) nd = d;
+            if (nd >= 0 && d >= nd) continue;
+            if (d < BS_RANGE_CM && bs_animal_skip(tg[i].actor)) continue;  // (bsnoanimal; names only looked up in range)
+            nd = d;
         }
         hit = S.special == SP_DAMAGE;
-        fight = hit || (nd >= 0 && nd < g_bs_cm);
+        fight = hit || (nd >= 0 && nd < BS_RANGE_CM);
     }
     if (fight) g_bs_left = g_bs_hold * KH_FPS;
     else if (g_bs_left > 0) g_bs_left -= kh;
@@ -6259,7 +7560,7 @@ static void bs_tick(const Target *tg, int ntg, float kh) {
     }
     if (g_bs_log)
         LOG("[sora] bstance: battle %s (%s, nearest enemy %.0f cm of %d, range %.0f, hold %.1f s), motion %d %s\n", on ? "ON" : "off",
-            !g_bstance ? "key off" : hit ? "Sora was hit" : on ? "enemy in range" : "hold over", nd, ntg, g_bs_cm, g_bs_hold, S.motion,
+            !g_bstance ? "key off" : hit ? "Sora was hit" : on ? "enemy in range" : "hold over", nd, ntg, (float)BS_RANGE_CM, g_bs_hold, S.motion,
             !sw ? "kept (next idle / walk / run takes the variant)" : blend ? "-> the other variant, blended" : "-> the other variant, cut");
     if (sw && g_bs_log) LOG("[sora] bstance: slot %d at clock %.1f\n", S.mot->slot, S.clock);
 }
@@ -6316,6 +7617,14 @@ static int g_glide_stuck;  // frames in a row the glide's sink was stopped (sect
 // 16 on the walk-off, re:0x3D6430) with glide_pose_draw's two-pose mix; the drawer runs it while Fall plays
 static int g_fb_from = -1;  // the motion Fall blends in from (-1: no blend)
 static float g_fb_clock, g_fb_len;
+// (airceil) the ceiling stop below sent an air swing / cast into Fall: its pose was swapped for Fall at once (the swing
+// gone, S.special still set, the next presses dropped as "air combo done, motion 4"). User report (epictest log): "random"
+// air attack cancels, 3 in two sessions, each right after the swing started. An air swing's arc is short (21 cm, apex
+// ~10 KH frames) and near its top the requested rise per step is tiny, so BotW's body lag alone reads as a ceiling
+// (got < CeilingStop 0.49 of the request). In KH2 the ceiling -> Fall is the Jump ACTION's (the apex Fall here is also
+// Jump / Aerial Dodge only); that KH2's attack ACTIONs skip it is a GUESS, not checked in the KH2 exe.
+// On by default (tested in game): no ceiling stop while an air swing / cast plays (its arc and pose go on);
+// SAVAGEWIND_SORA_AIR_CEIL=0 / live "set airceil 0" = the old Fall. The log line below shows each such stop either way.
 static void fall_motion(float len) {
     if (S.motion == MOT_FALL) return;
     if (S.mot && S.motion >= 0 && len > 0)
@@ -6543,6 +7852,56 @@ static void ffin_set(int on) {  // (s92) Final's hit bakes _s91 / _s92, live (hi
 #include "sora_slate.h"  // (s93 b7-runes: Sheikah Slate row + Magnesis + rune recon)
 #include "sora_slatehip.h"  // (s94 b8-slatehip: the Slate on Sora's hip)
 #include "sora_carry.h"  // (s217 world: carrying barrels / rocks / pots = Link's frame while he is in BotW's PlayerGrab; live carry, default off)
+// (holdinv) user: "When Sora is holding items in his hands, for example ingredients to cook, instead of using links carry
+// animation, Sora's KH2 animation still plays out. On top of that, the ingredients remain hidden". The log had no "[carry] on":
+// carry mode needs BotW's PlayerGrab (barrels / rocks / pots), and an inventory hold is not a lift. GUESS: the held items are
+// Link +0x88 too (the carried-object slot BotW's grab actions read, carry_held_now). With this on, while carry mode is off and
+// that slot holds an actor near Link, the frame is Link's (Sora takes his hold pose, as in carry mode) and the exe draws that
+// actor (linkpos_gear_show bit 1 by its name: held items take hidden Link's opacity, as the bow's arrow). Every change of the
+// slot is logged; bit 2 logs the actor names near Link once per hold (the names if the GUESS slot is wrong).
+// SAVAGEWIND_SORA_HOLD_INV=1 / live "set holdinv 0/1"; default 1 (user tested, on by default). Log '[hold] ...'.
+#define HOLD_OFF_N 10  // frames with the slot empty before the hold ends
+// (sora_carry.h: "an unrelated +0x88 never starts or keeps carry mode": the slot can hold other things) Only inventory materials
+// count: Item_* (fruit, mushrooms, meat, fish, ore, monster parts ...) and Animal_Insect_* (bugs, lizards). GUESS list.
+// (holdinv test 1, F5 mark 084532: holding an ingredient, "Put away / Drop" up) the slot held "CarryBox" (1.33 u away): BotW's
+// container for the items held from the inventory. It counts; the items in it are drawn by name prefix (HOLD_SHOW).
+static bool hold_name_ok(const char *n) { return !strcmp(n, "CarryBox") || !strncmp(n, "Item_", 5) || !strncmp(n, "Animal_Insect_", 14); }
+#define HOLD_SHOW "CarryBox;Item_;Animal_Insect_"  // (gear_show bit 1: near Link and not his gear; GUESS: the held items' names)
+static int hold_tick(uint64_t present, int st, uint32_t sw, bool dead) {
+    static uint64_t last_raw, held;
+    static int off_n;
+    static char name[48];
+    uint64_t a = link_actor();
+    uint64_t raw = a && rd_ok(a + 0x88, 8) ? *(const uint64_t *)(uintptr_t)(a + 0x88) : 0;
+    if (g_holdinv && raw != last_raw) {
+        float d = -1;
+        uint64_t ok = carry_held_now(a, &d);
+        LOG("[hold] Link +0x88 = %llx %s (%.2f u away%s), state %#x, carry %d at present %llu\n", (unsigned long long)raw,
+            raw ? carry_actor_name(raw) : "-", d, raw && !ok ? ", not a held object" : "", sw, carry_on(), (unsigned long long)present);
+    }
+    last_raw = raw;
+    float d = -1;
+    uint64_t h = g_holdinv && !dead && !g_loading && !carry_on() && !IN_MICKEY ? carry_held_now(a, &d) : 0;
+    if (h && !hold_name_ok(carry_actor_name(h))) h = 0;  // (not an inventory material: the change line above names it)
+    if (h) {
+        off_n = 0;
+        if (h != held) {
+            held = h, g_hold_on = true;
+            snprintf(name, sizeof name, "%s", carry_actor_name(h));
+            LOG("[hold] on: Link holds %s (%.2f u away): Sora takes his pose, the item is drawn\n", name, d);
+        }
+    } else if (held && ++off_n >= HOLD_OFF_N) {
+        LOG("[hold] off: %s left his hands (present %llu)\n", name, (unsigned long long)present);
+        held = 0, name[0] = 0, S.fresh = true, g_hold_on = false;
+    }
+    if (!held) return st;
+    static void (*show)(int, const char *, const char *, const float *);
+    static int tried;
+    if (!tried) tried = 1, show = (void (*)(int, const char *, const char *, const float *))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_gear_show");
+    static const float zero[3];
+    if (show) show(2 | 4, "", HOLD_SHOW, zero);  // (bit 2: the names near Link logged once per switch-on)
+    return LINK_OTHER;
+}
 #include "sora_roxsfx.h"  // (s110 roxsfx: Roxas sounds + fx)
 #include "sora_ffx.h"    // (s93 b7-ffx: Final swing fx + Final / Limit own trail windows)
 #include "sora_abilfx.h"  // (s107 b19-abilfx: KH2 fx + SE of the combo-ability attacks)
@@ -6557,6 +7916,9 @@ static void ffin_set(int on) {  // (s92) Final's hit bakes _s91 / _s92, live (hi
 #include "sora_diag.h"  // (s183 kairi-diag: the on-screen "Sora's model can't be drawn" notice; needs CAMP from sora_camp.h)
 #include "sora_net_avatar.h"  // (mp Task 6: the remote Sora; needs sora_form.h / sora_mickey.h; Task 7: CAMP.seq for the name plate)
 #include "sora_net_party.h"   // (mp slice 3: the remote Donald + Goofy; the party poses for the fx anchors)
+#include "sora_net_minimap.h" // (s268 co-op item 3: friends on BotW's minimap; mm_tick after avatar_tick)
+#include "sora_warp.h"        // (s269 warpcore, co-op item 4: BotW's own fast travel to a spot / a friend; warp_tick after the net)
+#include "sora_fmwarp.h"      // (s272 co-op item 4b: friends on the full map, BotW's medallion marker as the pick; fmw_tick after warp_tick)
 #include "sora_net_pilot.h"   // (s209 step 2: Melty's autopilot, the game's side; bound below)
 
 // ---- (s209 step 2) Melty's lab notes as they happen + autopilot's binding (sora_net_act.h, sora_net_pilot.h) ----
@@ -6644,10 +8006,12 @@ static int sora_clock_in_world(void) {
 #include "sora_mkchoice.h"  // (s117 mkchoice: KH2 "I won't give up!" / "It's all over..." screen; S117_HELPER_MKCHOICE.md)
 #include "sora_rcslot.h"  // (s134 rcslot: KH2's Reaction Command slot over the command menu; used by sora_react.h / sora_plimit.h)
 #include "sora_react.h"  // (s131 react: Triangle reaction commands on Guardians / Lynels)
+#include "sora_qrun.h"   // (qrun: KH2 Quick Run, hold Square through the roll)
 #include "sora_plimit.h"  // (s133 limits: the party Limits Comet + Whirli-Goof and the small Limit player)
 #include "sora_summon_menu.h"  // (s137 smenu: Summon page / FPS pane / owned rule; the FPS helper's sora_summon_fps.h must come BEFORE this line)
 #include "sora_dbgmenu.h"  // (s140 dbgmenu: the camp Debug Menu page backend; needs sora_summon_menu.h)
 #include "sora_sumlv_late.h"  // (s148 sumlv: charms owned + the debug rows; needs sora_summon_menu.h / sora_dbgmenu.h)
+#include "sora_duel.h"  // (s272 duel, co-op item 6: duels between two players, default OFF; du_frame after warp_tick, du_input before rc_tick)
 // (s85 slice 5) the picked Keyblades to every Sora body (base, Valor, Wisdom) each frame: cheap, and it follows slot
 // loads, hot reloads and body switches without hooks. An exe before s85 (no sora_draw_actor_blade) -> logged once,
 // the model stays the bake's default (stats + ability still change).
@@ -6718,8 +8082,9 @@ static void net_fill(NetSnap *s) {
     // (netskate 0 = the s170 rule: a bone pose with no block = the remote's idle / fall)
     bool rag = linkpos_link_ragdoll() > 0, skate = SKT.rider_on && g_net_skate && !S.puppet && !rag;
     bool bone = S.puppet || (SKT.rider_on && !skate) || rag;
-    s->flags = net_flags(!S.puppet || g_puppet_kb, ACT_AIR(S.act), NET.wet, S.special == SP_GUARD, NET.dead, false, bone);
+    s->flags = net_flags((!S.puppet || g_puppet_kb) && !g_kbf_hidden, ACT_AIR(S.act), NET.wet, S.special == SP_GUARD, NET.dead, false, bone);
     if (skate) s->flags |= NF_SKATE, s->slot = (uint16_t)SKT.rs, s->clock = SKT.rc, g_net_skate_sent++;
+    if (du_on_wire()) s->flags |= NF_DUEL;  // (s272 duel: a third player draws the ring / skips us for "Duel")
     // (s170 bonedraw) the bone block: Link's joints the retarget used (this or the 2 frames before: net_fill runs after the body's draw in
     // the same driver call), in this SNAP's own model space (its feet = g_body, RotY(S.face), KH cm), so feet / yaw / joints always agree
     s->bones.slot = 0;
@@ -6820,8 +8185,12 @@ __declspec(dllexport) void sora_mod_frame(void) {
         drove = g_av_local_ok;
         net_frame(lp, now);
         avatar_tick(now);
+        mm_tick(now);  // (s268: friends on the minimap)
         net_party_tick(now);
-    } else avatar_off(), net_party_off(), net_sora_off();  // (mp2: Sora mode off = BYE + socket closed, his fx copies dropped)
+    } else avatar_off(), net_party_off(), net_sora_off(), mm_send(NULL, 0);  // (mp2: Sora mode off = BYE + socket closed, his fx copies dropped)
+    fmw_tick(GetTickCount64());  // (s272 4b: fmprobe; idle = nothing)
+    warp_tick(GetTickCount64());  // (s269 warpcore: a live warpto / warpfriend, the Medallion slot's restore, a friend's note; idle = nothing)
+    du_frame(GetTickCount64());  // (s272 duel: the packets, the ring, the timers, the screen text; duel 0 = nothing)
     net_note_frame(NET.melty ? note_flags() : 0);  // (s209: Melty's FRAME note, after the puppets were drawn; outside a room: the counts cleared)
     note_act_tick();  // (s209 step 2: the last swing's ACT end)
     pilot_frame(drove, last.QuadPart ? (float)((a.QuadPart - last.QuadPart) / (double)f.QuadPart) : 0);  // (s209 step 2: Melty's autopilot; nothing without pilot=1)
@@ -6875,6 +8244,91 @@ static void sora_mod_frame_body(void) {
         int lv = (int)env_f("SAVAGEWIND_SORA_GLIDE_LV", (float)g_glide_lv);
         g_glide_lv = lv < 1 ? 1 : lv > 5 ? 5 : lv;
         g_air_once = env_f("SAVAGEWIND_SORA_AIR_ONCE", (float)g_air_once) != 0;
+        g_air_noride = env_f("SAVAGEWIND_SORA_AIR_NORIDE", (float)g_air_noride) != 0;
+        if (g_air_noride) LOG("[sora] airnoride on: no ground carry while Sora is in the air\n");
+        g_ledge_slope = env_f("SAVAGEWIND_SORA_LEDGE_SLOPE", (float)g_ledge_slope) != 0;
+        if (g_ledge_slope) LOG("[sora] ledgeslope on: no ledge hold where the floor is in reach (a slope)\n");
+        g_air_ceil = env_f("SAVAGEWIND_SORA_AIR_CEIL", (float)g_air_ceil) != 0;
+        if (g_air_ceil) LOG("[sora] airceil on: no ceiling stop while an air swing / cast plays\n");
+        g_hjanim = env_f("SAVAGEWIND_SORA_HJ_ANIM", (float)g_hjanim) != 0;
+        if (g_hjanim) LOG("[sora] hjanim on: base Sora's High Jump plays motion 201 (B003)\n");
+        g_glide_btn = env_f("SAVAGEWIND_SORA_GLIDE_BTN", (float)g_glide_btn) != 0;  // (glidebtn)
+        if (g_glide_btn) LOG("[sora] glidebtn on: Square glides, Cross in the air = Aerial Dodge\n");  // (s288: log when ON, as the others)
+        g_jumpclimb = env_f("SAVAGEWIND_SORA_JUMP_CLIMB", (float)g_jumpclimb) != 0;  // (s288 port: jumpclimb had a live key only)
+        g_throw1 = env_f("SAVAGEWIND_SORA_THROW_0X1", (float)g_throw1) != 0;  // (s288 port: throw1 had a live key only)
+        g_hudev = env_f("SAVAGEWIND_SORA_HUD_EV", (float)g_hudev) != 0;  // (hudev)
+        g_hudslide = env_f("SAVAGEWIND_SORA_HUD_SLIDE", (float)g_hudslide) != 0;  // (hudslide)
+        g_hudclimb = env_f("SAVAGEWIND_SORA_HUD_CLIMB", (float)g_hudclimb) != 0;  // (hudclimb)
+        g_hudgrace = (int)env_f("SAVAGEWIND_SORA_HUD_GRACE", (float)g_hudgrace);  // (hudgrace)
+        if (!g_hudev) LOG("[sora] hudev off: the KH2 HUD stays up in talks / cutscenes / message windows\n");
+        g_ride_l = env_f("SAVAGEWIND_SORA_RIDE_L1", (float)g_ride_l) != 0;
+        if (g_ride_l) LOG("[sora] ridel on: L1 goes to BotW while Link rides (soothe a horse)\n");
+        g_kg_stick = env_f("SAVAGEWIND_SORA_KBTHROW_STICK", (float)g_kg_stick) != 0;
+        g_qrun = env_f("SAVAGEWIND_SORA_QUICK_RUN", (float)g_qrun) != 0;  // (qrun)
+        if (g_qrun) LOG("[qrun] on: hold Square through the Dodge Roll = Quick Run\n");  // (s288 port: log when ON, as the others)
+        if (g_kg_stick) LOG("[kbgyro] kbthrowstick on: the right stick aims the Keyblade throw too\n");
+        g_kbfield = env_f("SAVAGEWIND_SORA_KB_FIELD", (float)g_kbfield) != 0;  // (kbfield)
+        g_kbtoggle = env_f("SAVAGEWIND_SORA_KB_TOGGLE", (float)g_kbtoggle) != 0;  // (kbtoggle)
+        if (g_kbfield) LOG("[sora] kbfield on: no Keyblade in his hand out of battle, battle stance range %.0f cm\n", g_bs_kbf_cm);
+        if (KB_L3_MINE) LOG("[sora] kbtoggle on: L3 draws / puts away the Keyblade\n");
+        else if (g_kbtoggle) LOG("[sora] kbtoggle on but kbfield off: L3 stays BotW's\n");
+        g_guard_limit = env_f("SAVAGEWIND_SORA_GUARD_LIMIT", (float)g_guard_limit) != 0;
+        if (g_guard_limit) LOG("[sora] guardlimit on: Limit Form guards (its own K322, KH2's Id 11)\n");
+        g_adblock = (int)env_f("SAVAGEWIND_SORA_AIR_DODGE_BLOCK", (float)g_adblock);  // (adblock, sora_guard.h: 1 block, 2 deflect)
+        g_adblock = g_adblock < 0 ? 0 : g_adblock > 2 ? 2 : g_adblock;
+        if (g_adblock) LOG("[sora] adblock %d: the Aerial Dodge %s\n", g_adblock, g_adblock == 2 ? "deflects hits (Link's shield parry)" : "blocks hits");
+        g_lock_botw = env_f("SAVAGEWIND_SORA_LOCK_BOTW", (float)g_lock_botw) != 0;
+        if (g_lock_botw) LOG("[sora] lockbotw on: R1 lock-on reach per enemy type as in BotW (20 m for most)\n");
+        {
+            int lp = (int)env_f("SAVAGEWIND_SORA_LOCKPT", (float)g_lockpt);
+            g_lockpt = lp < 0 ? 0 : lp > 2 ? 2 : lp;
+        }
+        g_t0sq = env_f("SAVAGEWIND_SORA_T0_SQUARE", (float)g_t0sq) != 0;  // (t0sq, s288 port: the env var it had not)
+        if (g_t0sq) LOG("[sora] t0sq on: Retaliating / Upper / Horizontal Slash, Finishing Leap on Square (only when one would fire)\n");
+        if (g_lockpt) LOG("[sora] lockpt %d: the lock-on icon at BotW's attention point\n", g_lockpt);
+        g_swhit = env_f("SAVAGEWIND_SORA_SWHIT", (float)g_swhit) != 0;
+        g_swhit_dgn = env_f("SAVAGEWIND_SORA_SWHIT_DGN", (float)g_swhit_dgn) != 0;  // (shrineswitch)
+        if (g_swhit) LOG("[sora] swhit on: the Keyblade flips the Goron cannon lever%s (game 1.9.0 only)\n", g_swhit_dgn ? " + the shrines' crystal switches" : "");
+        g_bowtorch = env_f("SAVAGEWIND_SORA_BOW_TORCH", (float)g_bowtorch) != 0;
+        g_bt_jump = env_f("SAVAGEWIND_SORA_BT_JUMP", (float)g_bt_jump) != 0;
+        g_bow_jump = env_f("SAVAGEWIND_SORA_BOW_JUMP", (float)g_bow_jump) != 0;
+        if (g_bow_jump) LOG("[sora] bowjump on: Triangle while aiming the bow = Link's jump (no longer BotW A)\n");
+        if (g_bt_jump) LOG("[bowtorch] btjump on: Triangle = Link's jump while the torch is out\n");
+        if (g_bowtorch) LOG("[bowtorch] on: the torch in the bow mode is drawn on Sora's hand\n");
+        g_logchop = env_f("SAVAGEWIND_SORA_LOG_CHOP", (float)g_logchop) != 0;  // (logchop)
+        if (g_logchop) LOG("[sora] logchop on: a Keyblade hit chops a felled log into Bundles of Wood (game 1.9.0 only)\n");
+        g_wpnsheathe = env_f("SAVAGEWIND_SORA_WPN_SHEATHE", (float)g_wpnsheathe) != 0;  // (wpnsheathe)
+        if (g_wpnsheathe) LOG("[sora] wpnsheathe on: a BotW weapon is put away with the Keyblade (needs kbfield)\n");
+        {  // (kbdrawfx)
+            int v = (int)env_f("SAVAGEWIND_SORA_KB_DRAWFX", (float)g_kbdrawfx);
+            g_kbdrawfx = v < 0 ? 0 : v > 2 ? 2 : v;
+            if (g_kbdrawfx) LOG("[sora] kbdrawfx %d: KH2's Keyblade appear flash on %s\n", g_kbdrawfx, g_kbdrawfx == 1 ? "draw + sheathe" : "draw");
+        }
+        {  // (chestwarp) the chest-open playback from the launcher too: SAVAGEWIND_SORA_CHEST_ANIM=1 (3 = + its recon log), as live "set chestanim"
+            int ca = (int)env_f("SAVAGEWIND_SORA_CHEST_ANIM", (float)g_chestanim);
+            g_cxp_sw = env_f("SAVAGEWIND_SORA_CHEST_SW", (float)g_cxp_sw) != 0;  // (chestsw)
+            if (g_cxp_sw) LOG("[chestanim] chestsw on: a chest start needs Link's state word 0\n");
+            g_chestanim = ca < 0 ? 0 : ca > 3 ? 3 : ca;
+            if (g_chestanim & 1) LOG("[chestanim] on from the launcher (chestanim %d): Sora's KH2 chest-open motion\n", g_chestanim);
+        }
+        g_eqtabs = env_f("SAVAGEWIND_SORA_EQ_TABS", (float)g_eqtabs) != 0;  // (eqtabs)
+        g_eqarmor = env_f("SAVAGEWIND_SORA_EQ_ARMOR", (float)g_eqarmor) != 0;  // (eqarmor)
+        if (g_eqarmor) LOG("[sora] eqarmor on: the Equipment page's Head / Body / Legs rows pick armor (None = take it off)\n");
+        if (g_eqtabs) LOG("[sora] eqtabs on: the Equipment picker has a Keyblades and a BotW Weapons tab (L1 / R1)\n");
+        g_eqshield = env_f("SAVAGEWIND_SORA_EQ_SHIELD", (float)g_eqshield) != 0;  // (eqshield; s288 port)
+        if (g_eqshield) LOG("[sora] eqshield on: the Equipment page has a Shield row (None = take it off)\n");
+        g_dbgtext = env_f("SAVAGEWIND_SORA_DBGTEXT", (float)g_dbgtext) != 0;  // (dbgtext #51; s288 port)
+        if (g_dbgtext) LOG("[sora] dbgtext on: the Debug page help line reads debug_menu_text.txt (never written by the game)\n");
+        g_dbm_save = env_f("SAVAGEWIND_SORA_DBM_SAVE", (float)g_dbm_save) != 0;  // (dbgsave #60; s288 port)
+        if (g_dbm_save) LOG("[sora] dbmsave on: the Debug Menu rows are saved with the BotW save slot (sora_kh2.json \"dbgmenu\")\n");
+        g_sl_pause_save = env_f("SAVAGEWIND_SORA_PAUSE_SAVE", (float)g_sl_pause_save) != 0;  // (dbgsave #60; s288 port)
+        if (g_sl_pause_save) LOG("[sora] pausesave on: a pause-menu Save writes the slot sidecar while still paused\n");
+        g_mgelem = env_f("SAVAGEWIND_SORA_MGELEM", (float)g_mgelem) != 0;  // (mgelem #61; s288 port)
+        if (g_mgelem) LOG("[sora] mgelem on: Blizzard freezes / Thunder shocks enemies through BotW's own reaction\n");
+        g_botwpic = env_f("SAVAGEWIND_SORA_BOTWPIC", (float)g_botwpic) != 0;  // (botwpic #62; s288 port)
+        if (g_botwpic) LOG("[sora] botwpic on: BotW item pictures in the Equipment page\n");
+        g_eqlayout = env_f("SAVAGEWIND_SORA_EQ_LAYOUT", (float)g_eqlayout) != 0, eq_layout_apply();  // (eqlayout #63; s288 port)
+        if (g_eqlayout) LOG("[sora] eqlayout on: the Equipment page's #63 text places (8 picker rows, eqtx %d eqvx %d)\n", g_eqtx, g_eqvx);
         const char *k = getenv("SAVAGEWIND_SORA_SCALE");
         if (k && *k) g_k = strtof(k, NULL);
         slog_open();
@@ -6941,8 +8395,10 @@ static void sora_mod_frame_body(void) {
     if (!t0 || !*(volatile uint32_t *)(uintptr_t)PAUSE_STATE) is_off();  // (s102: playing / no world: the inventory screen is gone)
     if (!t0 || *(volatile uint32_t *)(uintptr_t)PAUSE_STATE) {  // (paused: VFR updates twice, no physics)
         g_nd_pause++;
+        g_slam_pause_at = vk_frame_counter();  // (s288 review: slam1's "no pause just before" test)
         g_note_fl |= t0 ? SORA_MELTY_FRAME_PAUSED : SORA_MELTY_FRAME_LOADING;  // (s209: BotW's pause / no world frame)
         skt_quiet();
+        if (t0 && g_sl_pause_save) sl_slot_tick_paused();  // (dbgsave #60, key pausesave) a pause-menu Save writes the sidecar now, not at the unpause
         sv_tab_tick(GetTickCount64());  // (s131) the save point's System tab jump runs while BotW's menu is up
         float pp[3];
         if (t0 && linkpos_link_pos(pp)) live_poll(pp, vk_frame_counter());  // (menu tests: new input while paused)
@@ -6973,6 +8429,7 @@ static void sora_mod_frame_body(void) {
     sk_recon_tick(present);  // (s93 b7-runes: R1 rune flags / R2 R3 logs, off unless "set slaterec")
     unit_poke_tick();
     snap_tick(p, present);
+    sx_hid = ah_actor_hid;  // (s270 sharexp: the died queue's actor -> HashId, sora_airhold.h)
     sl_tick();  // (s54 levels: kill rule -> EXP / level ups)
     ul_tick();  // (s89 kb: BotW milestones -> Keyblades, the form gate)
     ca_tick();  // (s102 b16-chestabil, s103: chests counted from BotW's TBox flags -> KH2 abilities)
@@ -7153,10 +8610,22 @@ static void sora_mod_frame_body(void) {
             if (again || g_loading || !g_wthrow) LOG("[throw] %s: no longer drawn as thrown gear (%s)\n", g_thr_name, again ? "equipped again" : g_loading ? "load" : "wthrow 0"), g_thr_name[0] = 0;  // (s263 review 4: wthrow 0)
         }
     }
+    s288_exe_asks();  // (s288 port: the exe keeps the lists of swhit / logchop / bowtorch / malnoflinch only while their keys are on)
     {   // (s251 bowshow + s262 the thrown weapon) Link's gear the exe draws while this is called (it stops 6 game frames after the last call)
-        bool bow = g_bow_on && g_bowshow, thr = g_thr_name[0] && g_wthrow_show;
+        bool torch = g_bowtorch && g_bow_on && g_bt_hand;  // (bowtorch) the torch in Link's hand: drawn on Sora's grip, the bow (on his back) not
+        bool bow = g_bow_on && g_bowshow && !torch, thr = g_thr_name[0] && g_wthrow_show;
         bool hold = g_thr_on && g_wthrow_fit && g_wpn_cur.def && !g_fmots_on && !bow;  // (s262) still in his hand: BotW's place + the hand delta
-        if (bow || thr || hold) {
+        if (torch) {
+            static void (*tshow)(int, const char *, const char *, const float *);
+            static int ttried;
+            if (!ttried) ttried = 1, tshow = (void (*)(int, const char *, const char *, const float *))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_gear_show");
+            static const float tzero[3];
+            if (tshow) tshow(1, "Weapon_Sword_043", "", g_thr_delta_ok ? g_thr_delta : tzero);
+            static void (*lfx)(void);  // (linkfx: the torch's fire is Link's; hide him by his model only while the torch is out)
+            static int ltried;
+            if (!ltried) ltried = 1, lfx = (void (*)(void))(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_link_fx");
+            if (lfx) lfx();
+        } else if (bow || thr || hold) {
             static void (*show)(int, const char *, const char *, const float *);
             static int tried;
             if (!tried) {
@@ -7214,7 +8683,19 @@ static void sora_mod_frame_body(void) {
         was = ev;
         g_cxp_zero = ev;  // (s107 b19-chest)
         if (ev) st = LINK_OTHER;
-        g_event = ev || (sw_now == 0x1 && !dead) || g_chev;
+        // (throw0x1) user: "when I throw a vase, sora and the kh2 hud disappears for a second": BotW puts Link in 0x1 for ~1 s of
+        // the GrabThrow (log: carry on, pot left his hands, 0x1, carry off). While carry mode is on a 0x1 is that throw, not an event.
+        {  // (slam0x1) a 0x1 entered straight from the air with no pause just before = the plunge attack's slam
+            static uint32_t prev_sw = ~0u;
+            uint64_t pause_at = g_slam_pause_at;  // (s288 review: was a local stamped here, where it is never paused)
+            if (g_loading) prev_sw = ~0u, g_slam1_now = false;  // (s288 review: a load started in the air is no slam)
+            if (sw_now == 0x1 && prev_sw != 0x1) {
+                g_slam1_now = g_slam1 && prev_sw == 0x2 && (!pause_at || present - pause_at > SLAM_PAUSE_GAP);
+                if (g_slam1_now) LOG("[sora] slam1: 0x1 straight from the air (no pause): the plunge attack's slam, no event\n");
+            } else if (sw_now != 0x1) g_slam1_now = false;
+            prev_sw = sw_now;
+        }
+        g_event = ev || (sw_now == 0x1 && !dead && !(g_throw1 && carry_on()) && !g_slam1_now) || g_chev;
     }
     cprev_tick(st, dead);  // (s106 b18-chestanim: set chestprev <slot>)
     cx_tick(present, p);  // (s106 b18-chestanim: set chestanim 2 = recon log)
@@ -7295,12 +8776,59 @@ static void sora_mod_frame_body(void) {
         }
         if (bed_on) st = LINK_OTHER, g_event = true;
     }
+    {   // (ridel) Link rides (state word bit 0x100000): BotW gets L (soothe) - pad_tap reads g_riding
+        int r = g_ride_l && !dead && !g_loading && (sw_now & LINK_SW_RIDING);
+        if (r != g_riding) LOG("[sora] ridel: %s (Link state %#x)\n", r ? "Link rides: L1 goes to BotW (soothe)" : "not riding: L1 is the KH2 shortcut again", sw_now);
+        g_riding = r;
+    }
+    {   // (hflip) user: "When Sora jumps off of a horse, instead of flipping in the air, he has his standing animation. Are we able
+        // to use the flip from when link jumps, and then after revert it to Sora's falling animation?" Link riding (bit 0x100000)
+        // -> not riding while off the ground = the jump off the horse: Sora takes Link's pose (puppet, st LINK_OTHER) for the flip,
+        // until HFLIP_TAIL_MS after Link starts coming down (3 frames lower), HFLIP_MAX_MS at most, or the ground; then he drives
+        // again straight into KH2's Fall (g_hflip_fall, the drive step). GUESS timings. SAVAGEWIND_SORA_HORSE_FLIP=1 / live
+        // "set hflip 0/1", "set hfliptail <ms>"; default 1 (user tested). Log '[sora] hflip: ...'.
+        // (hflip test 1: never started; log: the jump off shows Link state 0x18000002, read as GROUND for the whole flip, so
+        // "off the ground" never held and Sora stood until the walk-off saw the drop) The edge alone starts it now; Link's
+        // height over the floor (a ray, HFLIP_FLOOR_U) ends it after HFLIP_MIN_MS, the state word is not used.
+        static int was_ride;
+        static uint64_t dm_end, dm_start;
+        static float py;
+        static int down;
+        int ride_raw = !dead && !g_loading && (sw_now & LINK_SW_RIDING) != 0;
+        float lp[3];
+        bool hp = linkpos_link_pos(lp);
+        uint64_t nowms = GetTickCount64();
+        float hfl = -1;  // (Link's height over the floor, u; -1 = no floor within 3 u)
+        if (hp && g_hflip && dm_end) {  // (s288 port: the ray only while a flip runs; was every frame, key or not)
+            float a[3] = {lp[0], lp[1] + 0.2f, lp[2]}, b[3] = {lp[0], lp[1] - 3.0f, lp[2]}, h[3], n[3];
+            if (linkpos_raycast(a, b, h, n) && n[1] > 0.5f) hfl = lp[1] - h[1];
+        }
+        if (g_hflip && was_ride && !ride_raw && hp)
+            dm_end = nowms + HFLIP_MAX_MS, dm_start = nowms, down = 0, py = lp[1],
+            LOG("[sora] hflip: jumped off the horse (Link state %#x): Sora takes Link's flip\n", sw_now);
+        was_ride = ride_raw;
+        if (dm_end) {
+            bool floor = nowms >= dm_start + HFLIP_MIN_MS && hfl >= 0 && hfl < HFLIP_FLOOR_U;  // (down on the floor: landed / a step off)
+            bool over = !g_hflip || dead || g_loading || nowms >= dm_end || floor || ride_raw;
+            if (!over && hp) {
+                down = lp[1] < py - 0.002f ? down + 1 : 0, py = lp[1];
+                if (down == 3 && dm_end > nowms + (uint64_t)g_hflip_tail) dm_end = nowms + (uint64_t)g_hflip_tail;  // (coming down: the flip's tail)
+            }
+            if (over) {
+                g_hflip_fall = !dead && !floor && (hfl < 0 || hfl > 0.3f);
+                LOG("[sora] hflip: flip over (%s, Link state %#x, %.2f u over the floor)%s\n", floor ? "on the floor" : nowms >= dm_end ? "time" : "other",
+                    sw_now, hfl, g_hflip_fall ? ": Sora's Fall" : "");
+                dm_end = 0;
+            } else st = LINK_OTHER;  // (the puppet: Link's flip)
+        }
+    }
     sh_tick(present);  // (s94 b8-slatehip)
     bh_tick();  // (s102 bombhand)
     bb_tick(g_loading, p);  // (s217 world: explosive barrels: the hook on / off by barrelboom, nothing while it is 0)
     wpn_tick(!dead && !g_loading && !carry_on());  // (s128 wpn: Link's BotW weapon in Sora's hand; s217: not while he carries an object - last frame's carry mode)
     st = sk_tick(present, st, sw_now);  // (s93 b7-runes: Slate mode = Link's pad + Sora puppets him, like the swim latch)
     st = carry_tick(present, st, sw_now, dead, g_loading, swim_at != 0);  // (s217 world: carry mode = the same, while Link carries; st unchanged while carry is 0)
+    st = hold_tick(present, st, sw_now, dead);  // (holdinv: items held from the inventory = Link's frame + drawn)
     orb_tick(present, p, dead || g_loading);  // (s131 orbs)
     sv_tick(present, p, dead || g_loading);   // (s131 savept)
     skt_tick(present, st, p, dead || g_loading);  // (s110 skate: the board's place + draw, auto get-off)
@@ -7309,15 +8837,134 @@ static void sora_mod_frame_body(void) {
     {   // (s107 b19-chest: set chestanim 1) the chest-open playback; the known events are excluded, see sora_chestanim.h
         uint32_t lo = sw_now & 0xffff;
         bool near_bed = hypotf(p[0] - BED_POS[0], p[2] - BED_POS[2]) <= (float)g_bed_r + 3.0f && fabsf(p[1] - BED_POS[1]) <= 6.0f;
-        bool known = dead || sw_now == 0x1 || lo == 0x2 || lo == 0x90 || lo == 0x8002 || wet || g_chev || g_wake_on || SK.on || g_frz_id >= 0 || g_msg_screen || near_bed;
-        cxp_tick(present, st, sw_now, known, p);
+        bool known = dead || lo == 0x2 || lo == 0x90 || lo == 0x8002 || wet || g_chev || g_wake_on || SK.on || g_frz_id >= 0 || g_msg_screen || near_bed;
+        // (chestwarp) user: "it looked like Link's animation": log = the playback started at the chest (TBox_Field_Wood 0.95 m,
+        // state 0) but ended 312 ms later as "event over", while BotW's chest sequence went on ~4 s in Link state 0x1 - the
+        // known 0x1 warp. 0x1 still keeps a playback from STARTING (the warp), but no longer ends one that is playing.
+        cxp_tick(present, st, sw_now, known || (sw_now == 0x1 && !CP.on), p);
     }
     sora_draw_ghost(wet ? g_swim_ghost / 100.0f : 0.0f);
     NET.wet = wet;  // (mp: SNAP flag NF_GHOST)
     warp_tint(0);  // (s54: only the 0x1 puppet below glows)
     light_tick();  // (s121 a1 light)
+    if (g_botwsteps) {  // (kh2steps) the surface bank under Sora's feet, for kbsw_motion's step swap
+        typedef bool (*RayMat)(const float *, const float *, float *, float *, uint32_t *);
+        static RayMat rm;
+        static int tried;
+        if (!tried) tried = 1, rm = (RayMat)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_raycast_mat");
+        g_step_bank = NULL, g_floor_wet = false;
+        float lp[3], wd = link_water_depth();
+        if (wd > 0.02f) g_step_bank = wd < 0.25f ? "WaterShallow" : wd < 0.5f ? "WaterMdlDepth" : "WaterDeep";
+        else if (rm && linkpos_link_pos(lp)) {
+            float a[3] = {lp[0], lp[1] + 0.3f, lp[2]}, b[3] = {lp[0], lp[1] - 1.5f, lp[2]}, h[3], n[3];
+            uint32_t m = 0;
+            if (rm(a, b, h, n, &m)) {
+                static const char *const SOIL[] = {"Soil", "SoilSoft", "SoilHard"};
+                static const char *const STONE[] = {"Stone", "StoneLight", "StoneHeavy", "StoneMarble", "StoneDgnLight", "StoneDgnHeavy"};
+                static const char *const SAND[] = {"Sand", "SandShallow", "HeavySand"};
+                static const char *const METAL[] = {"Metal", "MetalLight", "Metal"};
+                static const char *const GRASS[] = {"Grass", "GrassMoss", "Grass", "GrassWithMud", "GrassLeaf", "GrassStraw", "GrassThatch"};
+                static const char *const WOOD[] = {"Wood", "WoodThin", "Wood"};
+                static const char *const SNOW[] = {"Snow", "SnowShallow", "HeavySnow"};
+                static const char *const CLOTH[] = {"Cloth", "ClothCarpet", "ClothLeather"};
+                static const char *const BONE[] = {"Bone", "BonePile"};
+#define SUBPICK(t) (sub < (int)(sizeof t / sizeof *t) ? t[sub] : t[0])
+                int mat = (int)(m & 63u), sub = (int)((m >> 6) & 15u);
+                switch (mat) {
+                case 1: g_step_bank = SUBPICK(SOIL); break;
+                case 2: g_step_bank = SUBPICK(STONE); break;
+                case 3: g_step_bank = SUBPICK(SAND); break;
+                case 4: g_step_bank = SUBPICK(METAL); break;
+                case 5: g_step_bank = "MetalLight"; break;     // WireNet
+                case 6: g_step_bank = SUBPICK(GRASS); break;
+                case 7: g_step_bank = SUBPICK(WOOD); break;
+                case 8: g_step_bank = "WaterShallow", g_floor_wet = true; break;  // (Water as the floor: wet platforms, Zora's Domain)
+                case 9: g_step_bank = SUBPICK(SNOW); break;
+                case 10: g_step_bank = "IceHard"; break;
+                case 12: g_step_bank = "GrassWithMud"; break;  // Bog
+                case 13: g_step_bank = "HeavySand"; break;
+                case 14: g_step_bank = SUBPICK(CLOTH); break;
+                case 15: g_step_bank = "IceHard"; break;       // Glass
+                case 16: g_step_bank = SUBPICK(BONE); break;
+                case 21: g_step_bank = "Metal"; break;         // GuardianFoot
+                case 22: g_step_bank = "HeavySnow"; break;
+                default: break;                                // Undefined / others: KH2's step
+                }
+#undef SUBPICK
+            }
+        }
+    }
+    if (g_watersplash) {  // (watersplash) BotW's own foot splash per step while wading
+        typedef bool (*FootFx)(const float *, float, uint32_t, float);
+        typedef bool (*LastRun)(void);
+        static LastRun lr;
+        typedef int (*FootFx2)(const float *, float, uint32_t, float);
+        static FootFx2 ff2;
+        typedef unsigned (*Steps)(void);
+        static FootFx ff;
+        static Steps sf;
+        static int tried, logged;
+        static unsigned seen;
+        if (!tried) {
+            tried = 1;
+            ff = (FootFx)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_foot_effect");
+            sf = (Steps)(void *)GetProcAddress(GetModuleHandleA(NULL), "sora_sfx_steps_fired");
+            lr = (LastRun)(void *)GetProcAddress(GetModuleHandleA(NULL), "sora_sfx_last_step_run");
+            ff2 = (FootFx2)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_foot_effect2");
+            LOG("[splash] %s\n", ff && sf ? "ready" : "this exe has no linkpos_foot_effect / sora_sfx_steps_fired (NEEDS EXE RELINK)");
+            if (sf) seen = sf();
+        }
+        if (ff && sf) {
+            unsigned now = sf();
+            bool step = now != seen;
+            seen = now;
+            float lp[3], wd = link_water_depth();
+            bool wet = g_floor_wet && g_botwsteps;  // (a wet floor: splash at the feet, a thin film of water)
+            if (step && (wd > 0.02f || wet) && linkpos_link_pos(lp)) {
+                uint32_t m = 8;  // (material Water, sub 0: the floor ray sees the riverbed)
+                if (wd <= 0.02f) wd = 0.05f;  // (a wet floor: a thin film)
+                float at[3] = {lp[0], lp[1] + (wet && wd <= 0.05f ? 0.0f : wd), lp[2]};  // (on the water surface)
+                bool run = lr && lr();
+                // (test 5: splashes only sometimes on Zora's Domain's wet floor although every step was played: GUESS the walk
+                // contact speed 2.5 was under the effect's threshold) live "set splashwalk / splashrun <x10>" (45 / 60)
+                float speed = (run ? g_splash_run : g_splash_walk) / 10.0f;
+                static const char *const R2[] = {"could not run", "NO EFFECT (handle 0)", "STALE handle", "emitted + placed"};
+                int r2 = -1;
+                bool ok = false;
+                if (g_splashmode && ff2) r2 = ff2(at, speed, m, wd);
+                else ok = ff(at, speed, m, wd);
+                if (logged < 400) logged++, LOG("[splash] %s step in water (depth %.2f, floor %s, speed %.1f): %s\n",
+                                                 run ? "run" : "walk", wd, wet ? "wet" : "wading", speed,
+                                                 r2 >= 0 ? R2[r2 & 3] : ok ? "game path played" : "the game's contact effects refused");
+            }
+        }
+    }
+    if (g_stepdiag) {  // (kh2steps diag) the floor material under Sora's feet, logged on change
+        typedef bool (*RayMat)(const float *, const float *, float *, float *, uint32_t *);
+        static RayMat rm;
+        static int tried;
+        if (!tried) tried = 1, rm = (RayMat)(void *)GetProcAddress(GetModuleHandleA(NULL), "linkpos_raycast_mat"),
+                    LOG("[steps] diag: %s\n", rm ? "floor material log on" : "this exe has no linkpos_raycast_mat (NEEDS EXE RELINK)");
+        float lp[3];
+        if (rm && linkpos_link_pos(lp)) {
+            float a[3] = {lp[0], lp[1] + 0.3f, lp[2]}, b[3] = {lp[0], lp[1] - 1.5f, lp[2]}, h[3], n[3];
+            uint32_t m = 0;
+            bool hit = rm(a, b, h, n, &m);
+            float wd = link_water_depth();
+            static uint32_t last = 0xffffffffu;
+            static int last_w = -1;
+            int w = wd > 0.02f;
+            if ((hit ? m : 0xfffffffeu) != last || w != last_w)
+                LOG("[steps] floor %s: material raw %#x (low 6 bits %u, bits 6.. %#x), water depth %.2f, at %.2f %.2f %.2f\n",
+                    hit ? "hit" : "none", m, m & 63u, m >> 6, wd, lp[0], lp[1], lp[2]),
+                    last = hit ? m : 0xfffffffeu, last_w = w;
+        }
+    }
+    firelight_tick();  // (firelight: the nearest burning fire lights the bodies)
+    flamefront_tick();  // (flamefront: burning fires' flames back over the bodies where nearer the camera)
     blob_tick();   // (s126: KH2 blob keep / off / auto)
     g_dg_playing = (st == LINK_GROUND || st == LINK_AIR) && !dead && !g_loading;  // (s183 kairi-diag)
+    if (st != LINK_GROUND && st != LINK_AIR) kbf_set(false), g_kbdfx_last = -1, g_wpn_field_hide = 0;  // (wpnsheathe: back in his hand too)  // (kbfield: the puppet keeps its own Keyblade rule; kbdrawfx: no flash on the way back)
     if (st != LINK_GROUND && st != LINK_AIR) {  // climbing, swimming, a cutscene...: Link's (the servo can't drive)
         rox_tick();  // (s110: the body switch also runs while Link has the pad: the new game's wake-up / walk-out cutscenes kept Sora until the first save)
         static uint64_t said;
@@ -7355,7 +9002,8 @@ static void sora_mod_frame_body(void) {
         // load's spawn (no glow)
         static int ev_kind;  // 0 none, 1 warp-out, 2 arrival
         static uint64_t ev_at, out_at;
-        bool vis = sw == 0x1 && !dead && !g_loading;
+        bool throw1 = (g_throw1 && sw == 0x1 && carry_on()) || (sw == 0x1 && g_slam1_now);  // (throw0x1: the 0x1 inside a carry = the throw: no warp tint; slam0x1: + the plunge slam)
+        bool vis = sw == 0x1 && !dead && !g_loading && !throw1;
         if (vis && !was_vis) {
             bool after_load = g_load_end && present - g_load_end < 600, pending = out_at && present - out_at < 7200;
             ev_kind = !after_load ? 1 : pending ? 2 : 0, ev_at = present;
@@ -7371,6 +9019,12 @@ static void sora_mod_frame_body(void) {
                 LOG("[sora] puppet in 0x1: bones %s (max dist %.2f u, bones %llx)%s\n", ev_ok ? "sane" : "junk", maxd,
                     (unsigned long long)link_bones_now(), g_puppet_ev ? "" : " [set puppetev 0]");
             last_ev_ok = ev_ok;
+        } else if (throw1) {  // (throw0x1) Link's throw pose reaches past BONES_SANE_U (log: 3.05 u): a wider limit, still finite
+            float maxd = -1;
+            link_bones_sane(&maxd);
+            ev_ok = g_puppet_ev && isfinite(maxd) && maxd > 0.3f && maxd < THROW_SANE_U;
+            static int said = -1;
+            if (ev_ok != said) LOG("[sora] throw0x1: 0x1 during a carry = the throw, puppet %s (bones max dist %.2f u)\n", ev_ok ? "kept" : "off: junk", maxd), said = ev_ok;
         } else if (sw == 0x1) ev_ok = false;
         was_ev = sw == 0x1;
         // (s57 user: "when sora dies i dont see link go into rag doll, it shows sora over him") dying = life 0, before
@@ -7393,11 +9047,13 @@ static void sora_mod_frame_body(void) {
             if (puppet) {
                 if (!S.puppet) LOG("[sora] Link state %#x: Sora takes Link's pose (puppet)\n", sw);
                 S.face = face;
-                hp_apply(g_handpose == 2 || (g_handpose == 1 && (SK.on || carry_on())) || (g_thr_on && g_wthrow_fit && g_wpn_cur.def && !g_fmots_on));  // (s262: + the weapon throw's hold)  // (s102 handpose; s217: + carry mode, KH2 closed hands as with the bomb)
+                hp_apply(g_handpose == 2 || (g_handpose == 1 && (SK.on || carry_on())) || (g_thr_on && g_wthrow_fit && g_wpn_cur.def && !g_fmots_on) || g_bt_hand);  // (bowtorch: + the torch)  // (s262: + the weapon throw's hold)  // (s102 handpose; s217: + carry mode, KH2 closed hands as with the bomb)
                 cxp_blend(g_rpose);  // (s107 b19-chest: KH2 chest motion over Link's pose)
-                if (!g_puppet_kb) keyblade_hide_rig(g_rpose, RIG_CUR), keyblade2_hide(g_rpose);  // (s110 roxpup: the rig in use)
+                // (chestkb) user: "can we use a specific animation where he uses his keyblade to unlock the chest?": the
+                // Keyblade stays drawn while the KH2 chest-open motion plays over the puppet (live "set chestkb 0" = hidden)
+                if (!g_puppet_kb && !(CP.on && g_cxp_kb)) keyblade_hide_rig(g_rpose, RIG_CUR), keyblade2_hide(g_rpose);  // (s110 roxpup: the rig in use)
                 bool gone = false;  // (s54: fully dissolved like BotW's Link at v = 1: not drawn)
-                if (sw == 0x1) {
+                if (sw == 0x1 && !throw1) {  // (throw0x1: no warp glow on the throw)
                     float wv = g_wtsrc ? link_warp_value() : -1;
                     static float l_wv = -2;  // (probe: BotW's ramp, a line per 0.05 step)
                     if (fabsf(wv - l_wv) >= 0.05f || (wv == 0) != (l_wv == 0))
@@ -7471,6 +9127,10 @@ static void sora_mod_frame_body(void) {
     float ratio = kh_ratio();
     const float kh = KH_PHYS_STEP * ratio, to_u = 0.01f * g_k;
     float z_up = p[1] * 100 / g_k;
+    if (g_hflip_fall) {  // (hflip) the flip off the horse is over: KH2's Fall from here
+        g_hflip_fall = false;
+        if (!ACT_AIR(S.act)) fall_start(0, z_up), S.special = SP_NONE, fall_motion(8), LOG("[sora] hflip: Fall at %.3f %.3f %.3f\n", p[0], p[1], p[2]);
+    }
     floor_ray_tick(p, present, ACT_AIR(S.act));  // (s54: the floor under him in the air; last frame's ACTION decides)
     // the blob's floor = the last grounded height (S35_HELPER_S_SHADOW.md); (s54) in the air the ray's floor when it hit
     float shadow_y = S.ground_z * g_k / 100, fcm;
@@ -7499,6 +9159,7 @@ static void sora_mod_frame_body(void) {
     uint64_t pl_x = pl_eat_x() ? (press & (uint64_t)BTN_CLIMB) : 0;  // (s133 review: the Comet Rain / Whirli-Goof Triangle must not also climb, pick up or board)
     press &= ~pl_x;
     sm_fps_input(&press, &held);  // (s137 fps) Balls / Firecracker / End on the face buttons, R1 = target, before the Reaction Command sees them
+    du_input(&press, &held, st == LINK_GROUND && S.act == ACT_IDLE && !S.special);  // (s272 duel: "Duel" / "Accept Duel" on Triangle; duel 0 = nothing)
     rc_tick(p, &press, &held, st == LINK_GROUND && S.act == ACT_IDLE && !S.special);  // (s131 react)
     skt_input(&press, &held, present, st);  // (s110 skate: Triangle gets on / off, the board eats swing / roll / X)
     // (s54 dream) the picker owns the pad while it is up: no presses, nothing held, no stick (below) - Sora stands
@@ -7506,6 +9167,7 @@ static void sora_mod_frame_body(void) {
     g_mto.picker = DR.st, g_mto.picker_cur = DR.cur;  // (s204 mtest: the self-drive answers the picker before it walks / swings)
     dream_ui |= mc_ui;
     int cast = menu_tick(&press, held, kh);  // (eats the presses the menu used)
+    cast = du_cast_gate(cast);  // (s272 duel: no Drive Forms / Limits / summons in a duel; else unchanged)
     if (pl_hold()) cast = -1;  // (s133 limits: Sora plays the Limit's motions: no command; s133 review: before the Drive dispatch, KH2 takes none)
     if (cast >= CMD_FORM && cast < CMD_FORM + FM_NFORMS) fm_drive(cast - CMD_FORM, false), cast = -1;  // (s68 drive)
     else if (cast >= CMD_LIMIT && cast < CMD_LIMIT + LM_N) lm_request(cast - CMD_LIMIT), cast = -1;  // (s89 Limit Form)
@@ -7515,6 +9177,7 @@ static void sora_mod_frame_body(void) {
     else if (cast == CMD_REVERT) fm_revert("Revert command"), M.dead = 8, M.cursor = 0, cast = -1;
     dbm_form_tick(st == LINK_GROUND && !dream_ui);  // (s233 dbgmenu: the Drive Form row drives / reverts here, where the Drive command does)
     bool r1 = (press & BTN_LOCK) != 0;       // (taken before a reaction zeroes the presses: the block ticks anyway)
+    if (g_du_r1_once) r1 = true, g_du_r1_once = false;  // (s275 live "duel lock")
     mp_tick(kh);
     int32_t slx = g_lx, sly = g_ly;
     mtest_stick(&slx, &sly);  // (s201: Melty's test walks Sora through the stick Sora reads; no pad, no window focus)
@@ -7570,8 +9233,14 @@ static void sora_mod_frame_body(void) {
         last[0] = p[0], last[1] = p[2];
         // (s110, user: "every time I get on the skateboard and move around it pushes me off") riding: the board's slow start
         // under a pushed stick looked like a stopped push into a wall -> this climb try pulsed X = the board's Triangle = get off
+        // (jumpclimb) user: "stamina depletes drastically at random times when jumping moving forward, but not jumping while
+        // standing still". Log: every drain followed a "climb try (moved 0.000 ...)" right at a jump press: the jump's wind-up
+        // (S.takeoff > 0) holds Sora in place under the pushed stick = a stopped push = this try gave Link the pad (X pulse +
+        // the held B) and BotW's Link ran on stamina for seconds after. The wind-up is no push into a wall (wall_tick skips
+        // it too). On by default; live "set jumpclimb 0" = the old rule.
         bool stopped = g_climb && !SKT.riding && st == LINK_GROUND && !S.special && !S.air_frames && speed > 0 && mv < want / 3 &&
-                       S.act != ACT_GLIDE && S.act != ACT_GLIDE_HOVER;  // (the servo jump keeps the ground word)
+                       S.act != ACT_GLIDE && S.act != ACT_GLIDE_HOVER &&  // (the servo jump keeps the ground word)
+                       !(g_jumpclimb && S.takeoff > 0);
         // (s117, user: "glide, then fall -> an invisible paraglider opens by itself": log = after the glide's B let go the fall
         // still read BotW's ground word and Sora barely moved sideways -> this try gave Link the pad with CLIMB_X's X = BotW's
         // paraglider in the air. Now never while Sora's own ACTION is an air one; live "set climbair 1" = the old rule)
@@ -7655,7 +9324,7 @@ static void sora_mod_frame_body(void) {
             g_climb_until = present + CLIMB_TRY, push = 0, g_climb_nox = !x_wall(p, S.face);
             if (g_climb_nox) probe_start(present);
             LOG("[sora] climb try (X pressed%s) at %.3f %.3f %.3f: Link gets the pad\n", g_climb_nox ? ", no wall: pick up, no jump" : "", p[0], p[1], p[2]);
-        } else if (push >= CLIMB_PUSH && present >= cool_until) {
+        } else if (push >= CLIMB_PUSH && present >= cool_until && !ad_hold()) {  // (adblock: no climb try right after a deflect)
             g_climb_until = present + CLIMB_TRY, push = 0;
             LOG("[sora] climb try at %.3f %.3f %.3f (moved %.3f of %.3f u): Link gets the pad\n", p[0], p[1], p[2], mv, want);
         } else if ((gpush >= GLIDE_PUSH || wray_n >= 2) && present >= cool_until) {
@@ -7681,10 +9350,16 @@ static void sora_mod_frame_body(void) {
     int mk_blocks = g_mkflinch && IN_MICKEY && MK.active && MK.guard_blocks ? MK.guard_blocks() : -1;
     bool mk_hit = mk_blocks >= 0 && mk_blocks_seen >= 0 && mk_blocks != mk_blocks_seen && !fresh && MK.phase != 2;
     mk_blocks_seen = mk_blocks;
+    bool mal_du_front;  // (s288 port: a fresh duel hit is a friend's swing, never malice: it keeps its flinch)
+    if (g_malnoflinch && link_hits != hits_seen && !guarded && !mk_hit && rag <= 0 && !du_front(p, S.face, &mal_du_front) && malice_hit()) {
+        hits_seen = link_hits;  // (malnoflinch: the life is gone, no reaction)
+        LOG("[sora] malice: hit taken, no flinch (state word %#x) at %.3f %.3f %.3f\n", linkpos_link_state_word(), p[0], p[1], p[2]);
+    }
     if ((link_hits != hits_seen && !guarded) || mk_hit) {
         hits_seen = link_hits;
         float e[2];
         bool front = !nearest_enemy(p, e) || (e[0] - p[0]) * sinf(S.face) + (e[1] - p[2]) * cosf(S.face) >= 0;
+        du_front(p, S.face, &front);  // (s272 duel: a fresh duel hit = the attacker's side; else unchanged)
         int m = rag > 0 ? (front ? MOT_BLOW_FRONT : MOT_BLOW_BACK)
               : ACT_AIR(S.act) && (S.jh > 0 || S.act != ACT_JUMP) ? (front ? MOT_AIR_FLINCH_FRONT : MOT_AIR_FLINCH_BACK)
               : (front ? MOT_FLINCH_FRONT : MOT_FLINCH_BACK);
@@ -7724,9 +9399,19 @@ static void sora_mod_frame_body(void) {
         float got = z_up - S.prev_z, ray_ground = z_up;
         S.ceiling = false;  // J 4.5: +0x120 bit 22 is re-tested every collision step (kh2ctl.py:1592)
         if (S.req > 0 && got / S.req < KH_CEILING_STOP) S.ceiling = true;
+        // (adblock 2) a parry's hold in the air right after an Aerial Dodge: the step barely moved while the arc asked for a clear move
+        if (g_adblock == 2 && g_ad_start_ms && GetTickCount64() - g_ad_start_ms < AD_PIN_MS && fabsf(S.req) > 0.5f && fabsf(got) < fabsf(S.req) * 0.15f) {
+            if (!ad_hold()) LOG("[sora] adblock: held in the air right after the Aerial Dodge (BotW's parry): the dodge goes on\n");
+            g_ad_hold_ms = GetTickCount64() + AD_HOLD_MS;
+        }
+        // (adblock test 4, user: "When sora reflected the arrows, he went to his falling animation") Log: the hold was seen, then
+        // "blend: motion 202 -> 4" at once: a held RISE reads as a ceiling (got / req < KH_CEILING_STOP) and the ceiling stop
+        // starts the fall. While the deflect holds him it is no ceiling: the dodge goes on.
+        if (ad_hold()) S.ceiling = false;
         bool stopped = !updraft && S.req < -LAND_MIN_REQ && got > S.req * LAND_GOT;  // landed: the fall was stopped
         if (!stopped) FR.veto = 0;
         else if (land_veto(z_up, p)) stopped = false;  // (s54: no floor under him - BotW holds him on a wall / edge)
+        else if (ad_hold()) stopped = false;  // (adblock: a deflect's guard reaction held him mid-air, not a landing)
         bool by_ray = !stopped && land_by_ray(present, z_up, &ray_ground);  // (s54: the step he reaches the floor)
         if (stopped || by_ray) {
             LOG("[sora] land at %.3f %.3f %.3f after %.1f KH frames, peak +%.1f cm (%s)\n", p[0], p[1], p[2], S.air,
@@ -7759,6 +9444,16 @@ static void sora_mod_frame_body(void) {
     // Here the floor ahead is unknown (no BotW ray cast yet), so the body is put back where it last stood and the
     // swing's root move stops until the next swing (KH2 would slide along the edge; root left after frame 39 too)
     bool hold = S.special == SP_ATTACK && S.mot && (mot_bits(S.mot, S.clock) & RB_NO_FALL_OFF);
+    if (hold && g_ledge_slope && g_wo_guard >= 1 && S.act == ACT_IDLE && dropping && S.special != SP_DAMAGE) {
+        float fy;
+        if (walkoff_floor(p, &fy)) {  // (ledgeslope) a slope, not an edge: the walk-off guard below takes it
+            static int logged_swing = -1;
+            if (logged_swing != S.swing)
+                logged_swing = S.swing, LOG("[sora] ledge hold skipped (motion %d clock %.1f): floor %.1f cm under the feet, a slope\n",
+                                            S.motion, S.clock, (p[1] - fy) * 100 / g_k);
+            hold = false;
+        }
+    }
     if (S.special == SP_DAMAGE) S.air_frames = 0;  // (BotW's knockback, not a walk-off)
     else if (S.act == ACT_IDLE && dropping && hold && S.nsafe) {
         const float *q = S.safe[0];
@@ -7808,7 +9503,7 @@ static void sora_mod_frame_body(void) {
     sora_fx_tick(kh);  // (every effect element advances by the frame's KH frames, before the draw)
     if (S.mot && LF_SE_OK(S.mot)) kbsw_motion(sfx_slot(S.mot), prev_clock, S.clock, p, g_wpn_cur.def != NULL);  // (KH2 mset triggers: whooshes, jump, land, steps; s249 kbswing: kbswingse 1 = each hand its Keyblade's)
     meal_item_tick(kh);  // (s98 potion: KH2's item task - the use_item frame, the user SE, the heal 30 frames later)
-    if (S.special && S.mot && S.mot->root && S.edge_swing != S.swing) {
+    if (S.special && S.mot && S.mot->root && S.edge_swing != S.swing && !QR.ph) {  // (qrun: the dash moves by its own velocity)
         float a[3], b[3];
         mot_root(S.mot, clock_old, a), mot_root(S.mot, S.clock, b);
         for (int c = 0; c < 3; c++) root[c] = b[c] - a[c];
@@ -7863,6 +9558,16 @@ static void sora_mod_frame_body(void) {
     if (is_free) S.wish = sspeed > 0 ? atan2f(sdir[0], sdir[1]) : S.face;  // (TSR 7.4: kept through the swing)
     Target tg[64];  // the enemies as KH2 targets; the lock-on block ticks in the player's pre-tick (re:0x3DD280)
     int ntg = targets_build(p, to_u, tg, 64);
+    if (KB_L3_MINE && (press & BTN_L3)) {  // (kbtoggle; s288 port: only while kbfield is on)
+        g_kb_drawn = !g_kb_drawn;
+        const Mot *nm = S.mot && !S.special && S.motion >= MOT_IDLE && S.motion <= MOT_RUN ? mot_st(S.motion) : NULL;
+        if (nm && nm != S.mot && S.mot->frames > 0 && nm->frames > 0) {  // (the field variant swaps now, the cycle's phase kept)
+            float ph = S.clock / (float)S.mot->frames;
+            S.mot = nm, S.clock = (ph < 0 ? 0 : ph > 1 ? 1 : ph) * (float)nm->frames;
+        }
+        LOG("[sora] kbtoggle: L3 -> Keyblade %s (motion %d slot %d)\n", g_kb_drawn ? "drawn (field stance + Keyblade)" : "put away (field stance)",
+            S.motion, S.mot ? S.mot->slot : -1);
+    }
     bs_tick(tg, ntg, kh);  // (s259 bstance: battle stance on / off, before this frame's idle / walk / run pick)
     lock_tick(tg, ntg, kh, bits, S.face, r1 && g_targets_on && !sm_fps_busy());  // (s137 review S2: no R1 lock in FPS Mode, its R1 cycles targets)
     if (!sm_fps_busy()) lockcam_tick(tg, ntg, p, to_u, held);
@@ -7872,12 +9577,25 @@ static void sora_mod_frame_body(void) {
         if (!lk && g_targets_on && g_icon_range > g_auto_range) lk = target_auto(tg, ntg, S.face, g_icon_range);
         float lc[3] = {0, 0, 0};
         if (lk) lc[0] = p[0] + lk->d[0] * to_u, lc[1] = p[1] - lk->dy * to_u - g_hit_h * 0.5f + 1.0f, lc[2] = p[2] + lk->d[1] * to_u;
+        if (lk && lk->duel) lc[1] = p[1] - (lk->dy + KH_SORA_PART_H) * to_u + 1.0f;  // (s275: his feet + 1 u, as an enemy's origin)
+        if (lk && g_lockpt && !lk->duel) {  // (lockpt) BotW's own attention point; feet = the enemy list's position (its mMtx); (s288 port: never the duel tag)
+            uint64_t ea[64];
+            float ep[64][3], at[3];
+            int32_t el[64];
+            int en = linkpos_enemies(ea, ep, el, 64);
+            for (int k = 0; k < en; k++)
+                if (ea[k] == lk->actor) {
+                    if (lockpt_icon(lk->actor, ep[k], at)) lc[0] = at[0], lc[1] = at[1], lc[2] = at[2];
+                    break;
+                }
+        }
         sora_hud_target(!lk ? 0 : g_lock.locked ? 2 : 1, lc);
         // L5: the locked enemy's KH2 gauge; its max life = the highest seen per actor (BotW's max isn't read yet)
         static struct { uint64_t actor; int32_t max; } seen[32];
         static int seen_next;
         int32_t lmax = 0;
-        if (lk && g_lock.locked) {
+        if (lk && g_lock.locked && lk->duel) lmax = 100;  // (s275: his HP %, full at the start of the fight)
+        else if (lk && g_lock.locked) {
             int i = 0;
             while (i < 32 && seen[i].actor != lk->actor) i++;
             if (i == 32) i = seen_next, seen_next = (seen_next + 1) % 32, seen[i].actor = lk->actor, seen[i].max = 0;
@@ -7913,25 +9631,43 @@ static void sora_mod_frame_body(void) {
         S.hvel[0] = dir[0] * speed, S.hvel[1] = dir[1] * speed;
         S.takeoff = g_jump_trigger;
         S.jump_held = true, S.jump_released = false;  // re:0x422630: +0x120 bit 16; re:0x3CBD30 makes it bit 17
-        set_motion(MOT_JUMP);
-        if (NET.melty) sora_melty_addon_act("jump", SORA_MELTY_ACT_START, "m3");  // (s209 step 2: Melty's ACT note; m<MOT_JUMP>, sora_net_act.h)
+        // (hjanim) re:0x3B59B0: High Jump above LV0 = motion 201 (base Sora: vl_base_jump_h is above the plain jump exactly then)
+        bool hj = g_hjanim && !g_fmots_on && !IN_GUEST && !SKT.riding && vl_base_jump_h(KH_JUMP_H) > KH_JUMP_H && mot_of(MOT_HIGH_JUMP);
+        if (hj) {
+            S.takeoff = mot_frame_trigger(mot_of(MOT_HIGH_JUMP), 0, g_jump_trigger);  // (its own lift-off frame: GFR 4, as A003's)
+            static int said;
+            if (said++ < 3) LOG("[sora] high jump: motion %d (KH2 re:0x3B59B0), %.0f cm, takeoff at %.0f\n", MOT_HIGH_JUMP, F_JUMP_H, S.takeoff);
+        }
+        set_motion(hj ? MOT_HIGH_JUMP : MOT_JUMP);
+        if (NET.melty) sora_melty_addon_act("jump", SORA_MELTY_ACT_START, hj ? "m201" : "m3");  /* (s288: m<MOT_HIGH_JUMP> with hjanim) */  // (s209 step 2: Melty's ACT note; m<MOT_JUMP>, sora_net_act.h)
         LOG("[sora] jump at %.3f %.3f %.3f (speed %.0f)\n", p[0], p[1], p[2], speed);
     }
     // glide (KH2 re:0x3A81F0, the user's button: B again in the air, held). KH2 starts at the press; here the press
     // arms it and the glide starts the frame he is past the apex (the user's feel from session 31). Held B keeps it
     // (+0x124 bit 2), the release ends it (glide_end in the tick). (S32 port: no paraglider hand-off any more.)
-    if ((press & BTN_JUMP) && S.act == ACT_JUMP && g_glide_on && !S.special && fm_glide_ok() && !bd_press()) S.glide_armed = true;  // (s89: Final glides; s91: base Sora judges tap / hold first)
+    if (!g_glide_btn) {
+        if ((press & BTN_JUMP) && S.act == ACT_JUMP && g_glide_on && !S.special && fm_glide_ok() && !bd_press()) S.glide_armed = true;  // (s89: Final glides; s91: base Sora judges tap / hold first)
+    } else {  // (glidebtn) Square arms the glide; Cross in the air is the Aerial Dodge only (bd_tick fires it at once)
+        if ((press & BTN_ROLL) && S.act == ACT_JUMP && g_glide_on && !S.special && fm_glide_ok()) S.glide_armed = true;
+        if ((press & BTN_JUMP) && S.act == ACT_JUMP && !S.special) bd_press();
+    }
     bd_tick(held, kh, sdir, sspeed, z_up, p);  // (s91 b5-dodge)
-    if (!(held & BTN_JUMP) || S.act != ACT_JUMP) S.glide_armed = false;
+    if (!(held & GLIDE_BTN) || S.act != ACT_JUMP) S.glide_armed = false;  // (glidebtn)
     if (S.glide_armed && S.air >= S.apex) glide_start(p, z_up, sspeed);
     ma_air_dodge(press, sdir, sspeed, z_up, p);  // (s89 b4-master: B again in the air in Master = KH2's Aerial Dodge)
+    bool t0sq = (press & BTN_ROLL) && !(press & BTN_ATTACK) && t0_square();  // (t0sq: Square = a Type 0 ability's press)
+    if (t0sq && !t0_square_fires(bits, is_free, tg, ntg, p))  // (s288 port: only when one would really fire)
+        t0sq = false, LOG("[combo] Square press: no Type 0 ability would fire (motion %d clock %.1f): Square stays Square\n", S.motion, S.clock);
+    if (t0sq) press = (press & ~BTN_ROLL) | BTN_ATTACK, LOG("[combo] Square press: Type 0 ability try (motion %d clock %.1f)\n", S.motion, S.clock);
     bool guard_took = guard_press(press, sspeed, is_free, p);  // (s88: Square with the stick neutral = Guard)
     if (!guard_took && (press & BTN_ROLL) && S.act == ACT_IDLE && S.takeoff <= 0 && !S.air_frames && is_free && mot_of(MOT_ROLL) &&
         (!fm_in_form() || IN_LIMIT) && roll_learned() && stam_pay("Dodge Roll", g_rollstam)) {  // (s69: Valor has no Dodge Roll; its bake has no roll slot. s89: Limit's own A180, growth Dodge Roll. s97: 1/8 wheel)
         if (sspeed > 0) S.face = atan2f(sdir[0], sdir[1]);  // the roll goes where the stick points
         play(MOT_ROLL), S.special = SP_ROLL;
-        LOG("[sora] roll at %.3f %.3f %.3f face %.1f\n", p[0], p[1], p[2], S.face * 180 / PI);
+        if (g_rollinv > 0 && (float)g_rollinv > g_rc_inv) g_rc_inv = (float)g_rollinv;  // (rollinv: KH2's dodge roll invincibility)
+        LOG("[sora] roll at %.3f %.3f %.3f face %.1f%s\n", p[0], p[1], p[2], S.face * 180 / PI, g_rollinv > 0 ? " (invulnerable frames on)" : "");
     }
+    qr_tick(press, held, sdir, sspeed, is_free, guard_took, clock_old, ratio, p);  // (qrun: roll held at frame 10 / no roll = Quick Run)
     // the air: re:0x3BA9A0 airborne = ACTION flag bit 0 (JUMP, GLIDE_HOVER, GLIDE), base Sora has no no-gravity
     // motions: each air swing is its own small jump start (re:0x3D78D0 -> re:0x3CBB00), which also leaves a glide
     // the cast (L 4.5 + the video: inside the combo). Like an attack press: combo_gate decides, and at the combo's
@@ -7985,7 +9721,7 @@ static void sora_mod_frame_body(void) {
         bool restart = !new_combo && !((bits & (RB_ALLOW_FINISHER | RB_ALLOW_COMBO)) && cont);
         bool once = g_air_once && air && (new_combo || restart) && S.air_done;
         bool wall = wall_ahead(p, S.face);
-        const KhPtya *e = !once ? t0_reaction() : NULL;  // (s106: Counterguard / Retaliating Slash)
+        const KhPtya *e = !once ? t0_reaction(t0sq) : NULL;  // (s106: Counterguard / Retaliating Slash)
         if (e) new_combo = true, S.d74 = S.d75 = 1, S.hit = false;
         else {
             // (s110 mkhit) Mickey's ground combo is hops: a press in the hop of a ground combo still picks from the GROUND entries
@@ -7994,7 +9730,7 @@ static void sora_mod_frame_body(void) {
                 if (new_combo) g_mk_gcombo = !air;
                 sel_air = air && !(g_mk_gcombo && !new_combo);
             }
-            e = !once && combo_gate(bits, is_free) ? t0_override(ptya_select_t(bits, sel_air, tg, ntg, wall), sel_air, tg, ntg) : NULL;
+            e = !once && combo_gate(bits, is_free) ? t0_override(ptya_select_t(bits, sel_air, tg, ntg, wall), sel_air, tg, ntg, t0sq) : NULL;
             if (e && IN_MICKEY && g_mkhit && !sel_air) e = mk_ground_fix(e);
         }
         if (e && g_combolog && (new_combo || e->jump > 0)) combo_plan_log(air, e);  // (s105) once per combo
@@ -8005,6 +9741,7 @@ static void sora_mod_frame_body(void) {
             play(e->motion), S.special = SP_ATTACK, S.next = e->next;
             g_mto.attack_began = true;  // (s201 mtest)
             note_act_attack(e->motion);  // (s209 step 2: Melty's ACT note, each swing)
+            du_swing_start(p);  // (s285 duel Guard: a blade hit comes "from" where its swing started, sora_duel.h du_hit_out)
             attack_start_t(e, tg, ntg, z_up, air, bits);  // (an AIR entry: the arc from here, ACT_JUMP)
             if (air && new_combo) S.air_done = true;
             if (was_glide) gl_from_motion = -1, g_gl_tail = false, g_gblend = -1;  // (no glide blend into the swing)
@@ -8041,11 +9778,20 @@ static void sora_mod_frame_body(void) {
             fall_start(KH_SHORT_HOP, hop_z);  // (clears the latch)
             fall_motion(8);
         } else if (S.apex <= S.air + KH_APEX_EARLY) S.jump_held = S.jump_released = false;  // kh2ctl.py:1511
-        if (S.ceiling && KH_HOP_MIN < S.air && S.air < S.apex) fall_start(0, z_up), fall_motion(8);
-        if ((S.motion == MOT_JUMP || S.motion == MOT_AIR_DODGE) && S.air >= S.apex - KH_APEX_EARLY) fall_motion(8);  // (s89: + the Aerial Dodge)
+        if (S.ceiling && KH_HOP_MIN < S.air && S.air < S.apex) {
+            bool swing = S.special == SP_ATTACK || S.special == SP_MAGIC;
+            static float logged_clock = -1;  // (s288 review: with airceil 1 the stop repeats each frame: log once per swing)
+            bool say = swing && (!g_air_ceil || logged_clock < 0 || S.clock < logged_clock);
+            if (swing) logged_clock = S.clock;
+            if (say) LOG("[sora] ceiling stop in air %s %d at clock %.1f (air %.1f of apex %.1f)%s\n",
+                           S.special == SP_MAGIC ? "cast" : "swing", S.motion, S.clock, S.air, S.apex,
+                           g_air_ceil ? ": skipped (airceil)" : ": Fall");
+            if (!swing || !g_air_ceil) fall_start(0, z_up), fall_motion(8);
+        }
+        if ((S.motion == MOT_JUMP || S.motion == MOT_HIGH_JUMP || (S.motion == MOT_AIR_DODGE && !ad_hold())) && S.air >= S.apex - KH_APEX_EARLY) fall_motion(8);  // (s89: + the Aerial Dodge; hjanim: + the High Jump; adblock: not while a deflect holds him)
     } else if (S.act == ACT_GLIDE_HOVER && sspeed <= 0) {  // re:0x423840
         set_motion(MOT_GLIDE_HOVER);  // (16-frame blend: glide_pose_draw)
-        glide_end(p, z_up, (held & BTN_JUMP) != 0 && !gs_out);
+        glide_end(p, z_up, (held & GLIDE_BTN) != 0 && !gs_out);  // (glidebtn)
     } else if (S.act == ACT_GLIDE_HOVER || S.act == ACT_GLIDE) {  // re:0x423A70: move, banking left / right while the
         S.act = ACT_GLIDE;  // (hover with a stick intent -> glide; PHH runs the glide branch next frame)
         int want = MOT_GLIDE_MOVE;  //  stick is > acos 0.98 off his facing
@@ -8055,7 +9801,7 @@ static void sora_mod_frame_body(void) {
                 want = fz * sdir[0] - fx * sdir[1] > 0 ? MOT_GLIDE_LEFT : MOT_GLIDE_RIGHT;
         }
         set_motion(want);
-        glide_end(p, z_up, (held & BTN_JUMP) != 0 && !gs_out);
+        glide_end(p, z_up, (held & GLIDE_BTN) != 0 && !gs_out);  // (glidebtn)
     } else if (!S.special && S.takeoff <= 0) {
         // J 4.3, re:0x422520: idle / walk / run only in a grounded range, or in blend_to_idle with a stick; A005 has
         // keep_momentum 0-25, blend_to_idle 12-25 and no grounded range, so without a stick Land plays out (26
@@ -8127,6 +9873,7 @@ static void sora_mod_frame_body(void) {
             S.vel[0] = move[0] / kh, S.vel[1] = move[1] / kh;  // (a walk-off mid-roll carries this)
             S.root_cm = sqrtf(root[0] * root[0] + root[2] * root[2]);
         }
+        qr_move(move, kh, ratio);  // (qrun: the dash's braked velocity)
         gl_move(move, kh);  // (s139 genielim) Sora's root travel while he plays Genie's Limit motions (his pad is dead: no stick move)
         nl_move(move);      // (s139 review) Never Land: the flight / Journey's End step as a velocity (walls + ledges stay BotW's), not a teleport
         if (R.push >= 1.0f) {  // the repel push: -facing, 5 cm/frame x0.9 (re:0x3D4960), ~15 frames / ~35 cm
@@ -8160,6 +9907,31 @@ static void sora_mod_frame_body(void) {
         }
         move[0] = S.vel[0] * kh, move[1] = S.vel[1] * kh;
         dz = -sink * kh;
+        {   // (updraft) inside a BotW updraft column: its push (u/s -> cm per KH frame) on top of the glide
+            static int in_col = -1;
+            float push[3];
+            int col = g_updraft && updraft_field_ok() ? updraft_at(p, push) : -1;  // (s288 port: main field only)
+            if (col < 0 && g_updraft && g_fireup) {  // (fire) a burning campfire / pot below: column ids 1000 + list index
+                int f = fireup_at(p, push);
+                if (f >= 0) col = 1000 + f;
+            }
+            if (col != in_col) {  // (s288: at a column top he bobs in / out every frame (98 lines in 5 s at a campfire): a change logged at most once a second)
+                static double t_log;
+                static int quiet;
+                double tn = cxp_now();
+                if (tn - t_log >= 1000.0) {
+                    LOG("[sora] updraft: %s %s %d at %.1f %.1f %.1f (%d quiet changes before)\n", col >= 0 ? "in" : "out of",
+                        (col >= 0 ? col : in_col) >= 1000 ? "fire" : "column", (col >= 0 ? col : in_col) % 1000, p[0], p[1], p[2], quiet);
+                    t_log = tn, quiet = 0;
+                } else quiet++;
+                in_col = col;
+            }
+            if (col >= 0) {
+                float k = (float)g_updraft_k / 100.0f / to_u / 60.0f;  // (u/s -> cm per KH frame)
+                move[0] += push[0] * k * kh, move[1] += push[2] * k * kh;
+                dz += push[1] * k * kh;
+            }
+        }
         S.req = dz, S.req_set = false, S.prev_z = z_up;  // (no landing check while gliding; glide_end's fall gets one)
         if (z_up > S.peak) S.peak = z_up;
     } else {
@@ -8191,16 +9963,31 @@ static void sora_mod_frame_body(void) {
     // 6. out: cm per step -> u/s
     float vx = move[0] / kh * KH_FPS * to_u, vz = move[1] / kh * KH_FPS * to_u, vy = dz / kh * KH_FPS * to_u;
     bool vy_on = ACT_AIR(S.act);
+    air_carry(vy_on, GT.on);  // (airnoride: no ground carry in the air; before the velocity below reaches linkpos)
     if (!vy_on && slope_follow(p, vx, vz, &vy)) vy_on = true;  // (s64: uphill at full speed)
     if (GT.on || g_dbm_clip || (S.special == SP_DAMAGE && !is_free) || nox_win) drive_off();  // (goto hold: zero velocity) BotW's hit push / ragdoll / pick up moves him
     else linkpos_set_velocity(true, vx, vz), linkpos_set_velocity_y(vy_on, vy);  // (the y servo on for the glide too)
     if (!((S.special == SP_DAMAGE && !is_free) || nox_win)) link_face();  // (s87c link face: ground / air only; set linkface 0 = off)
+    {
+        bool kb_hid = g_kbfield && !g_bs_on && !g_kb_drawn && S.mot && (!S.special || S.special == SP_ROLL) && (S.mot->slot & 3) == 2;
+        kbf_set(kb_hid);
+        {
+            int wh = g_wpnsheathe && kb_hid;  // (wpnsheathe: a BotW weapon is put away with the Keyblade)
+            if (wh != g_wpn_field_hide && g_wpn_cur.def)
+                LOG("[wpn] wpnsheathe: %s %s\n", g_wpn_cur.def->name, wh ? "put away (field stance)" : "drawn");
+            g_wpn_field_hide = wh;
+        }
+        kbdfx_tick(kb_hid, to_u);  // (kbdrawfx: KH2's appear flash on a draw / sheathe)
+    }
+    // (kbfield: the no-weapon field variant, out of battle; the dodge roll A180 = slot 838 too)
     if (SKT.rider_on) {  // (s110 skate: KH2's skate rider + board, one actor, in place of the body)
         skt_rider_draw(kh, to_u);
         g_lb_prev = g_lb_from = -1, g_lb_prev_sp = false;
     } else if (sm_call_draw(kh, to_u)) {  // (s136 summon: Sora's call motion on its own actor, in place of the body)
         g_lb_prev = g_lb_from = -1, g_lb_prev_sp = false;
-    } else if (!rag_draw(rag, kh, to_u)) {  // (step 4: at Link's feet)
+    } else if ((g_fik_now = false, !rag_draw(rag, kh, to_u))) {  // (step 4: at Link's feet)
+        g_fik_now = g_footik && !IN_GUEST && !g_fmots_on;  // (footik: the draws of this block; the weight follows g_fik_gate)
+        g_fik_gate = st == LINK_GROUND && !ACT_AIR(S.act) && !S.special;
         if (S.mot && (S.act == ACT_GLIDE || S.act == ACT_GLIDE_HOVER)) {  // the glide motions blend (glide_pose_draw)
             if (gl_from_motion < 0) gl_from_motion = MOT_FALL, gl_from_clock = clock_old;
             glide_pose_draw(gl_from_motion, gl_from_clock, S.face, to_u, kh, GLIDE_BLEND);
@@ -8229,6 +10016,7 @@ static void sora_mod_frame_body(void) {
             g_gl_tail = false, gl_from_motion = -1, g_fb_from = -1, g_lb_from = -1;
             pose_draw_sm(S.mot->slot, S.clock, S.face + rootyaw_at(S.clock), to_u);  // (s93 fsmooth: slerped between the baked frames; s247 rootyaw)
         }
+        g_fik_now = false;  // (footik: only the block above)
         g_lb_prev = S.mot ? S.motion : -1, g_lb_prev_clock = S.clock;
         g_lb_prev_sp = (S.special == SP_ATTACK || S.special == SP_ROLL) && !ACT_AIR(S.act);
     } else {

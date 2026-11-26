@@ -63,7 +63,7 @@ static void claim1(EsCtx *c, uint8_t from, EsState s, uint64_t now) { s.flags |=
 
 // ---- codec ----
 static void test_codec(void) {
-    CHECK(NET_VERSION == 11 && NET_ESYNC == 5 && NET_ESYNC_ENT == 40 && NET_ESYNC_EV == 26 && NET_ESYNC_PKT == 485 && NET_ESYNC_PKT <= NET_PKT_MAX);
+    CHECK(NET_VERSION == 12 && NET_ESYNC == 5 && NET_ESYNC_ENT == 40 && NET_ESYNC_EV == 26 && NET_ESYNC_PKT == 485 && NET_ESYNC_PKT <= NET_PKT_MAX);
     NetEsEnt e[NET_ESYNC_MAX], r[NET_ESYNC_MAX];
     NetEsEv v[NET_ESYNC_EVMAX], rv[NET_ESYNC_EVMAX];
     for (int i = 0; i < NET_ESYNC_MAX; i++) {
@@ -80,7 +80,7 @@ static void test_codec(void) {
     uint16_t sq = 0;
     int ne = -1, nv = -1;
     int n = net_pack_esync(9, 0xFFFE, e, 8, v, 6, buf, sizeof buf);
-    CHECK(n == 485 && buf[0] == 'S' && buf[1] == 'N' && buf[2] == 11 && buf[3] == NET_ESYNC && buf[4] == 9 && buf[7] == 8 && buf[8] == 6);
+    CHECK(n == 485 && buf[0] == 'S' && buf[1] == 'N' && buf[2] == 12 && buf[3] == NET_ESYNC && buf[4] == 9 && buf[7] == 8 && buf[8] == 6);
     CHECK(net_unpack_esync(buf, n, &pl, &sq, r, &ne, rv, &nv) && pl == 9 && sq == 0xFFFE && ne == 8 && nv == 6);
     for (int i = 0; i < 8; i++) CHECK(memcmp(&r[i], &e[i], sizeof r[i]) == 0);
     for (int i = 0; i < 6; i++) CHECK(rv[i].seq == v[i].seq && rv[i].on == v[i].on && rv[i].hid == v[i].hid && rv[i].name == v[i].name && !memcmp(rv[i].params, v[i].params, 16));

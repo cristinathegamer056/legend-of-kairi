@@ -729,6 +729,48 @@ static bool test_eqlook_rows_armor(void) {
     PV = &GV;
     return true;
 }
+// (s288 port of #58) eqarmor on: the Head picker's None is refused while the worn head piece is not in the list (ar_unk), and
+// sends ar_set / ar_idx -1 when it is (nothing unknown worn)
+static bool eqarmor_head_picker_(int unk) {
+    ge_(KB_KINGDOM_KEY, KB_STAR_SEEKER);
+    GE.arm_n = 3; GE.ar_on = 1;
+    for (int a = 0; a < 3; a++) snprintf(GE.arm_name[a], 24, "None");
+    GE.ar_n[0] = 1; GE.ar_def[0][0] = 3; GE.ar_item[0][0] = 0x1234; snprintf(GE.ar_name[0][0], 24, "Hylian Hood"); snprintf(GE.ar_actor[0][0], 24, "Armor_001_Head");
+    GE.ar_unk[0] = (uint8_t)unk;
+    CHECK(equip_open_());
+    pt_(2, CP_BTN_DOWN); pt_(2, CP_BTN_DOWN); CHECK(P.eq_slot == CP_EQ_ARM);
+    pt_(2, CP_BTN_A); CHECK(PO.se == CP_SE_DECIDE && P.sub == 2 && P.eq_pick == CP_EQ_ARN);  // the picker, cursor on None
+    pt_(2, CP_BTN_A);
+    return true;
+}
+static bool test_eqarmor_none_guard(void) {
+    int was = g_eqarmor;
+    g_eqarmor = 1;
+    bool ok = eqarmor_head_picker_(1) && PO.se == CP_SE_ERROR && PO.ar_set == 0 && P.sub == 2;
+    if (ok) ok = eqarmor_head_picker_(0) && PO.se == CP_SE_DECIDE && PO.ar_set == 1 && PO.ar_idx == -1 && P.sub == 1;
+    g_eqarmor = was;
+    PV = &GV;
+    CHECK(ok);
+    return true;
+}
+// (s288 port of #51) CsDesc.text is 64 bytes now; a node without text_long still shows only the first 23 chars (the old text[24])
+// and no '\n' line break; text_long 1 shows it all
+static bool test_text_long_cap(void) {
+    CsNode n;
+    uint8_t buf[sizeof n.d.text];
+    const uint8_t *m;
+    memset(&n, 0, sizeof n);
+    snprintf(n.d.text, sizeof n.d.text, "%s", "Halloween/Christmas Town, Space Paranoids");
+    int a = cs_node_msg_(&S, &n, buf, (int)sizeof buf, &m);
+    n.d.text_long = 1;
+    int b = cs_node_msg_(&S, &n, buf, (int)sizeof buf, &m);
+    CHECK(a > 0 && a <= 23 && b > a);
+    int was = g_dbgtext;
+    g_dbgtext = 0;
+    CHECK(cp_db_help_(8) == CP_DB_HELP[8]);  // off = the built-in text, no file reader
+    g_dbgtext = was;
+    return true;
+}
 // (s128 wpnmenu) the BotW weapon: the Weapons row + the picker's top entry; Keyblade picks / the weapon pick -> CpOut.wpn_set
 static bool test_wpn_picker(void) {
     ge_(KB_KINGDOM_KEY, KB_STAR_SEEKER);
@@ -1019,18 +1061,26 @@ static bool test_equip_scroll(void) {
     GE.kb_own = 0xfffffffu;  // (s214: 26; s247: 28)
     CHECK(equip_open_());
     pt_(2, CP_BTN_A); CHECK(P.sub == 2 && P.eq_pick == 0);
-    CHECK(P.tree.n[P.tree.n[P.root[2]].kid0].nkids == 2 * CP_EQ_VIS);
+    CHECK(P.tree.n[P.tree.n[P.root[2]].kid0].nkids == 2 * cp_eq_vis_rows());
     for (int i = 0; i < KB_N + 3; i++) pt_(2, CP_BTN_DOWN);
-    CHECK(P.eq_pick == KB_N - 1 && P.eq_top == KB_N - CP_EQ_VIS);
+    CHECK(P.eq_pick == KB_N - 1 && P.eq_top == KB_N - cp_eq_vis_rows());
     const CsNode *pw = &P.tree.n[P.tree.n[P.root[2]].kid0];
-    CHECK(pw->nkids == 2 * CP_EQ_VIS && P.tree.n[P.tree.n[pw->kid0 + 2 * (CP_EQ_VIS - 1)].kid0].d.msg_key == kb_text_key(KB_N - 1));
-    for (int i = 0; i < CP_EQ_VIS - 1; i++) pt_(2, CP_BTN_UP);
-    CHECK(P.eq_top == KB_N - CP_EQ_VIS);  // the cursor walks up to the window's top row first
-    pt_(2, CP_BTN_UP); CHECK(P.eq_top == KB_N - CP_EQ_VIS - 1);
+    CHECK(pw->nkids == 2 * cp_eq_vis_rows() && P.tree.n[P.tree.n[pw->kid0 + 2 * (cp_eq_vis_rows() - 1)].kid0].d.msg_key == kb_text_key(KB_N - 1));
+    for (int i = 0; i < cp_eq_vis_rows() - 1; i++) pt_(2, CP_BTN_UP);
+    CHECK(P.eq_top == KB_N - cp_eq_vis_rows());  // the cursor walks up to the window's top row first
+    pt_(2, CP_BTN_UP); CHECK(P.eq_top == KB_N - cp_eq_vis_rows() - 1);
     pt_(2, CP_BTN_B); pt_(2, CP_BTN_A);  // reopen: scrolled so the equipped one (KK, entry 0) shows
     CHECK(P.eq_pick == 0 && P.eq_top == 0);
     PV = &GV;
     return true;
+}
+
+// (s288 port of #63 eqlayout) on: the picker scrolls with 8 rows, the slot list's eqtx / eqvx go 63 / 33; off again = 9 rows, 51 / 22
+static bool test_equip_scroll_layout(void) {
+    g_eqlayout = 1, eq_layout_apply();
+    bool ok = cp_eq_vis_rows() == 8 && g_eqtx == 63 && g_eqvx == 33 && test_equip_scroll();
+    g_eqlayout = 0, eq_layout_apply();
+    return ok && cp_eq_vis_rows() == 9 && g_eqtx == 51 && g_eqvx == 22 && cp_eq_colx() == 44.5f && cp_eq_cx() == 0 && cp_eq_cy() == 0;
 }
 
 #define RUN(t) do { bool ok_ = t(); printf("%s %s\n", ok_ ? "PASS" : "FAIL", #t); if (!ok_) fails++; } while (0)
@@ -1104,6 +1154,7 @@ int main(int argc, char **argv) {
     RUN(test_equip_kb_text_keys);
     RUN(test_equip_owned_only);
     RUN(test_equip_scroll);
+    RUN(test_equip_scroll_layout);
     RUN(test_eqlook_text_keys);
     RUN(test_eqlook_rows_armor);
     RUN(test_eqlook_panel_keyblade);
@@ -1112,6 +1163,8 @@ int main(int argc, char **argv) {
     RUN(test_equip_forms);
     RUN(test_dbg_outfit_rows);
     RUN(test_dbg_s233_rows);
+    RUN(test_eqarmor_none_guard);
+    RUN(test_text_long_cap);
     printf(fails ? "%d FAILED\n" : "all passed\n", fails);
     return fails ? 1 : 0;
 }

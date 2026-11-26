@@ -18,7 +18,7 @@ ENVS = {"sora": {},
 
 
 def exe(ctx, t):
-    return os.path.join(ctx.work, "cs", t, t + ".exe")
+    return os.path.join(ctx.work, "cs", t, t + sb.EXE)
 
 
 def _ragmap(ctx):

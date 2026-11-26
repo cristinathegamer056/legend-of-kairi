@@ -20,6 +20,16 @@ typedef struct {
     char name[48];
 } LinkposStasisObj;
 
+// (logchop) a felled tree's trunk (Obj_Tree*_Trunk, profile WeaponLargeSword, its LumberjackTree node in mode 1), lying
+typedef struct {
+    uint64_t actor;
+    float pos[3];   // mMtx translation (the trunk's root end), BotW units
+    float axis[3];  // the trunk's length direction (the tree's local Y, unit)
+    int32_t age_ms; // since the list first saw it (a fresh trunk is still falling)
+    char name[48];
+} LinkposTrunk;
+typedef int (*LinkposTrunksFn)(LinkposTrunk *out, int max);  // "linkpos_trunks": copies, any thread
+typedef int (*LinkposTrunkHitFn)(uint64_t actor);            // "linkpos_trunk_hit": 1 = chop flag set, -1 refused
 typedef int (*LinkposTreesFn)(LinkposTree *out, int max);                    // "linkpos_trees": copies, any thread
 typedef int (*LinkposTreeHitFn)(uint64_t actor, int n, float dx, float dz);  // "linkpos_tree_hit": life after (0 = felled), -1 refused
 typedef int (*LinkposStasisObjsFn)(LinkposStasisObj *out, int max);         // "linkpos_stasis_objs": copies, any thread

@@ -210,6 +210,8 @@ static void net_send_all(const NetAddr *d, int nd, const uint8_t *buf, int n) {
 #include "sora_net_react.h"  // (s194: the KH2 hit reaction on an enemy another game owns, `set netreact 1`; needs NETES)
 #define NET_KILLS_GLUE
 #include "sora_net_kills.h"  // (s196: kills stay dead after a reload / for a joining game, `set killsync 0|1`, default 1 since s197; needs NETED)
+#include "sora_net_warp.h"  // (s269 warpcore, co-op item 4: NET_WARP ask / spot / note for the warp to a friend; hooks from sora_warp.h)
+#include "sora_net_duel.h"  // (s272 duel, co-op item 6: NET_DUEL ask / answer / hit / end / time / ring, queued for sora_duel.h; default OFF)
 
 static inline uint8_t net_oct0(uint32_t ip_be) { return *(const uint8_t *)&ip_be; }
 // an address worth HELLOing from a list sent by `from_ip`: not 0.x, 255.255.255.255, multicast 224-239.x, port 0; 127.x only from a 127.x sender
@@ -710,7 +712,7 @@ static void net_recv_all(uint64_t now) {
                 NET.me = net_roll_free(player);
                 LOG("[net] player id clash with %s: now %u\n", NET.slot[mk].p.name[0] ? NET.slot[mk].p.name : "the peer", NET.me);
             }
-        } else if (player == NET.me && (type == NET_EDMG || type == NET_ESYNC || type == NET_FIRE || type == NET_AREA || type == NET_REACT || type == NET_KILLS)) { NET.st.echo++; continue; }  // (s166: its seq is a different counter than the SNAP seq below)
+        } else if (player == NET.me && (type == NET_EDMG || type == NET_ESYNC || type == NET_FIRE || type == NET_AREA || type == NET_REACT || type == NET_KILLS || type == NET_WARP || type == NET_DUEL)) { NET.st.echo++; continue; }  // (s166: its seq is a different counter than the SNAP seq below)
         else if (player == NET.me) {
             // our own broadcast coming back (seq one we just used), or a peer that rolled our id: we re-roll
             if ((uint16_t)(NET.seq - seq) < 256) {
@@ -744,7 +746,7 @@ static void net_recv_all(uint64_t now) {
             }
         }
         if (k < 0) {
-            if (type == NET_BYE || type == NET_EDMG || type == NET_ESYNC || type == NET_FIRE || type == NET_AREA || type == NET_REACT || type == NET_KILLS) continue;  // (a stranger leaving / a hit from nobody we know)
+            if (type == NET_BYE || type == NET_EDMG || type == NET_ESYNC || type == NET_FIRE || type == NET_AREA || type == NET_REACT || type == NET_KILLS || type == NET_WARP || type == NET_DUEL) continue;  // (a stranger leaving / a hit from nobody we know)
             k = net_slot_join(ip, port, player, name, type, now);
             if (k < 0) { NET.st.other++; continue; }
         } else if (NET.slot[k].ip == ip && NET.slot[k].port != port) {
@@ -779,6 +781,10 @@ static void net_recv_all(uint64_t now) {
             net_react_recv(k, buf, n, now);  // (s194)
         } else if (type == NET_KILLS) {
             net_kills_recv(k, buf, n, now);  // (s196)
+        } else if (type == NET_WARP) {
+            net_warp_recv(k, buf, n, now);  // (s269)
+        } else if (type == NET_DUEL) {
+            net_duel_recv(k, buf, n, now);  // (s272)
         } else if (type == NET_BYE) {
             LOG("[net] peer %d \"%s\" left (BYE)\n", k + 1, sl->p.name);
             net_slot_free(k);
@@ -985,6 +991,8 @@ static void net_diag_log(void) {
         g_net_skate ? "on" : "OFF (set netskate 1)");
     net_edmg_diag();
     net_area_diag();
+    net_warp_diag();  // (s269)
+    net_duel_diag();  // (s272)
     net_fire_diag();
     net_esync_diag();
     net_react_diag();  // (s194)

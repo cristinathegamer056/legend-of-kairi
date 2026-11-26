@@ -27,6 +27,7 @@
 #include <math.h>
 #include "sora_win.h"  // (<windows.h> on Windows; Linux shims: Deck port)
 #include "sora_abil.h"  // (s82 slice 3: abilities / AP, pure)
+#include "sora_sharexp.h"  // (s270 co-op item 5: shared EXP rows, paid in sl_died_one)
 
 // Dream Weapon (another helper builds the picker at the start). 0 sword, 1 shield, 2 staff = the KH2 lvup ability
 // column (PHH: +8 + 2 x choice). dream_giveup: -1 not picked; it has NO effect here: KH2's lvup rows carry only the three
@@ -466,6 +467,10 @@ static void dbm_init(void);                  // (s140 dbgmenu, sora_dbgmenu.h)
 static int dbm_suspend(void);
 static int g_dbm_newgame;  // (s142 review) set by sl_slot_saved's New Game branch, read + cleared by dbm_resume: the debug EXP is not put back after it
 static void dbm_resume(int was, bool is_load);
+static int g_dbm_save = 1;  /* (s288: Claude tested save + load in game (slot 3, 2 rows back), ON) */  // (dbgsave) 1 = the Debug Menu rows go with the BotW save (sora_dbgmenu.h dbm_save_str / dbm_slot_load); live "set dbmsave", env SAVAGEWIND_SORA_DBM_SAVE
+static int g_sl_pause_save = 1;  /* (s288: Claude tested a pause-menu Save in game (written while paused), ON) */  // (dbgsave, PR #60) 1 = a pause-menu Save is written into the sidecar while still paused (sora.c paused branch -> sl_slot_tick_paused); live "set pausesave", env SAVAGEWIND_SORA_PAUSE_SAVE
+static int dbm_save_str(char *o, size_t cap);
+static void dbm_slot_load(const char *b, int slot);
 static void dbg_tick(void);
 static int dbg_suspend(const char *why);
 static void dbg_resume(int was, const char *why);
@@ -1015,12 +1020,14 @@ static bool sl_sidecar_write(int slot, uint32_t exp, uint32_t kills, const SlSto
     char roxs[80];  // (s111 roxload) auto mode only: a forced body (set char 1 / 2) says nothing about the story
     int rn = snprintf(roxs, sizeof roxs, "  \"wpnuse\": %d,\n", g_wpn_use != 0);  // (s128 wpnmenu) 1 = Link's BotW weapon, 0 = the Keyblade
     if (g_char == 0 && !g_dbm_sora && !g_dbm_mksora) snprintf(roxs + rn, sizeof roxs - rn, "  \"roxas\": %d,\n", rox_on_now());
+    char dms[512];  // (dbgsave) the Debug Menu line ("" with dbmsave off = the old sidecar, byte for byte; worst case 362 + the rest 1043 < b[2048])
+    dbm_save_str(dms, sizeof dms);
     int n = snprintf(b, sizeof b,
                      "{\n  \"version\": 1,\n  \"what\": \"Sora in BotW: Sora's KH2 level for this BotW save slot (sora_mod.dll, "
                      "recon/S55_HELPER_LEVELS23.md)\",\n  \"slot\": %d,\n  \"exp\": %u,\n  \"lv\": %d,\n  \"kills\": %u,\n"
-                     "  \"drive\": %d,\n  \"abil_on\": %u,\n  \"abil_seen\": %u,\n  \"abil_on_hi\": %u,\n  \"abil_seen_hi\": %u,\n  \"chest_mask\": %u,\n  \"chest_mask_hi\": %u,\n  \"shortcuts\": %u,\n  \"keyblade\": %u,\n  \"keyblade2\": %u,\n  \"kb_owned\": %u,\n  \"valor\": %u,\n  \"wisdom\": %u,\n  \"limit\": %u,\n  \"master\": %u,\n  \"final\": %u,\n  \"anti\": %u,\n  \"summon\": %u,\n%s  \"dream\":\"%s\",\n  \"dream_giveup\": \"%s\",\n  \"story\": {\"ok\": %d, \"paraglider\": %d, "
+                     "  \"drive\": %d,\n  \"abil_on\": %u,\n  \"abil_seen\": %u,\n  \"abil_on_hi\": %u,\n  \"abil_seen_hi\": %u,\n  \"chest_mask\": %u,\n  \"chest_mask_hi\": %u,\n  \"shortcuts\": %u,\n  \"keyblade\": %u,\n  \"keyblade2\": %u,\n  \"kb_owned\": %u,\n  \"valor\": %u,\n  \"wisdom\": %u,\n  \"limit\": %u,\n  \"master\": %u,\n  \"final\": %u,\n  \"anti\": %u,\n  \"summon\": %u,\n%s%s  \"dream\":\"%s\",\n  \"dream_giveup\": \"%s\",\n  \"story\": {\"ok\": %d, \"paraglider\": %d, "
                      "\"beasts\": %d, \"towers\": %d, \"shrines\": %d},\n  \"saved\": \"%04d-%02d-%02d %02d:%02d:%02d\"\n}\n",
-                     slot, exp, sl_level_of(exp), kills, dg_points(), (uint32_t)ab_real_on(), (uint32_t)ab_real_seen(), (uint32_t)(ab_real_on() >> 32), (uint32_t)(ab_real_seen() >> 32), (uint32_t)CA.mask, (uint32_t)(CA.mask >> 32), cust_pack(SC.sc), kb_pack(KB.kb), kb_pack2(KB.kb), kb_own_fix(KB.own, KB.kb), vl_exp_get(), wl_exp_get(), ll_exp_get(), ml_exp_get(), fl_exp_get(), anti_pts_get(), su_exp_get(), roxs, sl_dream_str(dream_weapon), sl_dream_str(dream_giveup), st->ok,
+                     slot, exp, sl_level_of(exp), kills, dg_points(), (uint32_t)ab_real_on(), (uint32_t)ab_real_seen(), (uint32_t)(ab_real_on() >> 32), (uint32_t)(ab_real_seen() >> 32), (uint32_t)CA.mask, (uint32_t)(CA.mask >> 32), cust_pack(SC.sc), kb_pack(KB.kb), kb_pack2(KB.kb), kb_own_fix(KB.own, KB.kb), vl_exp_get(), wl_exp_get(), ll_exp_get(), ml_exp_get(), fl_exp_get(), anti_pts_get(), su_exp_get(), roxs, dms, sl_dream_str(dream_weapon), sl_dream_str(dream_giveup), st->ok,
                      st->glider, st->beasts, st->towers, st->shrines, now.wYear, now.wMonth, now.wDay, now.wHour,
                      now.wMinute, now.wSecond);
     if (n < 0 || n >= (int)sizeof b) { LOG("[sora] levels: sidecar text too long (%d), not written\n", n); return false; }  // (s89 review)
@@ -1132,6 +1139,7 @@ static void sl_slot_load(int slot, const char *why) {
     sl_persist_save();
     dbg_resume(dbg, "load");
     dbm_resume(dbm, true);
+    dbm_slot_load(side ? b : NULL, slot);  // (dbgsave) this save's Debug Menu rows
 }
 
 // BotW wrote slot N: the sidecar gets (exp, kills) = the state when the write began.
@@ -1197,13 +1205,17 @@ static void sl_slot_done(int slot, const char *why) {
 
 // Once per tick: the exe's slot events (in order), then the mtime poll once a second (both exes; on the new one it only
 // finishes a write whose "written out" event never came).
-static void sl_slot_tick(void) {
+// (dbgsave) paused = called from BotW's pause too (sora.c): a pause-menu Save is written into the sidecar at once (before, it waited
+// for the unpause, so closing the game from the pause menu lost the sidecar of that save). A Load's read is left in the queue
+// (not consumed) for the next unpaused tick, so loads still happen where they always did.
+static void sl_slot_tick_(bool paused) {
     uint64_t now = GetTickCount64();
     if (SLX.save_ev) {
         uint64_t seq = SLS.seq;
         int slot, kind;
         char dir[1024];
         while (SLX.save_ev(&seq, &slot, &kind, dir, sizeof dir)) {
+            if (paused && kind == 0 && slot >= 0 && slot < SL_SLOTS && !SLS.f[slot].pend) break;  // (a load: the next unpaused tick)
             SLS.seq = seq;
             if (slot < 0 || slot >= SL_SLOTS) continue;
             char *cut = strrchr(dir, '/');
@@ -1242,6 +1254,10 @@ static void sl_slot_tick(void) {
     if (!SLS.polled) LOG("[sora] levels: watching %s/<0-%d>/game_data.sav (slot %d now)\n", sl_root(), SL_SLOTS - 1, SLS.slot);
     SLS.polled = true;
 }
+static void sl_init(void);
+static void sl_slot_tick(void) { sl_slot_tick_(false); }
+static bool g_sl_ticked;  // (s288 review 1) set by the first sl_tick: a paused Save waits for it (munny / board place are loaded there)
+static void sl_slot_tick_paused(void) { if (g_sl_ticked) sl_slot_tick_(true); }  // (dbgsave: sora.c's paused branch)
 
 static void sl_init(void) {
     if (SL.init) return;
@@ -1597,10 +1613,25 @@ static int sl_glide_lv(void) { return 0; }
 // linkpos's actor slot 54 hook (an enemy's die call, with its life and name): the exact kill, off-screen ones too. An
 // enemy Sora hit within SL.win + SL_DIE_GRACE s pays (unless the life-0 rule paid already). Base slot 54 calls with
 // life > 0 are not deaths (other delete paths).
+// (s270 sharexp, sora_sharexp.h) a death Sora earns nothing for: a friend's kill noted near him pays the full kill here
+static void sl_died_shared(const SlDied *d) {
+    if (!g_sharexp || !sx_hid || (d->kind == 2 && d->life > 0)) return;
+    uint32_t hid = sx_hid(d->actor);
+    SxRow row;
+    if (!sx_take(hid, GetTickCount64(), &row)) return;
+    SlCredit *c = sl_credit(d->actor, d->life > 0 ? d->life : 0);
+    if (c->paid) return;
+    char how[80];
+    snprintf(how, sizeof how, "shared: peer %d killed it %.0f m from you", row.peer + 1, row.dist);
+    SX.paid++;
+    LOG("[sora] shared EXP: %llx %s hid=%08x (peer %d's kill, %.0f m)\n", (unsigned long long)d->actor, c->name, hid, row.peer + 1, row.dist);
+    sl_kill(c, how);
+}
 static void sl_died_one(const SlDied *d) {
     SlCredit *c = NULL;
     for (int i = 0; i < SL_NC && !c; i++) if (SL.c[i].used && SL.c[i].actor == d->actor) c = &SL.c[i];
-    if (!c || c->paid) return;  // (not Sora's, or the life-0 rule paid it)
+    if (c && c->paid) return;  // (the life-0 rule paid it)
+    if (!c) { sl_died_shared(d); return; }  // (not Sora's: s270 shared EXP, off = nothing as before)
     if (d->kind == 2 && d->life > 0) {
         LOG("[sora] died %llx %s: base slot 54 at life %d = not a death, no EXP\n", (unsigned long long)d->actor, d->name, d->life);
         return;
@@ -1610,6 +1641,7 @@ static void sl_died_one(const SlDied *d) {
         LOG("[sora] died %llx %s: Sora's last hit %.1f s ago (window %d + %.0f s): no EXP\n", (unsigned long long)d->actor,
             d->name, ago, SL.win, SL_DIE_GRACE);
         c->used = false;
+        sl_died_shared(d);  // (s270: his old hit is too old, but a friend's kill near him still shares)
         return;
     }
     sl_kill(c, d->kind == 1 ? "died: enemy die hook (exe)" : "died: actor die hook (exe)");
@@ -1634,6 +1666,8 @@ static void sl_died_tick(void) {
 // attacker = the nearest enemy within 20 m (GUESS: BotW's hit carries no attacker for us). Exe export
 // linkpos_hurt_scale_set(pct) applies it in the player addDamage hook (old exe: no effect). Live khdef 0 = off.
 static int sl_khdef = 1;
+static int shield_def_bonus(void);  // (shielddef, sora_shield.h: Link's equipped shield Guard / 10)
+static void armor_hit_log(int pct);  // (eqarmor, sora_camp.h)
 static void sl_def_tick(void) {
     static void (*set)(int);
     static bool bound;
@@ -1670,7 +1704,7 @@ static void sl_def_tick(void) {
             if (lv > 99) lv = 99;
             const SlLvpm2 *e = &SL_LVPM2[lv - 1];
             int lo = e->min_str > 1 ? e->min_str : 1, hi = e->max_str > lo ? e->max_str : lo;
-            int v = e->str - SL_LV[sl_lv() - 1].def, v0 = e->str;
+            int v = e->str - (SL_LV[sl_lv() - 1].def + shield_def_bonus()), v0 = e->str;
             v = v < lo ? lo : v > hi ? hi : v, v0 = v0 < lo ? lo : v0 > hi ? hi : v0;
             pct = (100 * v + v0 - 1) / v0;
             pct = (pct * SL_DIFF_TAKEN[dif] + 99) / 100;
@@ -1678,14 +1712,16 @@ static void sl_def_tick(void) {
     }
     if (!sl_khdef) pct = 100;
     set(pct);
+    armor_hit_log(pct);
     if (pct != said) {
         said = pct;
-        LOG("[sora] khdef: incoming x%d%% (nearest enemy KH LV%d, Sora LV %d Def %d, diff %d)\n", pct, lv, sl_lv(),
-            SL_LV[sl_lv() - 1].def, dif);
+        LOG("[sora] khdef: incoming x%d%% (nearest enemy KH LV%d, Sora LV %d Def %d + shield %d, diff %d)\n", pct, lv, sl_lv(),
+            SL_LV[sl_lv() - 1].def, shield_def_bonus(), dif);
     }
 }
 static void sl_tick(void) {
     sl_init();
+    g_sl_ticked = true;
     sl_world_lv();  // (s110 worldlv: a few gdt flags a frame, one full read every 5 s)
     sl_def_tick();
     float r = framepace_game_ratio();

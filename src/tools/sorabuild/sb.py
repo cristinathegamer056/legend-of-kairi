@@ -16,6 +16,9 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# (s280) the kit tools' file suffix: Windows apphosts "<tool>.exe"; the Linux kit (kit/mklinuxkit.py) has "<tool>" sh wrappers
+# (dotnet <tool>.dll). fxrec_boot.exe stays a Windows exe on Linux too (config "wine" runs it).
+EXE = ".exe" if sys.platform == "win32" else ""
 REPO = os.path.normpath(os.path.join(HERE, "..", ".."))  # src/sw-a41
 
 CFG_KEYS = {
@@ -24,10 +27,11 @@ CFG_KEYS = {
     "romfs": "BotW 1.9.0 romfs dir (Pack/Bootup.pack, Actor/, Map/ ...)",
     "out": "output data tree (what the game reads as <SORA_ROOT>/data)",
     "work": "scratch dir (intermediate files, logs, done markers)",
-    "kh2exe": "KINGDOM HEARTS II FINAL MIX.exe of the Steam KH2 FM install (needed for config fx = fxrec and sounds = recipe (step sounds_mine: hud icon widths); sha1 2548F1191FE6587A34947952763CE6BB4F3B5C1A)",
+    "kh2exe": "KINGDOM HEARTS II FINAL MIX.exe of the Steam or Epic KH2 FM install (needed for config fx = fxrec and sounds = recipe (step sounds_mine: hud icon widths); sha1 Steam 2548F1191FE6587A34947952763CE6BB4F3B5C1A, Epic F9758C7782C4DD03C5BF8A4BCCE9D897CB21CD62)",
     "dotnet": "dotnet.exe of a .NET 8 SDK (with a kit: the kit's .NET 8 runtime, only DOTNET_ROOT for the prebuilt tools)",
     "openkh": "dir with the OpenKH release DLLs (OpenKh.Kh2.dll, OpenKh.Common.dll, ...)",
-    "kh2img": "(s168) instead of 'kh2': the Steam KH2 'Image/dt' dir (kh2_*.hed + .pkg); only the needed files are extracted to work/kh2",
+    "kh2img": "(s168) instead of 'kh2': the KH2 'Image/dt' dir (Steam; Epic: 'Image/en') (kh2_*.hed + .pkg); only the needed files are extracted to work/kh2",
+    "wine": "(s280, Linux) command that starts a Windows exe (fxrec_boot.exe under Proton's wine, e.g. a wine.sh wrapper); unset on Windows",
     "kit": "(s168) friend kit dir made by kit/mkkit.py: prebuilt C# tools + fxrec_boot.exe + .NET runtime + busybox + ffmpeg + vgmstream; "
            "with it no .NET SDK / clang / MSYS2 / Git bash is needed (dotnet, openkh, bash, ffmpeg, vgmstream default to the kit's)",
 }
@@ -78,7 +82,7 @@ def kit_tool(ctx, tool):
         raise SystemExit("[sorabuild] kit tool %s was built from other sources (kit %s, repo %s): rebuild the kit with kit/mkkit.py"
                          % (tool, (got or "none")[:12], want[:12]))
     d = os.path.join(ctx.kit, "tools", tool)
-    exe = os.path.join(d, tool + ".exe")
+    exe = os.path.join(d, tool + (".exe" if tool == "fxrec_boot" else EXE))
     if not os.path.isfile(exe):
         raise SystemExit("[sorabuild] kit is missing %s" % exe)
     return d
@@ -104,7 +108,7 @@ def pick_kh2(cfg):
             return
     except OSError:
         pass
-    exe = os.path.join(cfg["kit"], "tools", "kh2pick", "kh2pick.exe")
+    exe = os.path.join(cfg["kit"], "tools", "kh2pick", "kh2pick" + EXE)
     e = dict(os.environ, DOTNET_ROOT=os.path.dirname(cfg["dotnet"]))
     os.makedirs(os.path.join(cfg["work"], "logs"), exist_ok=True)
     os.makedirs(os.path.dirname(mark), exist_ok=True)
@@ -114,12 +118,15 @@ def pick_kh2(cfg):
         r = subprocess.run([exe, img, KH2_LIST, dst], env=e, stdout=f, stderr=subprocess.STDOUT)
     logf = os.path.join(cfg["work"], "logs", "_kh2pick.log")
     if r.returncode == 1:  # kh2pick: 1 = a listed file is missing or its sha256 differs
-        raise SystemExit("[sorabuild] kh2pick: your KH2 files differ from the Steam KH2 FM release (modded or another version? "
-                         "a KH2 mod installed into the .pkg files changes them) - see %s" % logf)
+        raise SystemExit("[sorabuild] kh2pick: your KH2 files differ from the original KH2 FM release (Steam / Epic) (modded or "
+                         "another version? a KH2 mod installed into the .pkg files changes them) - see %s" % logf)
     if r.returncode:
         raise SystemExit("[sorabuild] kh2pick crashed (%d) - see %s" % (r.returncode, logf))
     open(mark, "w").write(tag + "\n")
     print("[sorabuild] kh2pick: done %.1f s" % (time.time() - t), flush=True)
+
+
+KIT_RETRY_WAITS = (1, 2, 4, 8)   # (s288 K6) seconds between tries of take_kit_tool's copy (~15 s in all)
 
 
 def take_kit_tool(ctx, tool, dst):
@@ -127,9 +134,21 @@ def take_kit_tool(ctx, tool, dst):
     d = kit_tool(ctx, tool)
     if d is None:
         return False
-    if os.path.isdir(dst):
-        shutil.rmtree(dst)
-    shutil.copytree(d, dst)
+    for i, wait in enumerate(KIT_RETRY_WAITS + (None,)):
+        try:
+            if os.path.isdir(dst):
+                shutil.rmtree(dst)
+            shutil.copytree(d, dst)
+            break
+        except PermissionError as e:   # (s288 K6) a file of the old copy is open elsewhere (WinError 5 / 32)
+            what = e.filename or dst
+            if wait is None:
+                raise SystemExit("[sorabuild] could not replace %s: it is in use (%s). Another Legend of Kairi "
+                                 "setup that is still running, or an antivirus scan, may be holding it. Wait for the other "
+                                 "setup to finish or close it (or restart the PC), then try again; if your antivirus "
+                                 "blocks it, allow the Legend of Kairi folder." % (what, e.strerror or e))
+            ctx.log("%s is in use (%s), trying again in %g s (%d/%d)" % (what, e.strerror or e, wait, i + 1, len(KIT_RETRY_WAITS)))
+            time.sleep(wait)
     ctx.log("prebuilt %s from the kit (sources %s)" % (tool, src_hash(tool)[:12]))
     return True
 
@@ -312,8 +331,13 @@ def load_cfg(path, overrides):
         raise SystemExit("[sorabuild] config vorbis_fallback \"phh\" was removed: install vgmstream-cli r2117 (python -E -P sounds/fetch_vgmstream.py, or config \"vgmstream\") for the Ogg Vorbis voices")
     if cfg.get("kit"):  # (s168) kit defaults; an explicit config value still wins
         kd = cfg["kit"]
-        for k, rel in (("dotnet", "dotnet/dotnet.exe"), ("openkh", "openkh"), ("bash", "busybox/sh.exe"),
-                       ("ffmpeg", "ffmpeg/ffmpeg.exe"), ("vgmstream", "vgmstream/vgmstream-cli.exe")):
+        if sys.platform == "win32":
+            kdef = (("dotnet", "dotnet/dotnet.exe"), ("openkh", "openkh"), ("bash", "busybox/sh.exe"),
+                    ("ffmpeg", "ffmpeg/ffmpeg.exe"), ("vgmstream", "vgmstream/vgmstream-cli.exe"))
+        else:  # (s280) Linux kit: no busybox (the system sh), "wine" from wine/wine.sh when the kit has one
+            kdef = (("dotnet", "dotnet/dotnet"), ("openkh", "openkh"), ("ffmpeg", "ffmpeg/ffmpeg"),
+                    ("vgmstream", "vgmstream/vgmstream-cli")) + ((("wine", "wine/wine.sh"),) if os.path.isfile(os.path.join(kd, "wine", "wine.sh")) else ())
+        for k, rel in kdef:
             cfg.setdefault(k, os.path.join(kd, rel).replace("\\", "/"))
     for k in ("out", "work"):
         if not cfg.get(k):
@@ -333,6 +357,6 @@ def check_inputs(cfg):
         if not v or not os.path.exists(p):
             bad.append("  %-7s %s  (needs %s)" % (k, v or "<not set>", p if v else CFG_KEYS[k]))
     if (cfg.get("fx") == "fxrec" or cfg.get("sounds", "recipe") == "recipe") and not (cfg.get("kh2exe") and os.path.isfile(cfg["kh2exe"])):
-        bad.append("  kh2exe  %s  (needs the Steam KH2 FM exe for config fx = fxrec / sounds = recipe)" % (cfg.get("kh2exe") or "<not set>"))
+        bad.append("  kh2exe  %s  (needs the Steam or Epic KH2 FM exe for config fx = fxrec / sounds = recipe)" % (cfg.get("kh2exe") or "<not set>"))
     if bad:
         raise SystemExit("[sorabuild] inputs missing:" + chr(10) + chr(10).join(bad))

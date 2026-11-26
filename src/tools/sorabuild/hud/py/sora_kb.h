@@ -20,8 +20,28 @@
 // Valor's slot, the pre-s91 look). g_mfkb 0 (live "set mfkb 0") = Master / Final always use Valor's slot.
 enum { KB_MAIN, KB_VALOR, KB_MASTER, KB_FINAL, KB_SLOTS };
 static int g_mfkb = 1;
+static int g_eqarmor = 1;  /* (s288: Claude tested it in game for the user: Body None took the piece off, Def 12 -> 11, back on -> 12; one worn mark per slot; default ON) */  // (eqarmor) 1 = the Equipment page's Head / Body / Legs rows open a picker (sora_camp_equip.h), live "set eqarmor", env SAVAGEWIND_SORA_EQ_ARMOR; 0 = the s120 show-only rows
+static int g_eqshield = 1;  /* (s288: the user played it: Status Def 15 Steel Lizal -> 12 Boko; default ON) */  // (eqshield) 1 = the Equipment page has a Shield row after the Armor rows (sora_camp_equip.h), live "set eqshield", env SAVAGEWIND_SORA_EQ_SHIELD
+static int g_eqtabs = 1;  /* (s288: the user played it, L1 / R1 switch; title names it now): default ON */  // (eqtabs) 1 = the Equipment picker has a Keyblades and a BotW Weapons tab (sora_camp_equip.h), live "set eqtabs", env SAVAGEWIND_SORA_EQ_TABS
+static int g_dbgtext = 0;  /* (s288 port: OFF until the user plays it) */  // (dbgtext, #51) 1 = the camp Debug page's help line reads <SORA_ROOT>/debug_menu_text.txt (sora_camp_dbg.h), live "set dbgtext", env SAVAGEWIND_SORA_DBGTEXT
+static int g_botwpic = 1;  /* (s288: Claude tested it in game (weapons / armor / shield pictures), ON) */  // (botwpic #62) 1 = the Equipment picture slot shows a BotW weapon / shield / armor piece as its BotW pouch picture (exe sora_hud_botw_icon, texture 15), live "set botwpic", env SAVAGEWIND_SORA_BOTWPIC
 static int g_eqlook = 1;  // (s120) 1 = the vanilla KH2 Equipment look (sora_camp_equip.h), live "set eqlook 0" = the old page
 static int g_eq2x = 97, g_eq2y = 58, g_eqtx = 51, g_eqvx = 22, g_eqky = 0, g_eqpx = 75, g_eqpy = 55, g_eqax = 0, g_eqhy = 334, g_eqhx = 141, g_eqpt = 86, g_eqpc = -53;  // (s120b) Equipment panel text tuning (sora_camp_equip.h)
+// (eqlayout, PR #63; s288 port) the Equipment page's text places the contributor fixed against screenshots. g_eqlayout: compiled
+// default 0 (OFF until the user plays it), env SAVAGEWIND_SORA_EQ_LAYOUT, live "set eqlayout 0/1". 1 = the picker shows 8 rows
+// (cp_eq_vis_rows; 9 hung below the window, the scroll arrows sit by rows 1 and 8), its 2nd column at g_eqcol (was 44.5: ran into
+// the arrows; 2 = the middle of its box, mark_161026), the cur > new row g_eqcx right and its numbers g_eqcy up, the Shield / armor
+// rows' own Defense in the yellow spot and the total in the brackets, and (eq_layout_apply, at the env read and at "set eqlayout")
+// the slot list's yellow total g_eqtx 51 -> 63 (off the label: "Strength19") and bracketed value g_eqvx 22 -> 33 (mark_161447).
+// 0 = the page as before #63 exactly. The eq* tuning keys still move them after.
+static int g_eqlayout = 1;  /* (s288: Claude tested it in game (8 picker rows), ON) */
+static int g_eqcx = 12, g_eqcy = -2, g_eqcol = 2;  // (eqlayout only) picker: cur > new row x shift / its numbers' y, the 2nd column's x
+#define CP_EQ_VIS_MAX 9  // the picker's row arrays (cp_eq_vis_rows() <= this)
+static inline int cp_eq_vis_rows(void) { return g_eqlayout ? 8 : 9; }  // visible picker rows (s89 kb: 9 = the Abilities list's, GUESS)
+static inline float cp_eq_colx(void) { return g_eqlayout ? (float)g_eqcol : 44.5f; }
+static inline int cp_eq_cx(void) { return g_eqlayout ? g_eqcx : 0; }
+static inline float cp_eq_cy(void) { return g_eqlayout ? (float)g_eqcy : 0; }
+static inline void eq_layout_apply(void) { g_eqtx = g_eqlayout ? 63 : 51, g_eqvx = g_eqlayout ? 33 : 22; }
 // the slot of the 2nd blade in a Drive Form (sora.c form ids: 3 Master, 4 Final; anything else = Valor's), -1 form = none
 static int kb_sub_slot(int form) { return g_mfkb && form == 3 ? KB_MASTER : g_mfkb && form == 4 ? KB_FINAL : KB_VALOR; }
 // the form slot's Keyblade id (auto 0 -> Valor's)

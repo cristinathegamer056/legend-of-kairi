@@ -19,7 +19,7 @@ def _env(ctx):
 
 
 def _hudbake(ctx):
-    return os.path.join(ctx.work, "cs", "hudbake", "hudbake.exe")
+    return os.path.join(ctx.work, "cs", "hudbake", "hudbake" + sb.EXE)
 
 
 def _src_tag(ctx):
@@ -81,7 +81,7 @@ def _pyb(script, out):
 
 B = ["hud_build", "sounds_build"]
 STEPS = [
-    Step("hud_build", _build, work_outputs=["cs/hudbake/hudbake.exe", "hudbake_src.txt"]),
+    Step("hud_build", _build, work_outputs=["cs/hudbake/hudbake" + sb.EXE, "hudbake_src.txt"]),
     Step("hud_text", _text, work_outputs=["levels/kh2_sora_levels.json", "levels/lvup_labels.txt", "dream/dream_labels.txt"]),
     Step("hud_hud", _hb("hud", "hud/hud.bin"), outputs=["hud/hud.bin"], deps=B),
     Step("hud_cmd", _hb("cmd", "hud/cmd.bin"), outputs=["hud/cmd.bin"], deps=B),

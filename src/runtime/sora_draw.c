@@ -90,6 +90,7 @@ bool linkpos_camera_proj(float p[4]);
 VkImageView vk_frame_view(void);
 VkExtent2D vk_frame_extent(void);
 bool vk_scene_depth(VkImageView *view, float uv[4], uint32_t *w, uint32_t *h, uint32_t *draws);
+bool vk_scene_color(VkImageView *view);  // (flamefront, exec.c: the composite's source, inside the scene pass only)
 void vk_scene_depth_describe(char *out, size_t n);  // (s232 amdtest2, exec.c: log only)
 VkImageView vk_scene_depth_copy(int mode);          // (s232 amdtest2, exec.c: SAVAGEWIND_SORA_DEPTH_COPY=1 / (s233) =2 only)
 VkImageLayout vk_scene_depth_layout_begin(int mode, VkImageView view);  // (s233 amdtest3, exec.c: SAVAGEWIND_SORA_DEPTH_LAYOUT only)
@@ -734,10 +735,40 @@ static void mtx43_inv(const float m[12], float out[12]) {
 // ------------------------------------------------------------------ (s121 light) the light block (game thread)
 // 16 floats, every actor's unless it has its own (sora_draw_actor_light): L0 = sun direction (world, toward the sun) +
 // style (0 = off = the old unlit look, 1 KH2 soft, 2 toon, 3 BotW soft), L1 = sun rgb + amount 0..1, L2 = ambient top rgb +
-// ambient floor 0..1, L3 = ambient bottom rgb + shadow 0..1 (later). Rides with the next skinned frame like the tint;
+// ambient floor 0..1, L3 = ambient bottom rgb + (lightsat) saturation change (0 = none, 0.3 = +30%). Rides with the next skinned frame like the tint;
 // the render thread hands it to the shaders as a per-instance vertex attribute (binding 1). The DLL (runtime/sora_light.h)
 // calls sora_draw_light each frame; n < 16 is ignored.
 static float g_light[16];  // (style 0 until the DLL sends one)
+// (firelight) one point light for the bodies (Sora + the party), from the DLL each frame: p = {world x, y, z, reach u, r, g, b,
+// strength}; strength 0 = none. Read by the render thread when it fills block D (a torn read = one frame's light, harmless).
+static volatile float g_plight[8];
+static volatile uint64_t g_pl_frame;  // (s288 review) vk_frame_counter() of the last call: a stale light (DLL reloaded mid-fire) expires
+void sora_draw_point_light(const float *p, int n) {
+    static int said;
+    if (!p || n < 8) return;
+    for (int i = 0; i < 8; i++) if (!isfinite(p[i])) return;
+    if (!said++) LOG("[sora-draw] point light (firelight): first call, strength %.2f reach %.1f u\n", p[7], p[3]);
+    for (int i = 0; i < 8; i++) g_plight[i] = p[i];
+    g_pl_frame = vk_frame_counter();
+}
+// (flamefront) from the DLL each frame: p = {fire 0 x, y, z, radius, fire 1 x, y, z, radius, strength, threshold}; radius 0 =
+// none, strength 0 = off. Read by the render thread when it fills block D (a torn read = one frame, harmless).
+static volatile float g_ffire[10];
+static volatile uint64_t g_ff_frame;  // (s288 port) vk_frame_counter() of the last call
+void sora_draw_flame_front(const float *p, int n) {
+    static int said;
+    if (!p || n < 10) return;
+    for (int i = 0; i < 10; i++) if (!isfinite(p[i])) return;
+    if (!said++) LOG("[sora-draw] flamefront: first call, strength %.2f threshold %.2f\n", p[8], p[9]);
+    for (int i = 0; i < 10; i++) g_ffire[i] = p[i];
+    g_ff_frame = vk_frame_counter();
+}
+// (s288 port) exec.c's ui_boundary_run sets up the scene colour view only while this is true: a DLL sent strength > 0 within
+// the last FF_WANT_FRAMES frames. OFF / an old DLL (never calls) / a DLL that stopped calling (hot reload) = the old work.
+#define FF_WANT_FRAMES 30
+bool sora_draw_flame_front_wanted(void) {
+    return g_ffire[8] > 0 && vk_frame_counter() - g_ff_frame < FF_WANT_FRAMES;
+}
 static unsigned g_light_calls;
 void sora_draw_light(const float *p, int n) {
     if (!p || n < 16) return;
@@ -1396,16 +1427,18 @@ void sora_draw_world(const float *bones, float face, float scale) { sora_draw_ac
 // terms of ~2000 to a clip z of ~3: with BotW's near 0.1 (shrines) our depth was off by up to ~1 cm at 2.5 m and inner
 // layers (Roxas' jacket lining, 0.3-10 mm behind) won the depth test. The same projection, only without that rounding.
 #define PC_DECL "layout(push_constant) uniform P { mat4 mvp; vec4 k; vec4 vp; vec4 duv; vec4 z; } pc;\n" \
-                "layout(set = 2, binding = 0) uniform D { vec4 s0; vec4 s1; vec4 s2; vec4 t; vec4 oa; vec4 ob; vec4 oc; vec4 org; vec4 c3; } pd;\n"
+                "layout(set = 2, binding = 0) uniform D { vec4 s0; vec4 s1; vec4 s2; vec4 t; vec4 oa; vec4 ob; vec4 oc; vec4 org; vec4 c3; vec4 pl0; vec4 pl1; vec4 ff0; vec4 ff1; vec4 ff2; } pd;\n"
 typedef struct { float mvp[16], k[4], vp[4], duv[4], z[4]; } BodyPC;                   // = P (sora_fx_draw reads its 32 floats)
-typedef struct { float s0[4], s1[4], s2[4], t[4], oa[4], ob[4], oc[4], org[4], c3[4]; } BodyPD;  // = D (std140: 9 vec4, no padding)
+typedef struct { float s0[4], s1[4], s2[4], t[4], oa[4], ob[4], oc[4], org[4], c3[4], pl0[4], pl1[4], ff0[4], ff1[4], ff2[4]; } BodyPD;  // = D (std140: 14 vec4, no padding; firelight: + pl0 / pl1, flamefront: + ff0 / ff1 / ff2)
 #define PC_BYTES 128
-#define PD_BYTES 144
+#define PD_BYTES 224
 #define PC_BYTES_S182 240  // (the old all-push block, for the log line only)
 _Static_assert(sizeof(BodyPC) == PC_BYTES, "BodyPC must match the GLSL push block");
 _Static_assert(PC_BYTES <= 128, "Sora's body pass must fit Vulkan's minimum maxPushConstantsSize (128): AMD Windows / Intel");
 _Static_assert(sizeof(BodyPD) == PD_BYTES, "BodyPD must match the GLSL uniform block D");
-_Static_assert(offsetof(BodyPD, oc) == 96 && offsetof(BodyPD, org) == 112 && offsetof(BodyPD, c3) == 128,
+_Static_assert(offsetof(BodyPD, oc) == 96 && offsetof(BodyPD, org) == 112 && offsetof(BodyPD, c3) == 128 &&
+               offsetof(BodyPD, pl0) == 144 && offsetof(BodyPD, pl1) == 160 &&
+               offsetof(BodyPD, ff0) == 176 && offsetof(BodyPD, ff1) == 192 && offsetof(BodyPD, ff2) == 208,
                "BodyPD members must sit at the GLSL block D's std140 offsets (vec4 = 16 bytes each, in order)");
 static const char *VERT_SRC =
     "#version 450\n"
@@ -1474,6 +1507,7 @@ static const char *FRAG_SRC =
     "layout(set = 0, binding = 0) uniform sampler2D tex;\n"
     "layout(set = 1, binding = 0) uniform sampler2D sdepth;\n"
     "layout(set = 1, binding = 1) uniform sampler2D sdw;\n"  // (s124 b) BotW's sun cascade layer 0 (depth)
+    "layout(set = 1, binding = 2) uniform sampler2D scol;\n"  // (flamefront) BotW's finished scene colour (the composite's source)
     // (s236 amdtest4a) every scene depth read goes through SD(): as before, or (SAVAGEWIND_SORA_DEPTH_FETCH=1 -> SD_FETCH)
     // texelFetch of the same texel (no sampler state, no LOD, no derivatives)
     "#ifdef SD_FETCH\n"
@@ -1655,7 +1689,42 @@ static const char *FRAG_SRC =
     "        int sm = int(v_sp.x + 0.5);\n"
     "        if (sm > 0) sv = mix(1.0, sun_vis((sm == 2 || sm == 4) ? v_sc : v_scc, se), clamp(v_sp.y, 0.0, 1.0));\n"
     "        rgb *= light_of(N, sv);\n"
+    // (lightsat) user: "the kh2 models look a bit greyed out, are we able to match the same color saturation as how they look in
+    // the kh2 menu?" L3.w (was a reserved shadow slot, always 0) = saturation change after the light: rgb pushed away from (> 0)
+    // or toward (< 0) its own luminance; 0 = unchanged, so an older DLL keeps the old look.
+    "        if (abs(v_l3.w) > 1e-4) rgb = max(mix(vec3(dot(rgb, vec3(0.3, 0.59, 0.11))), rgb, 1.0 + v_l3.w), vec3(0.0));\n"
+    // (firelight) user: "is there a way we can have sora react to lightning from lava and fire?" (first: fire). One point light from
+    // the DLL (sora_draw_point_light): pl0 = world position + reach (u), pl1 = rgb + strength; the texture colour times it is
+    // added, fading (1 - d / reach)^2 and with the facing (wrapped: 0.3 on the far side). pl1.w 0 = none (an older DLL).
+    "        if (pd.pl1.w > 0.0) {\n"
+    "            vec3 lp = pd.pl0.xyz - v_w;\n"
+    "            float dl = length(lp), at = clamp(1.0 - dl / max(pd.pl0.w, 1e-3), 0.0, 1.0);\n"
+    "            float nd = max(dot(N, lp / max(dl, 1e-4)), 0.0) * 0.7 + 0.3;\n"
+    "            rgb += c.rgb * pd.pl1.rgb * (pd.pl1.w * at * at * nd);\n"
+    "        }\n"
     "        if (sm >= 3) rgb = mix(rgb, se < 0.01 ? vec3(0.1, 0.2, 1.0) : vec3(1.0 - sv, sv, 0.0), 0.75);\n"  // red shade, green sun, blue outside
+    "    }\n"
+    // (flamefront) user: "sora will stand behind a fire, a campfire for example, but despite being behind the flames, sora model
+    // still overlaps the flames". Up to two burning fires from the DLL (ff0 / ff1: the flame's centre + radius, world u). Where
+    // such a flame is NEARER the camera than this pixel of the body and the pixel lies in the flame's disc on screen, the
+    // flame's own pixels in BotW's finished scene (bright, coloured: above ff2.y) go back over him (blend to the scene colour, strength ff2.x).
+    "    if (pc.z.w < 0.5 && pd.ff2.x > 0.0 && pc.k.z > 0.5 && pc.k.w < 0.5) {\n"
+    "        float ze0 = 1.0 / gl_FragCoord.w, fa = 0.0;\n"
+    "        for (int i = 0; i < 2; i++) {\n"
+    "            vec4 ff = i == 0 ? pd.ff0 : pd.ff1;\n"
+    "            if (ff.w <= 0.0) continue;\n"
+    "            vec4 cf = pc.mvp * vec4(ff.xyz, 1.0), ct = pc.mvp * vec4(ff.xyz + vec3(0.0, ff.w, 0.0), 1.0);\n"
+    "            if (cf.w <= 0.05 || ct.w <= 0.05 || cf.w > ze0 - 0.15) continue;\n"  // (the flame is not in front of this pixel)
+    "            vec2 sf = (cf.xy / cf.w * 0.5 + 0.5) * pc.vp.zw, st = (ct.xy / ct.w * 0.5 + 0.5) * pc.vp.zw;\n"
+    "            float rp = max(length(st - sf), 1.0), dp = length(s * pc.vp.zw - sf);\n"
+    "            fa = max(fa, 1.0 - smoothstep(0.7, 1.15, dp / rp));\n"
+    "        }\n"
+    "        if (fa > 0.0) {\n"
+    "            vec3 sc = clamp(textureLod(scol, pc.duv.xy + s * pc.duv.zw, 0.0).rgb, 0.0, 1.0);\n"
+    "            float mx = max(sc.r, max(sc.g, sc.b)), mn = min(sc.r, min(sc.g, sc.b)), sat = mx > 1e-3 ? (mx - mn) / mx : 0.0;\n"
+    "            float fl = smoothstep(pd.ff2.y, 1.0, mx) * smoothstep(0.25, 0.6, sat) * fa * pd.ff2.x;\n"
+    "            rgb = mix(rgb, sc, clamp(fl, 0.0, 1.0));\n"  // (s288: was max(rgb, sc): a blue body + an orange flame gave pink / lavender pixels on the Deck shots; the scene colour here IS the flame, so blend straight to it)
+    "        }\n"
     "    }\n"
     "    if (pd.t.w > 0.0) rgb = mix(rgb, pd.t.rgb * (0.35 + 0.65 * dot(rgb, vec3(0.3, 0.59, 0.11))), pd.t.w * 0.85)\n"
     "                            + pd.t.rgb * pd.t.w * 0.45;\n"
@@ -1863,11 +1932,12 @@ static bool gpu_init(void) {  // (s54: the shared part; textures per actor in ac
         dg_latch("D6 this GPU allows %u bytes of push constants, Sora needs %d", lim, PC_BYTES);
         return false;
     }
-    VkDescriptorSetLayoutBinding b[2] = {{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
-                                         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL}};  // (s124 b sun cascade)
+    VkDescriptorSetLayoutBinding b[3] = {{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
+                                         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},   // (s124 b sun cascade)
+                                         {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL}};  // (flamefront: the scene colour)
     VkDescriptorSetLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 1, .pBindings = b};
     VK_CHECK(vkCreateDescriptorSetLayout(g_vk.dev, &li, NULL, &G.set_layout));
-    li.bindingCount = 2;
+    li.bindingCount = 3;
     VK_CHECK(vkCreateDescriptorSetLayout(g_vk.dev, &li, NULL, &G.set_layout1));
     VkDescriptorSetLayoutBinding bd = {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, NULL};
     VkDescriptorSetLayoutCreateInfo ld = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 1, .pBindings = &bd};
@@ -2124,8 +2194,11 @@ static void bind_draw_sets(VkCommandBuffer cb, const DrawActor *a, uint32_t tex,
     if (!fset) {  // (the old cost: a set of its own per draw)
         VkDescriptorSet s1 = vk_alloc_set(G.set_layout1);
         const VkImageView fb = a->gpu.tex_view[0];
-        VkDescriptorImageInfo ii[2] = {{G.nearest, dv ? dv : fb, dv ? dl : VK_IMAGE_LAYOUT_GENERAL}, {G.nearest, sv ? sv : fb, VK_IMAGE_LAYOUT_GENERAL}};
-        VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = s1, .dstBinding = 0, .descriptorCount = 2,
+        VkImageView cvw = VK_NULL_HANDLE;
+        vk_scene_color(&cvw);
+        VkDescriptorImageInfo ii[3] = {{G.nearest, dv ? dv : fb, dv ? dl : VK_IMAGE_LAYOUT_GENERAL}, {G.nearest, sv ? sv : fb, VK_IMAGE_LAYOUT_GENERAL},
+                                       {G.nearest, cvw ? cvw : fb, VK_IMAGE_LAYOUT_GENERAL}};  // (flamefront)
+        VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = s1, .dstBinding = 0, .descriptorCount = 3,
                                   .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = ii};
         mod_update_set(&w);
         rec_CmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, G.layout, 1, 1, &s1, 0, NULL);
@@ -2303,6 +2376,14 @@ static bool draw_pass(VkImageView cv, VkFormat fmt, VkImageLayout lay, VkExtent2
     BodyPC pc;  // (s183 amd: the push constants, 128 bytes)
     BodyPD pd;  // (s183 amd: the per-draw uniform block, pd_push)
     memset(&pd, 0, sizeof pd);  // (s0 s1 s2, s107 slateocc oa ob oc: 0)
+    if (!scr && g_pl_frame && vk_frame_counter() - g_pl_frame < 30)  // (s288 review: 30 frames, as flamefront)
+        for (int i = 0; i < 4; i++) pd.pl0[i] = g_plight[i], pd.pl1[i] = g_plight[4 + i];  // (firelight; not the Game Over camera)
+    {  // (flamefront) the fires + settings; strength 0 without the scene colour (not the Game Over camera)
+        VkImageView cvw = VK_NULL_HANDLE;
+        bool have = vk_scene_color(&cvw);
+        for (int i = 0; i < 4; i++) pd.ff0[i] = g_ffire[i], pd.ff1[i] = g_ffire[4 + i];
+        pd.ff2[0] = have ? g_ffire[8] : 0, pd.ff2[1] = g_ffire[9];
+    }
     memcpy(pd.t, s[0].tint, sizeof pd.t);  // (set again per actor before each of its draws)
     build_mvp(cam.view, proj, pc.mvp);
     if (!scr && (cam.shift[0] != 0 || cam.shift[1] != 0))  // (s107 invsora 3: an off-centre camera, clip += shift * w; y flipped here)
@@ -2392,8 +2473,11 @@ static bool draw_pass(VkImageView cv, VkFormat fmt, VkImageLayout lay, VkExtent2
     if (g_perf & PERF_C4) {
         VkImageView fb = fa->gpu.tex_view[0];
         fset = vk_alloc_set(G.set_layout1);
-        VkDescriptorImageInfo ii[2] = {{G.nearest, dview ? dview : fb, dview ? dlay : VK_IMAGE_LAYOUT_GENERAL}, {G.nearest, sdw_view ? sdw_view : fb, VK_IMAGE_LAYOUT_GENERAL}};
-        VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fset, .dstBinding = 0, .descriptorCount = 2,
+        VkImageView cvw = VK_NULL_HANDLE;
+        vk_scene_color(&cvw);
+        VkDescriptorImageInfo ii[3] = {{G.nearest, dview ? dview : fb, dview ? dlay : VK_IMAGE_LAYOUT_GENERAL}, {G.nearest, sdw_view ? sdw_view : fb, VK_IMAGE_LAYOUT_GENERAL},
+                                       {G.nearest, cvw ? cvw : fb, VK_IMAGE_LAYOUT_GENERAL}};  // (flamefront)
+        VkWriteDescriptorSet w = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = fset, .dstBinding = 0, .descriptorCount = 3,
                                   .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = ii};
         mod_update_set(&w);
     }

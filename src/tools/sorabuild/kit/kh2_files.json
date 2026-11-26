@@ -1,6 +1,6 @@
-{"what": "KH2 extract files read by sorabuild (OpenKH IdxImg layout); kh2pick extracts only these (s168: exact last-access trace of a clean kit run); s182: + the files the sound recipe miners read (sounds/mine, step sounds_mine); s223: + the files of the new party members (Riku, Auron, Mulan, Aladdin, Sparrow, Cloud: obj + remastered + voice + their se banks se585/586/588/589/593; superset, the s224 atime trace was spoiled: every file read); s247: + the Keyblades' own hit banks se504..se527 (fx/kbhitse.py, step sfx_kbhitse); s263: + Kairi's model N_EX560.mdlx (step looks, outfits/ka_sora_model.bin)",
- "packages": {"kh2_fifth": 207, "kh2_first": 69, "kh2_sixth": 514},
- "bytes": 378479248,
+{"what": "KH2 extract files read by sorabuild (OpenKH IdxImg layout); kh2pick extracts only these (s168: exact last-access trace of a clean kit run); s182: + the files the sound recipe miners read (sounds/mine, step sounds_mine); s223: + the files of the new party members (Riku, Auron, Mulan, Aladdin, Sparrow, Cloud: obj + remastered + voice + their se banks se585/586/588/589/593; superset, the s224 atime trace was spoiled: every file read); s247: + the Keyblades' own hit banks se504..se527 (fx/kbhitse.py, step sfx_kbhitse); s263: + Kairi's model N_EX560.mdlx (step looks, outfits/ka_sora_model.bin); chestkh2: + the chest objects F_EX030.mset / F_EX040.mset (Sora's chest-open motions, step chest)",
+ "packages": {"kh2_fifth": 209, "kh2_first": 69, "kh2_sixth": 514},
+ "bytes": 378583456,
  "files": [
   ["kh2_fifth/original/limit/fm/donald.bar", 367392, "a98d362427ff85bca45e2f3e8c23dceafd5501d327e1fa37ee43c4e8ba704987"],
   ["kh2_fifth/original/limit/fm/donald2.bar", 368848, "093f87ab22ffe1606b8efbb17d1cfc1afa62050627252062de7fb200d45a7f69"],
@@ -47,6 +47,8 @@
   ["kh2_fifth/original/obj/B_CA040.a.us", 260832, "5c12783291b60c3d801b6ac64bb35be6dc5c96013ed92c029fc360b552fa2ef3"],
   ["kh2_fifth/original/obj/B_CA040.mdlx", 332192, "bfd27687309230d65bd176ae5876770c3059ca41f6a5570bcf66949444077df8"],
   ["kh2_fifth/original/obj/B_CA040.mset", 773520, "c434706d5373d2f16df44c7615fca9e414adcb6ed395a79634201edcca429053"],
+  ["kh2_fifth/original/obj/F_EX030.mset", 37456, "66e00b941ae0491fde0a9a88c488e68b4ecb07fc490281d0dbdd7ac34b4ab367"],
+  ["kh2_fifth/original/obj/F_EX040.mset", 66752, "612d518e1b60ea65cc887a3e880ce32c3d15ba699534fb2e684ecaf8b1a181c5"],
   ["kh2_fifth/original/obj/GAMEOVER.mset", 107952, "78c2b8dd1923fa23d3e5db4b51c93018396a4fd27ada9f7510e6649fc063523a"],
   ["kh2_fifth/original/obj/M_EX050.a.us", 335856, "bea867b9fcc7d4b476c959fda544aceefba7bcfd8703df5c1cd79b07814466d2"],
   ["kh2_fifth/original/obj/M_EX050.mset", 720704, "bf010436389134cf2b79687ff33d67c4ffe287f4e2159c4101e398d18df90b01"],

@@ -1584,7 +1584,7 @@ static void pl_draw(float to_u) {
         else PD.shadow(g_party_id[i], PLM.mpos[i][1], blob_str(0.55f));
         if (PD.ghost) PD.ghost(g_party_id[i], 0.0f);
         PD.pose(g_party_id[i], slot, PLM.clk[a], PLM.mpos[i], PLM.mface[i], to_u);
-        pcap_commit(i, PLM.mpos[i], PLM.mface[i], slot, PLM.clk[a], floor_y, false, false, 0, 0, 0, NULL);  // (slice 3: the SNAP's party block; on Sora's hand the blob is off, the floor_dy is only the remote's blob y)
+        pcap_commit(i, g_pchar[i], PLM.mpos[i], PLM.mface[i], slot, PLM.clk[a], floor_y, false, false, 0, 0, 0, NULL);  // (slice 3: the SNAP's party block; on Sora's hand the blob is off, the floor_dy is only the remote's blob y)
     }
 }
 

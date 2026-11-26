@@ -13,13 +13,14 @@
 
 enum { NACT_NONE = 0, NACT_ATTACK = 1, NACT_JUMP = 2 };
 #define NACT_MOT_JUMP 3  // = sora.c MOT_JUMP
+#define NACT_MOT_HIGH_JUMP 201  // = sora.c MOT_HIGH_JUMP (s288 port, hjanim: base Sora's High Jump, KH2 B003)
 
 // the action of motion slot `slot` for a body whose attacks are t[0..n): NACT_*; *motion = its motion id (slot / 4)
 static inline int nact_kind(int slot, const KhPtya *t, int n, int *motion) {
     if (motion) *motion = slot >= 0 ? slot / 4 : -1;
     if (slot < 0) return NACT_NONE;
     int id = slot / 4;
-    if (id == NACT_MOT_JUMP) return NACT_JUMP;
+    if (id == NACT_MOT_JUMP || id == NACT_MOT_HIGH_JUMP) return NACT_JUMP;
     for (int i = 0; t && i < n; i++)
         if (t[i].motion == id) return NACT_ATTACK;
     return NACT_NONE;

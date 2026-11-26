@@ -13,11 +13,13 @@
 // (s233) the arrays are by BACKEND row (was: by shown row); CP_DB_ORD (sora_camp_page.h) gives the backend row of each shown row. A new row = one
 // entry in each array (+ a value list below if it is not a toggle) + its place in CP_DB_ORD. Help lines show their first 23 chars (CsDesc.text).
 static const char *const CP_DB_NAME[CP_DB_ROWS] = { "Sora Level", "Unlock Keyblades", "Unlock Drive Forms", "Unlock Summons", "All Abilities", "God Mode", "No Clip",
-    "Become Sora", "Outfit", "Auto Outfits", "Party 1", "Party 2", "Infinite Drive", "Drive Form", "Mickey Rescue", "Infinite MP" };
+    "Become Sora", "Outfit", "Auto Outfits", "Party 1", "Party 2", "Infinite Drive", "Drive Form", "Mickey Rescue", "Infinite MP",
+    "High Jump", "Aerial Dodge", "Gyro Aim", "Quick Run" };  // (dbgjump; dbggyro)
 static const char *const CP_DB_HELP[CP_DB_ROWS] = { "Left/Right: set level", "A or Left/Right: toggle", "A or Left/Right: toggle", "A or Left/Right: toggle", "A or Left/Right: toggle",
     "A or Left/Right: toggle", "Stick, B up, Y down", "Roxas turns into Sora now (Off: story)", "Halloween/Christmas Town, Space Paranoids, Timeless River",
     "Night: Halloween, cold: Christmas", "Left/Right: who stands in Donald's place (this session)", "Left/Right: who stands in Goofy's place (this session)",
-    "Drive gauges stay full", "Form now; stays till Off", "Any Enemy, or Now", "MP never runs out" };
+    "Drive gauges stay full", "Form now; stays till Off", "Any Enemy, or Now", "MP never runs out",
+    "Base Sora: at least LV", "Base Sora: at least LV", "Gyro aims the Keyblade", "Base Sora: at least LV" };  // (dbgjump; dbggyro; s288 port: <= 23 chars)
 #define CP_DB_VIS 7  // (s146) rows shown at once = the 7-row list the window was built for (s140); the list scrolls (p->db_top)
 #define CP_DB_OUTFITS 8  // (s146) Outfit row values: Normal, Halloween Town, Christmas Town, Space Paranoids, Timeless River; (s263) Roxas, Kairi, Green Tunic (= sora_outfit.h OF_N)
 static const char *const CP_DB_OUTFIT_TAG[CP_DB_OUTFITS] = { "Normal", "Halloween", "Christmas", "Paranoids", "Timeless", "Roxas", "Kairi", "Tunic" };  // (<= 9 chars: the tag column is as wide as "L+Triangle"; GUESS that fits)
@@ -26,9 +28,11 @@ static const char *const CP_DB_FORM_TAG[CP_DB_FORMS] = { "Off", "Valor", "Wisdom
 #define CP_DB_MICKEYS 3  // (s233) Mickey Rescue row values
 static const char *const CP_DB_MICKEY_TAG[CP_DB_MICKEYS] = { "Off", "Any Enemy", "Now" };
 // (s233) the rows with a value list (Left / Right step, clamped; A = the next, wraps): their count + tags; 0 = not one
-static int cp_db_nvals_(int be) { return be == 8 ? CP_DB_OUTFITS : be == 13 ? CP_DB_FORMS : be == 14 ? CP_DB_MICKEYS : 0; }
+#define CP_DB_GROWS 4  // (dbgjump) High Jump / Aerial Dodge row values: Off + LV1-3 (= sora_dbgmenu.h g_dbm_hjump / g_dbm_adodge)
+static const char *const CP_DB_GROW_TAG[CP_DB_GROWS] = { "Off", "LV1", "LV2", "LV3" };
+static int cp_db_nvals_(int be) { return be == 8 ? CP_DB_OUTFITS : be == 13 ? CP_DB_FORMS : be == 14 ? CP_DB_MICKEYS : be == 16 || be == 17 || be == 19 ? CP_DB_GROWS : 0; }
 static const char *cp_db_tag_(int be, int v) {
-    const char *const *t = be == 8 ? CP_DB_OUTFIT_TAG : be == 13 ? CP_DB_FORM_TAG : CP_DB_MICKEY_TAG;
+    const char *const *t = be == 8 ? CP_DB_OUTFIT_TAG : be == 13 ? CP_DB_FORM_TAG : be == 16 || be == 17 || be == 19 ? CP_DB_GROW_TAG : CP_DB_MICKEY_TAG;
     return t[v < 0 || v >= cp_db_nvals_(be) ? 0 : v];
 }
 
@@ -46,6 +50,27 @@ static void cp_db_value_(char *b, int n, const CampPage *p, int row) {
     else if (cp_db_nvals_(be)) snprintf(b, (size_t)n, "%s", cp_db_tag_(be, v));  // (s146 Outfit; s233 Drive Form / Mickey Rescue)
     else if (be == 10 || be == 11) snprintf(b, (size_t)n, "%s", v == PCH_NONE ? "None" : pchar_valid(v) ? PCH_TAB[v].name : "?");  // (s217 riku / s220; s233 None)
     else snprintf(b, (size_t)n, "%s", v ? "On" : "Off");
+}
+
+// (dbgtext) user: "I want to be able to type what the description is going to say" for the Debug page's rows. With g_dbgtext on
+// (sora_kb.h; env SAVAGEWIND_SORA_DBGTEXT / live "set dbgtext 1"; s288 port: OFF until the user plays it) the help line at the
+// bottom reads <SORA_ROOT>/debug_menu_text.txt when it has a line for the row (the built-in CP_DB_HELP otherwise):
+//   Row Name = description        (the name as the row shows it, any case; up to 63 characters; \n = a second line)
+// '#' lines and unknown names are skipped. The file is read again when it changes (checked at each rebuild of the page, i.e. on
+// a cursor move), so an edit shows without a restart. (s288 port: the file is only READ, never written: no template is made;
+// the player writes it.) The file reader lives in the DLL glue (sora_camp.h cp_db_text_load_, set as g_cp_db_text_poll):
+// this header stays pure (camp_test: no reader, the built-in text). Off = the built-in text cut at 23 characters, as before.
+#define CP_DB_TEXT_FILE "D:/SoraBotW/debug_menu_text.txt"
+static char g_db_text[CP_DB_ROWS][64];
+static void (*g_cp_db_text_poll)(void);  // (dbgtext) NULL = no file reader (host tests)
+static bool cp_db_same_(const char *a, const char *b) {  // (case-insensitive ASCII; no _stricmp on the Deck build)
+    for (; *a && *b; a++, b++) if ((*a | 0x20) != (*b | 0x20) && *a != *b) return false;
+    return !*a && !*b;
+}
+static const char *cp_db_help_(int be) {
+    if (!g_dbgtext) return CP_DB_HELP[be];  // (s288 port: off = no stat, no file, the old text)
+    if (g_cp_db_text_poll) g_cp_db_text_poll();
+    return g_db_text[be][0] ? g_db_text[be] : CP_DB_HELP[be];
 }
 
 // 4 roots: bg states, title, window, help
@@ -70,8 +95,9 @@ static int cp_build_dbg(CsTree *t, const CampPage *p, const CpVals *v, int r[4])
         nk++;
     }
     win[0] = (CsDesc){ CP_SEQ_(227, 228, 229), .nkids = (uint8_t)nk, .kids = kids };
-    help[0] = (CsDesc){ .x = 150, .y = 352, CP_SEQ_(-1, 124, -1), .flags = CS_A_TEXT_IGNORE_COLOR, .anchor = CS_BOTTOM_LEFT };
-    snprintf(help[0].text, sizeof help[0].text, "%s", CP_DB_HELP[CP_DB_ORD[p->db_row]]);
+    help[0] = (CsDesc){ .x = 150, .y = 352, CP_SEQ_(-1, 124, -1), .flags = CS_A_TEXT_IGNORE_COLOR, .anchor = CS_BOTTOM_LEFT,
+                        .text_long = (uint8_t)(g_dbgtext != 0) };  // (s288 port: up to 63 chars + '\n' only with dbgtext on)
+    snprintf(help[0].text, sizeof help[0].text, "%s", cp_db_help_(CP_DB_ORD[p->db_row]));  // (dbgtext: the user's file wins)
     r[0] = cs_tree_add(t, bg_state, 3); r[1] = cs_tree_add(t, title, 1); r[2] = cs_tree_add(t, win, 1); r[3] = cs_tree_add(t, help, 1);
     return 4;
 }

@@ -9,8 +9,8 @@
 // AB_TAB): Sora has it from the start here. PHH hit_reaction_kh2.py (reference): a Guard that blocks plays motion 42 and
 // sets +0xD70 = 80 invulnerable frames (re:0x3D61D0).
 // GUESS: the block is frontal (nearest enemy in the front half plane; KH2's guard shape is a 120 cm sphere in front).
-// Drive Forms: base Sora only. Valor's ptya Id 11 is a leaping slash (B330 = motion 181), not a guard; the other
-// forms' Id 11 was not read (GUESS: none) - Square in a form stays as it was.
+// Drive Forms: base Sora only, and Limit Form with guardlimit (below; every form's Id 11 read from KH2's data: only Limit's is a
+// Guard). Square in the other forms stays as it was.
 #pragma once
 
 #define MOT_GUARD 173
@@ -19,12 +19,52 @@
 #define GUARD_WIN_A 6           // atkp 161 window, GFR (sora_hits.bin slot 692), used if the hit bake is missing
 #define GUARD_WIN_B 37
 
+// (guardlimit) Limit Form's own Guard. KH2 (VERIFIED, P_EX100_KH1F + W_EX010_KH1F via sorabake info / hits / atkp): its ptya
+// Id 11 is K322 = motion 173 (slot 692, 60 GFR, no root move) with a Keyblade atkp 161 (Type Guard) window GFR 1..35, its
+// Ability field 0 (no Guard ability needed, unlike base Sora's entry); the block-hit is A321 (slot 168, atkp 162 0..40), both
+// in data/forms/limit_hits.bin. The other forms' Id 11: Valor B330 (a leaping slash), Anti F311 (a 12.5 m lunge), Wisdom /
+// Master / Final none - they keep no Guard. User report: "the only form that uses block is Limit" (and Limit could not).
+// SAVAGEWIND_SORA_GUARD_LIMIT=1 / live "set guardlimit 1" = on; 0 = no Guard in any Drive Form (as before).
+static int g_guard_limit = 1;  /* (s288: the user played it, "seemed like they all worked": default ON) */
 static int g_guard_gate = 0;  // (s91 b5-abil) live "set guardgate 1": Guard needs the ability (id 82) equipped on the Abilities page, as in KH2; default OFF = always; debugall ON = counts as equipped (s91 review)
 static int g_guard = 1;  // live "set guard 0/1" (0 = old behaviour: Square always rolls)
 // (s88 review) live "set guardinv 0/1/2": what the 80 frames after a block swallow. 0 = nothing (only the guard window
 // blocks), 1 = enemy hits only (an enemy within the target radius; lava / fire / a lone hazard with no enemy near still
 // lands), 2 = everything (PHH's +0xD70 reading). GUESS default 1: KH2's counter is general, BotW has hazards KH2 has not.
 static int g_guard_inv = 1;
+// (gparry) two-tier guard (user's design): a block within the first g_gparry_win GFR of the Guard motion = a PARRY (KH2's
+// reflect motion 42 + Counterguard as before, AND the attacker staggers: the nearest live enemy in front within 4 u takes a
+// g_gparry_dmg hit of reaction size g_gparry_f54, default 6 = BotW repelled (Rebound)); a block later in the Guard
+// motion = a REGULAR block (spark, clang, invulnerable frames, the reflect motion; no Counterguard, no stagger). With gparry on the
+// block window runs to the end of the Guard motion (KH2's own closes at GFR ~37 of 60; later hits used to land).
+// Beam reflects are unchanged (no stagger). Env SAVAGEWIND_SORA_GUARD_PARRY (s288 port: default 0), live gparry / gparrywin /
+// gparrydmg / gparryf54. Logs '[sora] gparry: ...'.
+// (gparry option B) the parry's reaction = BotW's own parried-enemy one: f54 = the reaction type EnemyDefaultReaction
+// switches on (1.9.0 0x7100849394, vtable 0x7101c54140, factory crc 0x0a5b6fa2 -> 0x7100b73878): 6 -> child
+// '弾かれ' (repelled; Bokoblin_Red.baiprog: Shock, AS 'Rebound'), 7 / 0x13 -> 'ショック' (AS 'Miss'), 8 -> '超ショック'
+// (WeaponIdx 0: drops the weapon), 9 / 0xb / 0xe -> 'ガードブレイク'.
+static int g_gparry = -1, g_gparry_win = 24, g_gparry_dmg = 1, g_gparry_f54 = 6;
+// (gparry, user: "for melee attacks, sora plays his block animation, the enemy recoils, and there is countergaurd")
+// gparrymelee 1 (default) = every melee hit on the guard is the parry (motion 42 + Counterguard + the attacker's
+// repelled reaction), whatever its timing; projectiles go through Link's guard bits (parrylink / parrybits: BotW's own
+// shield parry sends them back). gparrymelee 0 = the timed two-tier guard (gparrywin) again.
+static int g_gparry_melee_basic = 1;
+static bool g_gparry_reg;  // the last block was a regular one: no Counterguard on its reflect motion
+static bool gparry_on(void) {
+    if (g_gparry < 0) g_gparry = env_f("SAVAGEWIND_SORA_GUARD_PARRY", 1) != 0;  /* (s288: the user played it, "seemed like they all worked": default ON) */
+    return g_gparry > 0;
+}
+static bool gparry_live(const char *key, int v) {
+    if (!strcmp(key, "gparry")) g_gparry = v != 0;
+    else if (!strcmp(key, "gparrywin")) g_gparry_win = v;
+    else if (!strcmp(key, "gparrymelee")) g_gparry_melee_basic = v != 0;
+    else if (!strcmp(key, "gparrydmg")) g_gparry_dmg = v;
+    else if (!strcmp(key, "gparryf54")) g_gparry_f54 = v;
+    else return false;
+    LOG("[sora] gparry: live %s %d (parry window GFR 0..%d, stagger hit %d f54 %#x, %s)\n", key, v, g_gparry_win, g_gparry_dmg,
+        g_gparry_f54, gparry_on() ? "on" : "off");
+    return true;
+}
 static struct {
     float inv;            // invulnerable KH frames left after a block
     int blocks_seen;      // linkpos_guard_blocks() last seen
@@ -36,6 +76,7 @@ static struct {
     uint64_t block_at;           // (s90b) vk_frame_counter() of the last guard_block by the window (one spark per hit)
 } G = {0};
 static void (*p_guard_set)(int);
+static void (*p_gparry_set)(int);  // (s288 port, gparry: linkpos_guard_parry_set, NULL on an older exe)
 static int (*p_guard_blocks)(void);
 static int (*p_guard_dmg)(void);
 // (s90b) Guard sends the Guardian beam back (recon/S90_HELPER_PARRY.md option B: the exe hooks the beam's reflect check
@@ -61,8 +102,13 @@ static int (*p_refl_n)(void);
 // (shield wear if Link has a shield equipped). Live "set parrylink 0/1" (default 1; 0 = never touch Link's flags).
 #define LINK_GUARD_FLAGS 0xc40
 #define LINK_GUARD_BITS 0x30u
+// (gparry reflect, user: the guard should also bounce projectiles back) which of Link's guard bits the guard raises: 0x30
+// both (s92), 0x10 isGuard only, 0x20 isGuardJust only. Raising isGuard let Link's shield absorb melee swings before the
+// mod's block saw them (guardhold test 3: Link+0xc40 gained 0x4000); test whether one bit alone reflects projectiles
+// and leaves melee to the mod. Live 'set parrybits 0x..' (decimal: 16 / 32 / 48). Logs a 0x4000 rise ('shield took').
+static uint32_t g_parry_bits = LINK_GUARD_BITS;
 static int g_parry_link = 1;
-static struct { uint64_t actor; uint32_t own; int windows, relost; bool logged; } PL;
+static struct { uint64_t actor; uint32_t own, last; int windows, relost; bool logged; } PL;
 static void parry_link_clear(const char *why) {
     if (PL.own && PL.actor && rd_ok(PL.actor + LINK_GUARD_FLAGS, 4)) {
         uint32_t *f = (uint32_t *)(uintptr_t)(PL.actor + LINK_GUARD_FLAGS);
@@ -77,7 +123,9 @@ static void parry_link_frame(bool on) {
     if (!a || !rd_ok(a + LINK_GUARD_FLAGS, 4)) return;
     uint32_t *f = (uint32_t *)(uintptr_t)(a + LINK_GUARD_FLAGS), v = *f;
     if (PL.own & ~v) PL.relost++;                       // one of our bits was cleared by BotW since last frame
-    PL.own |= LINK_GUARD_BITS & ~(v & ~PL.own);         // bits Link set himself stay his
+    if (gparry_on() && (v & 0x4000u) && !(PL.last & 0x4000u)) LOG("[sora] parrylink: Link's shield took a hit (Link+0xc40 %#x, ours %#x)\n", v, PL.own);
+    PL.last = v;
+    PL.own |= g_parry_bits & ~(v & ~PL.own);         // bits Link set himself stay his
     PL.actor = a, *f = v | PL.own;
     if (!PL.logged) {
         PL.logged = true, PL.windows++;
@@ -101,12 +149,16 @@ static void guard_bind(void) {
     if (!p_refl_set || !p_refl_n) p_refl_set = NULL, p_refl_n = NULL;
     LOG("[sora] guard: beam reflect %s\n", p_refl_n ? "hook present (set parry 0 = off)" : "not in this exe (NEEDS EXE RELINK)");
     if (p_refl_n) G.refl_seen = p_refl_n();
+    // (s288 port, gparry) the exe drops BotW's shield-knockback hit (damage 0, f54 0xd) only while this says so (an older
+    // exe has no export: it never drops that hit, as before)
+    p_gparry_set = (void (*)(int))(void *)GetProcAddress(m, "linkpos_guard_parry_set");
 }
 
 static bool guard_motion(void) { return S.special == SP_GUARD && S.mot; }
 
-// the atkp 161 / 162 guard window of the playing guard motion (GFR, motion-relative)
-static bool guard_window(void) {
+// the atkp 161 / 162 guard window of the playing guard motion (GFR, motion-relative): KH2's own. (s288 port) A friend's
+// duel hit always uses this one (sora_duel.h du_take_hit: s285-s287 were tested on it), gparry or not.
+static bool guard_window_kh(void) {
     if (!guard_motion()) return false;
     const HitSlot *h = hit_slot(S.mot->slot, 0);
     int a = g_guard_from < GUARD_WIN_A ? g_guard_from : GUARD_WIN_A;
@@ -118,6 +170,12 @@ static bool guard_window(void) {
     }
     return false;
 }
+// the window for BotW's hits: KH2's, or with gparry the rest of the Guard motion too (a regular block)
+static bool guard_window(void) {
+    if (guard_motion() && S.motion == MOT_GUARD && gparry_on())
+        return S.clock >= (g_guard_from < GUARD_WIN_A ? g_guard_from : GUARD_WIN_A);  // (gparry: the rest of the Guard motion = a regular block)
+    return guard_window_kh();
+}
 
 static bool guard_front(const float p[3]) {  // GUESS: the hit comes from the front half plane (nearest enemy; none = a shot)
     float e[2];
@@ -126,11 +184,17 @@ static bool guard_front(const float p[3]) {  // GUESS: the hit comes from the fr
 
 // The Square press. true = the press became a Guard (the caller skips the roll).
 static bool guard_press(uint64_t press, float sspeed, bool is_free, const float p[3]) {
-    if (!g_guard || (g_guard_gate && g_abilfix && !g_dbgall && !ab_on(AB.on, AB_GUARD)) || !(press & BTN_ROLL) || sspeed > 0 || fm_in_form() || S.act != ACT_IDLE || S.takeoff > 0 ||
+    bool limit = g_guard_limit && IN_LIMIT;  // (guardlimit: Limit Form's own K322; its KH2 entry needs no Guard ability)
+    if (!g_guard || (!limit && g_guard_gate && g_abilfix && !g_dbgall && !ab_on(AB.on, AB_GUARD)) || !(press & BTN_ROLL) || sspeed > 0 || (fm_in_form() && !limit) || S.act != ACT_IDLE || S.takeoff > 0 ||
         S.air_frames || !is_free || !mot_of(MOT_GUARD))
         return false;
     play(MOT_GUARD), S.special = SP_GUARD;
-    LOG("[sora] guard at %.3f %.3f %.3f face %.1f (window GFR %d..%d)\n", p[0], p[1], p[2], S.face * 180 / PI, g_guard_from < GUARD_WIN_A ? g_guard_from : GUARD_WIN_A, GUARD_WIN_B);
+    int wa = g_guard_from < GUARD_WIN_A ? g_guard_from : GUARD_WIN_A, wb = GUARD_WIN_B;  // (the window guard_window uses: the hit bake's)
+    const HitSlot *hw = S.mot ? hit_slot(S.mot->slot, 0) : NULL;
+    for (int i = 0; hw && i < hw->nwin; i++)
+        if (hw->win[i].atkp == 161) wa = g_guard_from < hw->win[i].start ? g_guard_from : hw->win[i].start, wb = hw->win[i].end;
+    LOG("[sora] guard at %.3f %.3f %.3f face %.1f (%s, slot %d, window GFR %d..%d)\n", p[0], p[1], p[2], S.face * 180 / PI,
+        limit ? "Limit Form" : "base", S.mot ? S.mot->slot : -1, wa, wb);
     return true;
 }
 
@@ -156,9 +220,44 @@ static void guard_block(const float p[3], float to_u, int dmg, const char *how, 
     static int se = -2;
     if (se == -2) se = sora_sfx_id("wall_hit");  // GUESS: the Keyblade clang (se500 #10); KH2's guard hit se not found
     if (se >= 0) sora_sfx_play_at(se, 1.0f, c);
+    // (gparry) a melee hit on the Guard motion: parry (early) or regular block (late); beams and blocks during the reflect as before
+    // (s288 port) BotW's hits only ("exe drop" / "refund"): a friend's "duel hit" keeps the old block (no parry / stagger)
+    bool tier = gparry_on() && (!strcmp(how, "exe drop") || !strcmp(how, "refund")) && S.motion == MOT_GUARD;
+    // (gparry test 1: the user wants a reaction on every block) the regular block plays the reflect motion too, without the
+    // Counterguard offer (g_gparry_reg, read by t0_reaction) and without the stagger
+    float gclk = S.clock;  // (the guard clock at the hit; play() below resets S.clock)
+    g_gparry_reg = tier && !g_gparry_melee_basic && gclk > g_gparry_win;  // (gparrymelee 1: every melee block is the parry)
+    if (g_gparry_reg) {
+        if (mot_of(MOT_GUARD_REFLECT)) play(MOT_GUARD_REFLECT), S.special = SP_GUARD;
+        LOG("[sora] gparry: REGULAR block (guard clock %.1f > %d GFR, damage %d, %s): reflect motion, no Counterguard / stagger\n",
+            gclk, g_gparry_win, dmg, how);
+        return;
+    }
     if (S.motion != MOT_GUARD_REFLECT && mot_of(MOT_GUARD_REFLECT)) play(MOT_GUARD_REFLECT), S.special = SP_GUARD;
     LOG("[sora] GUARD blocked a hit (damage %d, %s) at %.3f %.3f %.3f: reflect motion, %.0f invulnerable frames\n", dmg, how,
         p[0], p[1], p[2], G.inv);
+    if (tier) {  // the parry: the attacker = the nearest live enemy in front within 4 u (BotW's hit carries no attacker)
+        uint64_t a[64];
+        float e[64][3];
+        int32_t l[64];
+        int n = linkpos_enemies(a, e, l, 64), best = -1;
+        float bd = 16.0f;
+        for (int k = 0; k < n; k++) {
+            float dx = e[k][0] - p[0], dz = e[k][2] - p[2], d2 = dx * dx + dz * dz;
+            if (!(l[k] > 0 && d2 < bd && dx * sinf(S.face) + dz * cosf(S.face) >= 0)) continue;
+            char nm[48] = {0};  // (s288 port: Enemy_* only, never an animal / NPC: the hit goes to every peer through EDMG)
+            if (body_actor_name(a[k], nm, (int)sizeof nm) <= 0 || strncmp(nm, "Enemy_", 6)) continue;
+            bd = d2, best = k;
+        }
+        if (best >= 0) {
+            linkpos_damage_enemy_ex(a[best], g_gparry_dmg, g_gparry_f54, 0);
+            float at[3] = {e[best][0], e[best][1] + 1.0f, e[best][2]};
+            sora_fx_event(kbfx_name("hit_finish"), at, S.face, to_u);
+        }
+        LOG("[sora] gparry: PARRY (guard clock %.1f <= %d GFR): %s\n", gclk, g_gparry_win,
+            best >= 0 ? "attacker staggered (hit queued)" : "no live enemy in front within 4 u");
+        if (best >= 0) LOG("[sora] gparry: stagger %llx %.1f u away, %d damage\n", (unsigned long long)a[best], sqrtf(bd), g_gparry_dmg);
+    }
 }
 
 // (s133 review) Reflect cancelled while Link has the pad / a load: guard_frame only runs while Sora is driven, so drop the
@@ -169,6 +268,49 @@ static void guard_release(const char *why) {
     parry_link_clear(why);
 }
 
+// (adblock) user: "In KH2, Aerial Dodge worked more like a block rather than invincibility. So if an enemy were to hit you
+// while you were in aerial dodge, the attack would get blocked or deflected." While the Aerial Dodge motion plays in the air
+// (base Sora's sora_bdodge.h or Master's sora_master.h, both MOT_AIR_DODGE) the exe's hit drop is on from every side, as the
+// guard window's; a dropped hit = the guard's Keyblade spark + clang (ad_block), but the dodge goes on: no reflect motion, no
+// 80 invulnerable frames. SAVAGEWIND_SORA_AIR_DODGE_BLOCK=1|2 / live "set adblock 0/1/2" (sora.c): 1 = block, 2 = deflect (the contributor's
+// tester tried both, liked 2); s288 port: default 0 (off) until the user plays it.
+// (adblock 2, user: "Instead of it blocking, are we able to have it like how link deflects with his shield. So that potential
+// attacks or projectiles get reflected back.") Mode 2 = deflect: during the dodge Link's own guard + just-guard bits are raised
+// (parry_link_frame, the guard's s92 option A) and the beam reflect is on from every side (as Reflect's barrier), so BotW's
+// vanilla shield parry sends what it can back (a Guardian beam: REFLECT x0.3 speed at the enemies); melee hits are still
+// dropped with the spark + clang, and the dodge goes on (a reflect while dodging = ad_block, not the guard's reflect motion).
+static int g_adblock = 1;  /* (s288: the user played it, "seemed like they all worked": default ON); the user tested 1 = block */
+static bool g_ad_prev;  // (last frame's dodge window: the exe's drop runs the game frame after the set, like set_win_prev)
+// (adblock test 2, user: "When the deflection happens, Sora reverts to links glidding animation") Log: the deflected hit held
+// Link in place mid-air (BotW's guard reaction), Sora's jump read the stopped fall as a landing ("land ... (stopped)" at
+// +155 cm), the stopped push against a wall then started a climb try = Link got the pad in the air and BotW opened the
+// paraglider (state 0x8002), whose pose the puppet copied. For AD_HOLD_MS after a deflect: no stopped-fall landing and no
+// push climb try (sora.c).
+#define AD_HOLD_MS 500
+static uint64_t g_ad_hold_ms;
+static bool ad_hold(void) { return g_ad_hold_ms && GetTickCount64() < g_ad_hold_ms; }
+// (adblock test 3, user: a reflected PROJECTILE, still in the air, left Sora in a standing pose: "Are we able to have it to
+// even where Sora reflects the attack, it doesn't cancel out the aerial dodge animation?") A projectile goes through BotW's
+// own shield parry (Link's guard bits), not the exe drop, so ad_block never ran (no log line); BotW's parry reaction held
+// Link in the air while the short dodge motion ran out into the fall pose. sora.c: in adblock 2, within AD_PIN_MS of the
+// dodge's start, a jump step that barely moves while the arc asks for a clear move = that hold -> ad_hold too; while
+// ad_hold the dodge motion is not handed to the fall (its loop keeps playing).
+#define AD_PIN_MS 700
+static uint64_t g_ad_start_ms;  // (the last Aerial Dodge's start, guard_frame's rising edge of adw)
+// (s288 port) the Aerial Dodge block window, shared by guard_frame (BotW's hits) and sora_duel.h du_take_hit (a friend's
+// duel hit: the user ruled 2026-11-25 that the dodge blocks those too, as Dodge Roll / Quick Run's invulnerable frames)
+static bool ad_window(void) { return g_adblock && S.motion == MOT_AIR_DODGE && ACT_AIR(S.act) && !S.special; }
+static void ad_block(const float p[3], float to_u, int dmg) {
+    g_ad_hold_ms = GetTickCount64() + AD_HOLD_MS;  // (no stopped-fall landing / climb try right after it)
+    if (vk_frame_counter() <= G.block_at + 2) return;  // (one block per hit, as guard_block)
+    G.block_at = vk_frame_counter();
+    float c[3] = {p[0] + sinf(S.face) * 0.5f, p[1] + 0.9f, p[2] + cosf(S.face) * 0.5f};
+    sora_fx_event(kbfx_name("hit_guard"), c, S.face, to_u);  // (the guard's spark, w_ex010.3)
+    static int se = -2;
+    if (se == -2) se = sora_sfx_id("wall_hit");  // (the guard's clang, GUESS as guard_block)
+    if (se >= 0) sora_sfx_play_at(se, 1.0f, c);
+    LOG("[sora] AERIAL DODGE %s a hit (damage %d) at %.3f %.3f %.3f: the dodge goes on\n", g_adblock == 1 ? "blocked" : "deflected", dmg, p[0], p[1], p[2]);  // (s288 duel test: say "blocked" with adblock 1)
+}
 // (s258) the Reaction Command Dodge's invulnerable KH frames (sora_react.h rc_run). Own counter: G.inv only counts with an
 // enemy within 4 m (nearest_enemy), and a Lynel's charge / swing hit Sora with the Lynel 5.5 - 7.2 m away (last60.log s258).
 static float g_rc_inv;
@@ -183,24 +325,35 @@ static bool guard_frame(const float p[3], float to_u, float kh, int *hits_seen, 
     bool inv = (G.inv > 0 && (g_guard_inv >= 2 || (g_guard_inv == 1 && nearest_enemy(p, e)))) || g_rc_inv > 0;  // (s258: the Reaction Dodge's frames need no enemy within 4 m)
     bool rf = mg_reflect_up();  // (s133 magic) Reflect's barrier is up: every hit is blocked like the guard window's, the Guardian beam is reflected
     bool win = g_guard && guard_window() && guard_front(p), want = win || inv || rf || pl_invuln();  // (s133 limits: a party Limit runs = invulnerable)
+    bool adw = ad_window();  // (adblock: the Aerial Dodge blocks)
+    bool adp = adw && g_adblock == 2;  // (adblock 2: it deflects like Link's shield parry)
+    want = want || adw;
     bool refunded = false;
     int life = linkpos_link_life();
     G.set_win_prev = G.set_win, G.set_win = win;
-    parry_link_frame((g_guard && g_parry && guard_window() && (g_parry_front != 2 || guard_front(p))) || (rf && g_parry));  // (s92 option A; s133: and Reflect's barrier)
+    parry_link_frame((g_guard && g_parry && guard_window() && (g_parry_front != 2 || guard_front(p))) || (rf && g_parry) || adp);  // (s92 option A; s133: and Reflect's barrier; adblock 2)
     if (p_refl_n) {  // (s90b) the beam reflect: the guard window only (no reflect off the 80 invulnerable frames)
-        bool gwin = g_guard && g_parry && guard_window() && (g_parry_front != 2 || guard_front(p)), rwin = gwin || (rf && g_parry);
-        p_refl_set(rwin ? 1 : 0, p, rf && !gwin ? NAN : g_parry_front == 1 ? S.face : NAN, g_parry_rad / 100.0f);  // (s133: Reflect = all around, no direction test)
+        bool gwin = g_guard && g_parry && guard_window() && (g_parry_front != 2 || guard_front(p)), rwin = gwin || (rf && g_parry) || adp;
+        p_refl_set(rwin ? 1 : 0, p, (rf || adp) && !gwin ? NAN : g_parry_front == 1 ? S.face : NAN, g_parry_rad / 100.0f);  // (s133: Reflect = all around, no direction test; adblock 2 too)
         int r = p_refl_n();
         if (r != G.refl_seen) {
             LOG("[sora] GUARD reflected a beam (#%d, %d since last frame)\n", r, r - G.refl_seen);
             G.refl_seen = r;
-            guard_block(p, to_u, 0, "beam reflect", gwin || !rf);  // (skipped if its dropped damage already played one; s133: Reflect's barrier alone = its own block)
+            if (adp && !gwin && !rf) ad_block(p, to_u, 0);  // (adblock 2: reflected while dodging, the dodge goes on)
+            else guard_block(p, to_u, 0, "beam reflect", gwin || !rf);  // (skipped if its dropped damage already played one; s133: Reflect's barrier alone = its own block)
         }
     }
     if (G.exe_ok) {
         p_guard_set(want || mk_drops_hits() || g_dbm_god ? 1 : 0);  // (s110 review: this ran after mk_tick and cleared Mickey mode's drop every driving frame)
+        if (p_gparry_set) p_gparry_set(gparry_on() ? 1 : 0);  // (s288 port: the exe's f54 0xd drop only with gparry on; stale after 3 frames)
         int b = p_guard_blocks();  // (the drop ran in the game frame after last frame's set: its reason is set_win_prev)
-        if (b != G.blocks_seen) { G.blocks_seen = b; if (!mk_drops_hits()) guard_block(p, to_u, p_guard_dmg(), "exe drop", G.set_win_prev || win); }  // (Mickey's drops: sora_mickey.h charges them)
+        if (b != G.blocks_seen) {
+            G.blocks_seen = b;
+            bool by_guard = G.set_win_prev || win;
+            if (mk_drops_hits()) {}  // (Mickey's drops: sora_mickey.h charges them)
+            else if (!by_guard && (g_ad_prev || adw)) ad_block(p, to_u, p_guard_dmg());  // (adblock: deflected, the dodge goes on)
+            else guard_block(p, to_u, p_guard_dmg(), "exe drop", by_guard);
+        }
     } else if (want && link_hits != *hits_seen && G.life_prev > 0 && life > 0 && life < G.life_prev &&
                vk_frame_counter() <= G.life_at + 2) {  // (life 0: BotW's death already ran; a stale life_prev would over-heal)
         uint64_t a = link_actor();
@@ -211,5 +364,7 @@ static bool guard_frame(const float p[3], float to_u, float kh, int *hits_seen, 
         }
     }
     G.life_prev = refunded ? G.life_prev : life, G.life_at = vk_frame_counter();
+    if (adw && !g_ad_prev) g_ad_start_ms = GetTickCount64();  // (adblock: the dodge started)
+    g_ad_prev = adw;
     return refunded;
 }

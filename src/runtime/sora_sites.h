@@ -126,7 +126,81 @@
     X(atkact_large_vt,         0x0000000000ull, 0x7001c0e9c0ull)    \
     X(atkact_jump_vt,          0x0000000000ull, 0x7001c0cb30ull)    \
     X(atkact_forkweapon_vt,    0x0000000000ull, 0x7001bfdab0ull)    \
-    X(atkact_animtiming_vt,    0x0000000000ull, 0x7001bd2668ull)
+    X(atkact_animtiming_vt,    0x0000000000ull, 0x7001bd2668ull)    \
+    /* s269 warpcore, co-op item 4 (recon/s267/S267_HELPER_WARP.md, recon/s269/S269_HELPER_WARP.md): BotW's own fast travel to the Travel */ \
+    /* Medallion slot. 1.9.0 only (1.8.2 = 0: the DLL's warp refuses there). The DLL calls them through sw_api (api->site by name). */ \
+    /* Patterns (tools/sites/sora_sites.py pattern, upstream matcher; each finds exactly this address in the 1.9.0 main: */ \
+    /* sb/s269/warpcore/warp_sites_check.py). The gdt accessors are 4-word stubs that differ only in a masked handle offset, so */ \
+    /* those rows are 'call' patterns at a caller's bl / b. */ \
+    /* warp_request (map char*, pos char*, actor 0) code: b4000000/ff00001f b4000001/ff00001f d10103ff a9027bfd f9001bf3 910083fd 90000008/9f00001f 91000108/ffc003ff */ \
+    /* warp_prohibited () bool, call at 0 (0x7000db1700): 94000000/fc000000 37000000/fff8001f 94000000/fc000000 36000000/fff8001f 52800081 f9400288 aa1403e0 f9427108 */ \
+    /* warp_ui_exists () bool code: 90000008/9f00001f 91000108/ffc003ff f9400108 f100011f 1a9f07e0 d65f03c0 */ \
+    /* warp_ui_event () bool (UI mgr +0x64c30 bit 12; no null check: ui_exists first) code: 90000008/9f00001f 52898629 72a000c9 f9400108/ffc003ff f9400108 38696908 53041100 d65f03c0 */ \
+    /* warp_ui_trans () bool code: a9bf7bfd 910003fd 94000000/fc000000 36000000/fff8001f 90000008/9f00001f 52898649 72a000c9 f9400108/ffc003ff f9400108 38696908 53051500 */ \
+    /* warp_paused () bool, call at 0 (0x7000e6929c): 94000000/fc000000 37000000/fff8001f 94000000/fc000000 37000000/fff8001f f94242a0 aa1f03e2 911202b4 f94246a1 */ \
+    /* warp_dest_pos_set (x0 &vec3, w1 0) / warp_dest_deg_set (s0 deg, w0 0): call at 0 / 5 (0x7000cf6a44 bl, 0x7000cf6a58 b): */ \
+    /*   94000000/fc000000 bd400260 52800020 f9400bf3 a8c27bfd 14000000/fc000000 */ \
+    /* warp_dest_pos_get (x0 &out, w1 0) / warp_dest_deg_get (w0 0) -> s0: call at 0 / 4 (0x7000cf6144, 0x7000cf6154): */ \
+    /*   94000000/fc000000 2a1f03e0 f800c2bf b90016bf 94000000/fc000000 bd0012a0 52800020 14000000/fc000000 */ \
+    /* warp_savepos_get (x0 &out, w1 0) / warp_saveang_get (w0 0) -> s0 (PlayerSavePos / PlayerSavePosAngleYDegree): call at 0 / 2 */ \
+    /*   (0x7000e40d04, 0x7000e40d0c): 94000000/fc000000 2a1f03e0 94000000/fc000000 52b86688 1e270101 1e212800 90000008/9f00001f 910003e1 f9400108/ffc003ff d10043a2 */ \
+    /* warp_str_map "MainField/WarpIcon" ref at 1 (0x7000dae844): 90000015/9f00001f 910002b5/ffc003ff 90000008/9f00001f 91000108/ffc003ff f9400100 91419408 a98ad915 94000000/fc000000 */ \
+    /* warp_str_pos "WarpPoint01" ref at 1 (0x7000dae83c): 90000016/9f00001f 910002d6/ffc003ff 90000015/9f00001f 910002b5/ffc003ff 90000008/9f00001f 91000108/ffc003ff f9400100 91419408 */ \
+    X(warp_request,            0x0000000000ull, 0x7000e81a30ull)    \
+    X(warp_prohibited,         0x0000000000ull, 0x7000d394c0ull)    \
+    X(warp_ui_exists,          0x0000000000ull, 0x7000e794b0ull)    \
+    X(warp_ui_event,           0x0000000000ull, 0x7000e89ae0ull)    \
+    X(warp_ui_trans,           0x0000000000ull, 0x7000e89a20ull)    \
+    X(warp_paused,             0x0000000000ull, 0x7000d467acull)    \
+    X(warp_dest_pos_set,       0x0000000000ull, 0x7000d38a30ull)    \
+    X(warp_dest_deg_set,       0x0000000000ull, 0x7000d389e0ull)    \
+    X(warp_dest_pos_get,       0x0000000000ull, 0x7000d389f0ull)    \
+    X(warp_dest_deg_get,       0x0000000000ull, 0x7000d389d0ull)    \
+    X(warp_savepos_get,        0x0000000000ull, 0x7000d37ea0ull)    \
+    X(warp_saveang_get,        0x0000000000ull, 0x7000d37ef0ull)    \
+    X(warp_str_map,            0x0000000000ull, 0x70015eedefull)    \
+    X(warp_str_pos,            0x0000000000ull, 0x700161794dull)    \
+    /* s269 warpcore (main session's note from recon/s270/S270_HELPER_MAPWARP.md sec 2 + 6): the full map's medallion icon + the */ \
+    /* in-world pillar. warp_map_mgr = the map manager pointer var (d = [it]; d+0x480 the medallion marker, +0x488 its effect handle), */ \
+    /*   ref at 1 (0x7000d0e040 add): 90000015/9f00001f 910002b5/ffc003ff f94002a8 91122114 aa1403e0 94000000/fc000000 36000000/fff8001f aa1403e0 */ \
+    /* warp_map_icon_set (x0 d, w1 0x2a, x2 &vec3) = FUN_7100d88670 code: d100c3ff a9017bfd a9024ff4 910043fd 52800028 aa0003f3 3912e008 f9424000 */ \
+    /* warp_map_medal_fx (x0 d, x1 &vec3) = FUN_7100d88704 (kills + respawns "DLC_WarpMarker_Loop") code: */ \
+    /*   d10103ff a9017bfd f90013f5 a9034ff4 910043fd 90000008/9f00001f f9400108/ffc003ff f9400108 b940d908 */ \
+    X(warp_map_mgr,            0x0000000000ull, 0x7001e17ef8ull)    \
+    X(warp_map_icon_set,       0x0000000000ull, 0x7000d88670ull)    \
+    X(warp_map_medal_fx,       0x0000000000ull, 0x7000d88704ull)    \
+    /* s288 port of #46 logchop: these rows go at the END (a row in the middle moves the struct offsets an older DLL / exe reads). */ \
+    /* 1.9.0 only (1.8.2 = 0: the chop is skipped there). */ \
+    X(drop_request,            0x0000000000ull, 0x7000bdc1f0ull)    \
+    X(trunk_chop_vt,           0x0000000000ull, 0x7001c711a8ull)    \
+    /* s288 port of #44 / #45 (kh2steps, watersplash): rows at the END (a middle row moves the struct offsets an older DLL / exe reads); 1.9.0 only. */ \
+    X(contact_fx_mgr_ptr,      0x0ull,          0x7001d66ab8ull)    \
+    X(contact_rec_init,        0x0ull,          0x700058194cull)    \
+    X(contact_fx_play,         0x0ull,          0x70011f1ab4ull)    \
+    X(xlink_set_prop_f,        0x0ull,          0x7000f515ecull)    \
+    X(xlink_set_prop_i,        0x0ull,          0x7000f514e4ull)    \
+    X(elink_emit,              0x0ull,          0x7001100bd0ull)    \
+    X(mat_table_ptr,           0x0ull,          0x7001d66ac8ull)    \
+    X(mat_sub_index,           0x0ull,          0x7001597fa0ull)    \
+    /* s288 port of #54 / #58 / #59: these rows go at the END (a row in the middle moves the struct offsets an older DLL / exe */ \
+    /* reads). The PlayerInfo pointer = the existing player_info row (1.9.0 0x7001e13ed0), no row of its own. */ \
+    /* (eqtabs) BotW's quick weapon selector equips a pouch item (1.9.0 0x7100e25af4) with two calls: ui::PauseMenuDataMgr */ \
+    /* equip(mgr, item) 0x7100d9a4e0 (clears +0x24 on the items of the same type, sets the item's, updates the lists) and */  \
+    /* the player request 0x7100e88fb0(item) (type 0: name +0x28, value +0x20, modifier -> 0x7100b24cdc). 1.9.0 VERIFIED */  \
+    /* static (headless Ghidra, D:/KairiWork/ghidra/eq4.c / eq5.c); 1.8.2 not looked up = 0 (off) */                          \
+    X(pouch_equip,             0x0ull,          0x7000d9a4e0ull)    \
+    X(player_equip_req,        0x0ull,          0x7000e88fb0ull)    \
+    /* (eqarmor) the quick selector's "none" entry (1.9.0 0x7100e25948): PauseMenuDataMgr unequip(mgr, item) 0x7100d9a590, */ \
+    /* the pouch default name per type 0x7100d940c4(mgr, type), the player's wanted-name setter 0x7100cbe4d0(player, name, */ \
+    /* value, -1, &mod), player = 0x7100cc6fd0([PlayerInfo ptr 0x7101e13ed0]). VERIFIED static (D:/KairiWork/ghidra/eq2-5.c) */ \
+    X(pouch_unequip,           0x0ull,          0x7000d9a590ull)    \
+    X(pouch_dflt_name,         0x0ull,          0x7000d940c4ull)    \
+    X(player_equip_set,        0x0ull,          0x7000cbe4d0ull)    \
+    X(player_from_info,        0x0ull,          0x7000cc6fd0ull)    \
+    /* s288 port of #61 mgelem: this row goes at the END (a row in the middle moves the struct offsets an older DLL / exe reads). */ \
+    /* The enemies' element reaction react(this, el) = S59_HELPER_FIRE.md "0x7100a73ec4" slot 12, S61_HELPER_SITES.md */ \
+    /* enemy_fire_reaction (1.8.2 0x7000a73ec4 / 1.9.0 0x7000b873d4, 2 anchors). */ \
+    X(elem_react,              0x7000a73ec4ull, 0x7000b873d4ull)
 
 typedef struct {
 #define SORA_SITE_FIELD(n, a, b) uint64_t n;

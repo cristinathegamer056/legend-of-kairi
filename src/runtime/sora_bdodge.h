@@ -17,6 +17,7 @@ static struct { bool pend; float frames; } BD;  // frames = KH frames B has been
 
 static int bd_lv(void) {  // base Sora's Aerial Dodge level (0 = none)
     int lv = ml_dodge_lv() - 1;
+    if (g_dbm_adodge > lv) lv = g_dbm_adodge > 3 ? 3 : g_dbm_adodge;  // (dbgjump: the Debug Menu's Aerial Dodge row, LV1-3)
     return lv < 0 ? 0 : lv > 4 ? 4 : lv;
 }
 // at the B press in the air (S.act == ACT_JUMP, nothing else playing): true = tap-or-hold is judged, the glide does NOT arm yet
@@ -30,7 +31,7 @@ static bool bd_press(void) {
 static void bd_tick(uint64_t held, float kh, const float sdir[2], float sspeed, float z_up, const float p[3]) {
     if (!BD.pend) return;
     if (S.act != ACT_JUMP || S.special || fm_in_form()) { BD.pend = false; return; }  // (something else took over)
-    if (held & BTN_JUMP) {
+    if ((held & BTN_JUMP) && !g_glide_btn) {  // (glidebtn 1: Cross never glides - a held press is the dodge too)
         if ((BD.frames += kh) < (float)g_bd_tap) return;
         BD.pend = false;
         S.glide_armed = true;  // a hold: the Glide, as before

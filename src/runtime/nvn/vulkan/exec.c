@@ -8786,7 +8786,16 @@ void vk_scene_depth_describe3(char *out, size_t n) {
 bool sora_draw_scene_want(void);
 void sora_draw_scene_pass(VkImageView view, VkFormat fmt, uint32_t w, uint32_t h, const float vp[4]);
 bool sora_draw_cam_override(void);  // (s108: the inventory's menu camera is on)
+bool sora_draw_flame_front_wanted(void);  // (s288 port, flamefront: a DLL sent strength > 0 lately)
 static struct { NvnTexture *t, *src, *last; float vp[4]; bool hit, co; uint64_t fs, n, last_frame, after, fin_frame; unsigned fin_n, co_logged, inv_said; } ub;
+// (flamefront) the scene colour the composite samples (BotW's finished 3D image, flames in it, before its 2D UI), for the
+// bodies' pass: valid only inside sora_draw_scene_pass of this frame (ui_boundary_run sets it right before, clears it after).
+static VkImageView g_scol_view;
+bool vk_scene_color(VkImageView *view) {
+    if (!g_scol_view) return false;
+    if (view) *view = g_scol_view;
+    return true;
+}
 
 // (draw_, after the draw is recorded) this draw is BOTW's scene composite
 static void ui_boundary_check(Prog *pr, CmdRec *r) {
@@ -8864,7 +8873,21 @@ static void ui_boundary_run(void) {
             ub.vp[2], ub.vp[3], (unsigned long long)ub.n, (unsigned long long)ub.after);
     ub.last = ub.t, ub.last_frame = vk_frame_counter(), ub.after = 0;
     vk_end_pass();
+    g_scol_view = VK_NULL_HANDLE;
+    if (sora_draw_flame_front_wanted()) {  // (flamefront) the composite's source as a sampled view (GENERAL, as the game's own passes leave it)
+        // (s288 port) only while the DLL wants it, and only a source that already is a GPU-owned image (a render target):
+        // the existing backend as it is, never vk_tex(.., true), which would take a CPU-owned texture over (its CPU updates
+        // would stop: the invsora / menu path's source can be one)
+        TexBackend *sb = ub.src && ub.src->backend && renderer_is_gpu_owned(ub.src) ? (TexBackend *)ub.src->backend : NULL;
+        if (sb && sb != b && sb->image && sb->layers == 1  /* (s288 review: never the pass's own target) */ && sb->samples == 1 && (sb->aspect & VK_IMAGE_ASPECT_COLOR_BIT) && !sb->in_feedback_layout) {
+            g_scol_view = vk_image_view(sb, VK_IMAGE_VIEW_TYPE_2D, sb->format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
+            static int said;
+            if (g_scol_view && !said++) LOG("[sora-draw] flamefront: scene colour #%llu %ux%u format %d for the bodies\n",
+                                           (unsigned long long)ub.src->debug_id, sb->width, sb->height, (int)sb->format);
+        }
+    }
     sora_draw_scene_pass(v, f, b->width, b->height, vp);
+    g_scol_view = VK_NULL_HANDLE;
     vk_dyn_forget();     // (our pipelines, viewport, scissor, sets: draw_'s state cache knows nothing)
     st.rt_dirty = true;  // (the next draw begins the game's pass again)
 }

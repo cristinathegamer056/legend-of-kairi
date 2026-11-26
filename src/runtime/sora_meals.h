@@ -457,7 +457,7 @@ static int meal_menu_tick(uint64_t *press) {
     if (*press & BTN_ATTACK) {
         *press &= ~BTN_ATTACK;
         // (s93 review: no eating at 0 life - link_heal's fallback is linkpos_link_heal, which must not revive a dying Link)
-        if (M.dead > 0 || linkpos_link_life() <= 0 || MEAL.cursor < 0 || MEAL.cursor >= MEAL.n) { sora_sfx_event("error", 1); return -1; }
+        if (M.dead > 0 || linkpos_link_life() <= 0 || MEAL.cursor < 0 || MEAL.cursor >= MEAL.n || du_no_items()) { sora_sfx_event("error", 1); return -1; }  // (s272 duel: no items in a duel)
         meal_use(MEAL.cursor);  // (s98 potion: KH2's ITEM motion A110 + item SEs, mealanim)
         M.dead = 8, M.sub = -1, M.cursor = 0, M.sub_cursor = 0;  // re:0x3B21D0: executed
         meal_scan();

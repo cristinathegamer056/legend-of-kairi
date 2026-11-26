@@ -6,6 +6,7 @@
 #    txt>" = whose TEXID table the recording's tex ids index. Exit 1 on a failed run / solve.
 # s161 --isotails 1 (King Mickey P_EX200 / P_EX220, PHH's ISOLATED_TAIL_FILES): the main runs print NEEDTAILS <id> <n>
 #    for an alive element; its tails are then recorded in 5 FRESH processes (--tailsof id,n) -> <tag>_t<id>_<cam>.txt.
+# s280 FXREC_WINE (recordall --wine, Linux): the command that starts the Windows fxrec_boot.exe (unset on Windows)
 FX="$1"; OUT="$2"; TAG="$3"; EXTRA="$4"
 D="$(cd "$(dirname "$0")" && pwd)"; EXE="${FXREC_BOOT:-$D/build/fxrec_boot.exe}"
 KHX="${FXREC_KH2:-D:/KH2Extract}"; PY="${FXREC_PYTHON:-python}"   # sorabuild sets FXREC_KH2 / FXREC_PYTHON / FXREC_GAMEEXE
@@ -14,7 +15,7 @@ mkdir -p "$OUT"; rm -f "$OUT/${TAG}.failed"
 "$PY" -E -P "$D/hdtab.py" "$TEX" --out "$OUT/${TAG}.texhd" && "$PY" -E -P "$D/hdtab.py" "$FX" --out "$OUT/${TAG}.fxhd" || exit 1
 echo "${FX#*/original/}" > "$OUT/${TAG}.fxname"
 # run <cam> <cam args> [<txt name> <more args>]: one process; its txt = <out>/<txt name>_<cam>.txt (default <tag>)
-run() { T="${3:-$TAG}"; "$EXE" --tex "$TEX" --texhd "$OUT/${TAG}.texhd" --fxhd "$OUT/${TAG}.fxhd" --fx "$FX" --frames 600 \
+run() { T="${3:-$TAG}"; $FXREC_WINE "$EXE" --tex "$TEX" --texhd "$OUT/${TAG}.texhd" --fxhd "$OUT/${TAG}.fxhd" --fx "$FX" --frames 600 \
         --all "$OUT/${TAG}.%s_$1.fxd" $EXTRA $2 $4 ${FXREC_GAMEEXE:+"$FXREC_GAMEEXE"} > "$OUT/${T}_$1.txt" 2>&1 \
         && grep -q "^FILE DONE" "$OUT/${T}_$1.txt" || { echo "run ${T}_$1 FAILED (see $OUT/${T}_$1.txt)"; touch "$OUT/${TAG}.failed"; }; }
 cams() { run A "" "$@" & run B "--cam 37,23" "$@" & run C "--cam -61,-14" "$@" & run X "--owner x" "$@" & run Z "--owner z" "$@" & wait; }

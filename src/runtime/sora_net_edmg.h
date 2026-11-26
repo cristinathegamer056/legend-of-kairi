@@ -7,6 +7,7 @@
 //   take stays empty) = the feature is off, logged once.
 //   live: `set edmg 0|1` (nothing sent / received hits ignored; the exe ring is still drained), `set edmglog 0|1`.
 #pragma once
+#include "sora_sharexp.h"  // (s270 co-op item 5: shared EXP rows, noted in net_edmg_recv)
 
 // (s196 killsync, sora_net_kills.h, included after this file) every kill seen here goes on the kill list (killsync 0 = nothing):
 // our own (name = the exe's actor name: Enemy_* only), and peer slot k's EDMG kill with what its apply returned (-1 / no exe fn = waiting)
@@ -99,6 +100,23 @@ static void net_edmg_pump(uint64_t now) {
     }
 }
 
+// (s270 sharexp, sora_sharexp.h) slot k's live kill was queued here: note it when I am alive, he is on my map and within
+// sharexpr m of me (his last SNAP's feet). Off = never called.
+static void net_sharexp_note(int k, uint32_t hid, uint64_t now) {
+    const NetPeerSlot *sl = &NET.slot[k];
+    float d = -1;
+    const char *no = NET.dead ? "you are down" : !NET.have_feet ? "no position of yours" : sl->hidden ? "he is on another map"
+                     : sl->p.n <= 0 ? "no position of his" : NULL;
+    if (!no && !sx_near(NET.feet, sl->p.ring[sl->p.n - 1].feet, (float)g_sharexp_r, &d)) no = "too far";
+    if (no) {
+        SX.nfar++;
+        if (g_sharexp_log) LOG("[sora] shared EXP: peer %d's kill hid=%08x not shared (%s, %.0f m)\n", k + 1, hid, no, d);
+        return;
+    }
+    sx_note(hid, k, d, now);
+    if (g_sharexp_log) LOG("[sora] shared EXP: peer %d killed hid=%08x %.0f m from you: noted\n", k + 1, hid, d);
+}
+
 // a NET_EDMG packet from slot k (header already checked by net_unpack_ex)
 static void net_edmg_recv(int k, const uint8_t *buf, int n, uint64_t now) {
     NetPeerSlot *sl = &NET.slot[k];
@@ -120,6 +138,7 @@ static void net_edmg_recv(int k, const uint8_t *buf, int n, uint64_t now) {
         }
         int r = NETED.apply(e[i].hid, e[i].dealt, e[i].after, e[i].f54, e[i].f40, e[i].flags & NEDF_KILL ? 1 : 0);
         if (e[i].flags & NEDF_KILL) net_kills_edmg(k, e[i].hid, r, now);  // (s196 killsync)
+        if (g_sharexp && r == 1 && (e[i].flags & NEDF_KILL)) net_sharexp_note(k, e[i].hid, now);  // (s270 sharexp)
         if (r == 1) NETED.st.rx_queued++;
         else if (r == 2) NETED.st.rx_pending++;
         else NETED.st.rx_ignored++;

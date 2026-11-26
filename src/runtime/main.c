@@ -136,7 +136,13 @@ void backend_clear_window(void);      // a black frame while the game is down
 static void reboot_idle(void) {  // (main thread, while guest threads stop) keep the window alive
     SDL_Event e;
     while (SDL_PollEvent(&e))
-        if (e.type == SDL_EVENT_QUIT) { LOG("window closed\n"); exit(0); }
+        if (e.type == SDL_EVENT_QUIT) {
+            LOG("window closed\n");
+#ifdef __linux__
+            ui_quit();  // (s277: no exit-time library teardown while the present thread runs)
+#endif
+            exit(0);
+        }
 }
 
 static void teardown(void) {

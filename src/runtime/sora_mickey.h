@@ -540,7 +540,7 @@ static void mk_tick(int life, uint64_t present) {
     bool ko = false, chose = false;  // (chose: s117 review - the roll after "I won't give up!", not the font-missing fallback)
     if (MK.surv_count) {
         int what = 0, n = MK.surv_count(&what);
-        if (n != MK.seen_surv) MK.seen_surv = n, ko = what == 3 && !MK.active;
+        if (n != MK.seen_surv) MK.seen_surv = n, ko = what == 3 && !MK.active && !du_floor_on();  // (s272 duel: the duel's KO floor is not a Mickey KO)
     }
     if (MK.force && !MK.active) ko = true;
     MK.force = false;

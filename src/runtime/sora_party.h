@@ -42,6 +42,19 @@ static bool g_party_absorbed[PARTY_N];  // (s68 drive: a Drive Form took him in 
 // set (sora_form.h fm_absorb, sora_summon.h sm_end); the slot keeps its own member underneath. Rides a hot reload in PPICK_ENV (" off=").
 static bool g_pslot_off[PARTY_N];
 static bool party_slot_off(int s) { return s >= 0 && s < PARTY_N && g_pslot_off[s]; }
+// (s269 F3) the co-op rule (sora_dbgmenu.h dbm_coop_tick_), not the player, made this slot None: filled again when the room ends. Rides a
+// hot reload in PPICK_ENV after " off=" as " auto=<d><g>"; no such text (an older DLL's env) = no auto bits, as before.
+static bool g_coop_auto[PARTY_N];
+static void party_pick_tail_fmt(char *out, size_t n) {  // " off=DG[ auto=DG]" ("" when no slot is off); an older DLL stops at " off=DG"
+    out[0] = 0;
+    if (!g_pslot_off[0] && !g_pslot_off[1]) return;
+    int k = snprintf(out, n, " off=%d%d", g_pslot_off[0], g_pslot_off[1]);
+    if ((g_coop_auto[0] || g_coop_auto[1]) && k > 0 && (size_t)k < n) snprintf(out + k, n - (size_t)k, " auto=%d%d", g_coop_auto[0], g_coop_auto[1]);
+}
+static void party_pick_auto_parse(const char *b, bool a[PARTY_N]) {  // the auto bits of an env string (none without " auto=")
+    const char *o = strstr(b, " off="), *u = strstr(b, " auto=");
+    for (int s = 0; s < PARTY_N; s++) a[s] = o && u && o[5 + s] == '1' && u[6 + s] == '1';  // (only a slot that is also off)
+}
 static bool g_plim_hold[PARTY_N];       // (s133 limits: a party Limit (sora_plimit.h) owns him - out of the follow / combat AI, drawn there; the HUD plate stays)
 #define PTRAIL_N 200            // Sora's last grounded points (PHH Trail n 200)
 #define PTRAIL_STEP_CM 40.0f    // ... at least this far apart (PHH step 40 UU) or PTRAIL_DY_CM up / down
@@ -1971,6 +1984,17 @@ static struct { int nb, frames; const float *m; } g_pwf[PARTY_N];
 static bool g_pw_on[PARTY_N];  // (the exe has a detached weapon from us for this member)
 static bool g_pw_hid[PARTY_N];  // (s218) we hid this member's weapon (field slot rule)
 static bool g_pwfield;          // (s218) live "set pwfield 1": a stand-in's weapon stays shown on field slots too
+// (pnoanimal) user: "they should be only attacking enemies": linkpos's enemy list holds BotW's animals too (log: Animal_Ptarmigan_B,
+// Animal_Cassowary_A). The party's list skips every actor named Animal_* except Animal_Wolf_* / Animal_Bear_* (they attack Link;
+// user's choice). Their battle stance reads the same list, so a bird no longer starts it either. Sora's own targets are untouched.
+// SAVAGEWIND_PARTY_NOANIMAL=0 / live "set pnoanimal 0" = every listed actor, as before; default 1 (user tested, user's choice).
+static int g_pnoanimal = 1;  /* (s288: the user played it, "those all work": default ON) */
+int linkpos_enemy_name(uint64_t actor, char *buf, int n);
+static bool party_animal_skip(uint64_t actor) {
+    char nm[64];
+    if (!g_pnoanimal || !linkpos_enemy_name(actor, nm, sizeof nm) || strncmp(nm, "Animal_", 7)) return false;
+    return strncmp(nm + 7, "Wolf_", 5) && strncmp(nm + 7, "Bear_", 5);
+}
 static void pwf_load(int i, const char *path) {
     FILE *f = fopen(path, "rb");
     if (!f) { LOG("[party] %s: no weapon flight bake %s\n", PARTY[i].name, path); return; }
@@ -2299,6 +2323,8 @@ static void party_load(void) {
     }
     P.rnd = (uint32_t)GetTickCount();
     P.combat = env_f("SAVAGEWIND_PARTY_COMBAT", 1) != 0;
+    g_pnoanimal = env_f("SAVAGEWIND_PARTY_NOANIMAL", (float)g_pnoanimal) != 0;  // (pnoanimal)
+    if (!g_pnoanimal) LOG("[party] pnoanimal off: Donald / Goofy fight every listed actor, animals too\n");
     party_pick_restore();  // (s217 riku: a hot reload keeps this session's pick)
 }
 
@@ -2343,9 +2369,9 @@ static uint32_t party_have_mask(void) {
     return m;
 }
 static void party_pick_persist(void) {
-    char b[48];
+    char b[64];
     int n = snprintf(b, sizeof b, "0:%d 1:%d", g_pchar[0], g_pchar[1]);
-    if (g_pslot_off[0] || g_pslot_off[1]) snprintf(b + n, sizeof b - (size_t)n, " off=%d%d", g_pslot_off[0], g_pslot_off[1]);  // (s233: an older DLL stops reading at the 2nd pair)
+    party_pick_tail_fmt(b + n, sizeof b - (size_t)n);  // (s233: an older DLL stops reading at the 2nd pair; s269: " auto=" after " off=")
     SetEnvironmentVariableA(PPICK_ENV, pchar_home(g_pchar, 0) && pchar_home(g_pchar, 1) && !g_pslot_off[0] && !g_pslot_off[1] ? NULL : b);
 }
 static int party_level(int i);
@@ -2398,6 +2424,7 @@ static int party_swap(int slot, int c, const char *why) {
     g_party_id[slot] = id;
     if (id > 0) PD.shape(id, PARTY[slot].shadow_r, 0, 0, 0);
     if (id > 0 && PD.weapon) PD.weapon(id, true);
+    pcap_weapon(slot, true);  // (s267 review F1: the friend's copy shows the new member's weapon too)
     if (id > 0 && PD.weapon_at) PD.weapon_at(id, NULL, 0, NULL, 0, 0);
     g_pw_on[slot] = false, g_pw_hid[slot] = false, g_pb_cur_ok[slot] = false;  // (no blend across two skeletons; weapon shown above)
     PS.m[slot].seen = false, PS.m[slot].voice = -1;
@@ -2423,7 +2450,7 @@ static int party_swap(int slot, int c, const char *why) {
     return c;
 }
 static void party_pick_restore(void) {
-    char b[48];
+    char b[64];
     DWORD n = GetEnvironmentVariableA(PPICK_ENV, b, sizeof b);
     int s[2], c[2];
     if (!n || n >= sizeof b) return;
@@ -2440,6 +2467,10 @@ static void party_pick_restore(void) {
             if (g_party_id[s2] > 0 && PD.off) PD.off(g_party_id[s2]);
             LOG("[party] hot reload: slot %d (%s's place) stays empty (Debug Menu None)\n", s2, s2 ? "Goofy" : "Donald");
         }
+    bool au[PARTY_N];  // (s269 F3: the rule's None marks: the room's end gives the slot back)
+    party_pick_auto_parse(b, au);
+    for (int s2 = 0; s2 < PARTY_N; s2++)
+        if (au[s2] && g_pslot_off[s2]) g_coop_auto[s2] = true, LOG("[party] hot reload: slot %d's None was made by the co-op rule\n", s2);
     party_pick_persist();  // (what really stands now: a refused pick is gone from the env)
 }
 
@@ -2535,6 +2566,7 @@ static bool party_set(const char *key, int v) {  // (live keys; sora.c's "set" c
     else if (!strcmp(key, "psfxlog")) PS.log = v != 0;
     else if (!strcmp(key, "pfx")) g_pfx = v != 0, LOG("[party] pfx %d (the stand-ins' own KH2 sparks + ribbon: %s)\n", g_pfx, g_pfx ? "on" : "off, as before s223");  // (s223 rikufx)
     else if (!strcmp(key, "hudparty")) g_party_hud = v != 0;  // (s57: KH2's party gauges on / off)
+    else if (!strcmp(key, "pnoanimal")) g_pnoanimal = v != 0, LOG("[party] pnoanimal %d (%s)\n", g_pnoanimal, g_pnoanimal ? "animals skipped, wolves / bears kept" : "every listed actor");  // (pnoanimal)
     else if (!strcmp(key, "pwfield")) g_pwfield = v != 0, LOG("[party] pwfield %d (a stand-in's weapon on field slots: %s)\n", g_pwfield, g_pwfield ? "shown" : "hidden");  // (s218)
     else if (!strcmp(key, "ppick")) party_swap(0, pchar_of_pick(v), "live set ppick");  // (s217 riku: 0 Donald, 1 Riku in Donald's place)
     else if (!strcmp(key, "pchar1")) party_swap(0, v, "live set pchar1");  // (s220: character id, sora_pchar.h PCH_*, in Donald's place)
@@ -2753,7 +2785,7 @@ static void party_draw_member(int i, float to_u) {
     if (PD.weapon) {  // (s218) Riku: Way to the Dawn off on his field slots (live "set pwfield 1" = always shown, the s217 look)
         bool hid = !g_pwfield && party_weapon_field_hidden(i, slot, m->blend >= 0, m->from_slot);
         if (hid != g_pw_hid[i]) {
-            PD.weapon(id, !hid), g_pw_hid[i] = hid;
+            PD.weapon(id, !hid), g_pw_hid[i] = hid, pcap_weapon(i, !hid);  // (s267: the friend's copy hides it too)
             if (P.log) LOG("[party] %s: weapon %s (slot %d%s)\n", PARTY[i].name, hid ? "hidden: field slot" : "shown", slot, m->blend >= 0 ? ", blending" : "");
         }
     }
@@ -2779,13 +2811,13 @@ static void party_draw_member(int i, float to_u) {
         }
         g_pb_cur_ok[i] = true;
         PD.world(id, g_pb_cur[i], m->pos, m->face, to_u);
-        if (pchar_home(g_pchar, i))  // (s217 riku: a stand-in is not sent: a friend's game would draw Donald with his poses)
-            pcap_commit(i, m->pos, m->face, slot, clock, floor_y, wet_now, true, m->from_slot, m->from_clock, w, has_sh ? sh : NULL);
+        // (s267 co-op item 2: a stand-in is sent too, with his character id: the friend's game draws him, not Donald with his poses)
+        pcap_commit(i, g_pchar[i], m->pos, m->face, slot, clock, floor_y, wet_now, true, m->from_slot, m->from_clock, w, has_sh ? sh : NULL);
         return;
     }
     g_pb_cur_ok[i] = false;
     PD.pose(id, slot, clock, m->pos, m->face, to_u);
-    if (pchar_home(g_pchar, i)) pcap_commit(i, m->pos, m->face, slot, clock, floor_y, wet_now, false, 0, 0, 0, has_sh ? sh : NULL);
+    pcap_commit(i, g_pchar[i], m->pos, m->face, slot, clock, floor_y, wet_now, false, 0, 0, 0, has_sh ? sh : NULL);
 }
 
 // Each driving frame after Sora's own draw (replaces slice 2's fixed idle placement); also from party_other while
@@ -2801,8 +2833,12 @@ static void party_tick(float kh, float to_u, int st) {
         uint64_t a[PC_ENEMY_MAX];
         float p[PC_ENEMY_MAX][3];
         int32_t l[PC_ENEMY_MAX];
-        int n = P.combat ? linkpos_enemies(a, p, l, PC_ENEMY_MAX) : 0;
-        for (int k = 0; k < n; k++) en[k].actor = a[k], memcpy(en[k].pos, p[k], sizeof en[k].pos), en[k].life = l[k];
+        int n = P.combat ? linkpos_enemies(a, p, l, PC_ENEMY_MAX) : 0, m = 0;
+        for (int k = 0; k < n; k++) {
+            if (party_animal_skip(a[k])) continue;  // (pnoanimal)
+            en[m].actor = a[k], memcpy(en[m].pos, p[k], sizeof en[m].pos), en[m].life = l[k], m++;
+        }
+        n = n < 0 ? n : m;
         in.en = en, in.nen = n < 0 ? 0 : n, in.hit_r = g_hit_r, in.hit_h = g_hit_h;
         in.sora_hp = (float)linkpos_link_life(), in.sora_hp_max = (float)g_hud_life_max, in.hk = &PARTY_HOOKS;
     }

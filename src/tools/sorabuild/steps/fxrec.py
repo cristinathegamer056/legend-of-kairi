@@ -3,7 +3,7 @@
   "fx": "phh"    (default) nothing to build: the fx tools read kh2_fx.bin / kh2_fx.json from the PHH cache as before.
   "fx": "fxrec"  our own recorder (tools/sorabuild/fxrec/): fxrec_build compiles fxrec_boot.exe (MSYS2 UCRT64 clang), fxrec_record
                  runs it over the 82 files of fxrec/files82.txt (loopend.py decides the loop-end tails from each file's own script)
-                 and phf2write.py writes the PHF2 v4 bin + json.  Config: "kh2exe" = the Steam KH2 FM exe (sha1 2548F119..5A, others
+                 and phf2write.py writes the PHF2 v4 bin + json.  Config: "kh2exe" = the Steam or Epic KH2 FM exe (fxrec_ldr.h KH2_RVAS, others
                  refused), "kh2" = KH2 extract; optional "fxrec_jobs" (files recorded at once, default 2; each file = 5 recorder
                  processes of up to 768 MB; the heavy files run alone anyway, s164), "clang" (clang.exe, default MSYS2 UCRT64), "bash" (Git bash), and for tests only
                  "fxrec_only" = regex over the file names (a subset bin; the fx chain refuses to use it).
@@ -105,6 +105,8 @@ def record(ctx):
         ctx.log("TEST FILTER fxrec_only=%r: subset recording, not usable by the fx chain" % ctx.cfg["fxrec_only"])
     if ctx.cfg.get("bash"):
         args += ["--sh", ctx.cfg["bash"]]
+    if ctx.cfg.get("wine"):  # (s280) Linux: fxrec_boot.exe runs under wine
+        args += ["--wine", ctx.cfg["wine"]]
     keepf = ctx.workp("fxrec/keep.json")
     if ctx.fx_keep == "used":
         # keep list from OUR tool tables (no game bytes, no kh2_fx.*): only these elements / tails are recorded
@@ -136,6 +138,8 @@ def record_party(ctx):
             "--build", ctx.workp("fxrec/build/fxrec_boot.exe")]
     if ctx.cfg.get("bash"):
         args += ["--sh", ctx.cfg["bash"]]
+    if ctx.cfg.get("wine"):  # (s280) Linux: fxrec_boot.exe runs under wine
+        args += ["--wine", ctx.cfg["wine"]]
     ctx.py(_fx(ctx, "recordall.py"), *args)
     open(marker, "w").write(_party_tag(ctx) + "\n")
 

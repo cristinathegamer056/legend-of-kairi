@@ -128,6 +128,14 @@ static inline int pchar_step(int slot, const int pchar[PCH_SLOTS], uint32_t have
     return k >= 0 && k < n ? o[k] : -1;
 }
 
+// ---- (s267 co-op item 2, user s265 + s267) in multiplayer (the game in a room: net on) each player has ONE party member: only one
+// Party row holds someone. off[] = the rows' None; keep = the slot the player picked last (0 at start: Donald stays, Goofy's place
+// goes None). Returns the slot to empty now, -1 = nothing to do (single player, or a row is None already: both None is fine).
+static inline int pchar_coop_drop(bool coop, const bool off[PCH_SLOTS], int keep) {
+    if (!coop || off[0] || off[1]) return -1;
+    return keep == 1 ? 0 : 1;
+}
+
 // ---- the old live keys "ppick 0|1" / "dbmparty 0|1" (s217): 0 = Donald, 1 = Riku in Donald's place
 enum { PPICK_DONALD, PPICK_RIKU };
 static inline int pchar_of_pick(int v) { return v == PPICK_RIKU ? PCH_RIKU : PCH_DONALD; }

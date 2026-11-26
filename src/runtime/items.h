@@ -48,6 +48,7 @@ unsigned items_requested(void);
 ItemResult items_last_result(void);
 // Item i's picture in the pouch as RGBA8 rows, w x h (free() it); NULL without one
 unsigned char *items_icon(int i, int *w, int *h);
+unsigned char *items_icon_actor(const char *actor, int *w, int *h);  // (botwpic) by actor name
 
 #ifdef __cplusplus
 }

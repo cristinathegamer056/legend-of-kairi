@@ -359,6 +359,51 @@ int sora_sfx_hit(int atkp_row, float gain, const float pos[3]) {
     return sora_sfx_play_at(id, gain, pos);
 }
 
+// (kh2steps) the BotW surface step swap (sora_sfx.h sora_sfx_step_surface)
+static char g_step_bank[24];
+static float g_step_gain = 1.0f;
+void sora_sfx_step_surface(const char *bank, float gain) {
+    if (!bank) bank = "";
+    strncpy(g_step_bank, bank, sizeof g_step_bank - 1);
+    g_step_gain = gain > 0 ? gain : 1.0f;
+}
+// KH2 footstep sound id -> the armed bank's matching BotW step (-1 = keep KH2's)
+static unsigned g_steps_fired;  // (watersplash) Sora's walk / run steps so far (sora_sfx_steps_fired)
+static bool g_last_step_run;    // (watersplash) that step was a run step (KH2 cues 16..19)
+unsigned sora_sfx_steps_fired(void) { return g_steps_fired; }
+bool sora_sfx_last_step_run(void) { return g_last_step_run; }
+static int step_swap(int id) {
+    if (!g_step_bank[0] || id < 0 || (uint32_t)id >= G.h->n_sounds) return -1;
+    const char *key = G.snd[id].key;
+    if (strncmp(key, "se/se705.win32.scd#", 19)) return -1;
+    int cue = atoi(key + 19);
+    char c = cue >= 16 && cue <= 19 ? 'n' : cue >= 20 && cue <= 23 ? 's' : cue == 25 ? 'j' : cue == 26 ? 'l' : 0;
+    if (!c) return -1;
+    if (c == 's' || c == 'n') g_steps_fired++, g_last_step_run = c == 'n';
+    static struct { char bank[24]; char c; int first, count; } cache[48];
+    static int ncache;
+    static unsigned turn;
+    int hit = -1;
+    for (int i = 0; i < ncache; i++)
+        if (cache[i].c == c && !strcmp(cache[i].bank, g_step_bank)) { hit = i; break; }
+    if (hit < 0) {
+        char nm[40], pre[44];
+        snprintf(nm, sizeof nm, "bs/%s/%c", g_step_bank, c);
+        snprintf(pre, sizeof pre, "%s/", nm);
+        int first = -1, count = 0;
+        for (uint32_t i = 0; i < G.h->n_names; i++)
+            if (!strncmp(G.name[i].name, nm, 31)) { first = (int)G.name[i].sound; break; }
+        if (first >= 0)
+            while ((uint32_t)(first + count) < G.h->n_sounds && !strncmp(G.snd[first + count].key, pre, strlen(pre))) count++;
+        if (ncache == 48) ncache = 0;  // (a bounded cache: 34 banks x 4 classes is the most)
+        hit = ncache++;
+        strcpy(cache[hit].bank, g_step_bank), cache[hit].c = c, cache[hit].first = first, cache[hit].count = count;
+        if (G.log) LOG("[sora-sfx] step bank %s: %d sounds\n", nm, count);
+    }
+    if (cache[hit].first < 0 || !cache[hit].count) return -1;
+    return cache[hit].first + (int)(turn++ % (unsigned)cache[hit].count);
+}
+
 int sora_sfx_motion(int slot, float prev, float clock, const float pos[3]) {
     if (!init() || slot < 0) return 0;
     int n = 0;
@@ -375,7 +420,10 @@ int sora_sfx_motion(int slot, float prev, float clock, const float pos[3]) {
             uint32_t k = t->cycle ? G.cycle[i] % t->count : 0;
             if (t->cycle) G.cycle[i] = (uint8_t)((G.cycle[i] + 1) % t->count);
             int id = (int)G.trig_snd[t->first + k];
-            if ((pos ? sora_sfx_play_at(id, 1.0f, pos) : sora_sfx_play(id, 1.0f)) >= 0) n++;
+            float g = 1.0f;
+            int sw = step_swap(id);  // (kh2steps) the surface's BotW step instead of KH2's
+            if (sw >= 0) id = sw, g = g_step_gain;
+            if ((pos ? sora_sfx_play_at(id, g, pos) : sora_sfx_play(id, g)) >= 0) n++;
         }
     }
     return n;

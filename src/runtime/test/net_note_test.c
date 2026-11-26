@@ -217,7 +217,7 @@ int main(void) {
     CHECK(!strcmp(ver, "dev+net12"));
     nnote_version(ver, 5, NULL, 11);
     CHECK(!strcmp(ver, "dev+"));  // (cut to fit, never past the buffer)
-    CHECK(strlen("8fff2ca146b9805a+net11") <= 64);  // (a note's label: 64 at most)
+    CHECK(strlen("8fff2ca146b9805a+net12") <= 64);  // (a note's label: 64 at most)
 
     printf("4. (step 2) attack / jump slots from the real ptya tables (both sides read the same)\n");
     int mo;
@@ -238,6 +238,7 @@ int main(void) {
         CHECK(miss >= 0 && nact_kind(miss * 4, roxas_ptya, ROXAS_PTYA_N, NULL) == NACT_NONE && nact_kind(miss * 4, kh_ptya, n0, NULL) == NACT_ATTACK);
     }
     CHECK(nact_kind(NACT_MOT_JUMP * 4, NULL, 0, NULL) == NACT_JUMP && nact_kind(500, NULL, 0, NULL) == NACT_NONE);
+    for (int v = 0; v < 4; v++) CHECK(nact_kind(NACT_MOT_HIGH_JUMP * 4 + v, kh_ptya, n0, &mo) == NACT_JUMP && mo == 201);  // (s288 hjanim)
     char det[24];
     nact_detail(det, (int)sizeof det, 191);
     CHECK(!strcmp(det, "m191") && !strcmp(nact_name(NACT_ATTACK), "attack") && !strcmp(nact_name(NACT_JUMP), "jump") && !*nact_name(NACT_NONE));

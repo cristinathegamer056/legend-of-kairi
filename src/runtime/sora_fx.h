@@ -29,6 +29,10 @@ int sora_fx_id(const char *name);
 int sora_fx_spawn(int id, const float pos[3], float yaw, float scale);
 int sora_fx_event(const char *name, const float pos[3], float yaw, float scale);  // = spawn(sora_fx_id(name), ...)
 void sora_fx_move(int h, const float pos[3], float yaw);  // the owner's place this frame (bound elements, shards)
+// (kbdrawfx) a 3x3 turn (row-major) of element h's recorded points in sorabake model space (x left, y up, z fwd; after
+// the bound flip), applied before the yaw; NULL = none again. For an element KH2 binds to a bone with its orientation
+// (keyblade_appear: W_EX010 bone 2). The DLL resolves it with GetProcAddress (older exes lack it).
+void sora_fx_orient(int h, const float m[9]);
 void sora_fx_kill(int h);                                  // gone at once (KH2's effect_kill)
 void sora_fx_fadeout(int h, float frames);                 // KH2's effect_fadeout: alpha to 0 over `frames`, then gone
 bool sora_fx_alive(int h);

@@ -84,7 +84,7 @@ def trigjson(ctx):
             ctx.copy(os.path.join(ctx.tools, FXD, "trigjson", f), os.path.join(src, f))
         ctx.run([ctx.dotnet, "build", "-c", "Release", "-o", build, "-p:OpenKhDir=" + ctx.openkh,
                  os.path.join(src, "trigjson.csproj")], cwd=src)
-    exe = os.path.join(build, "trigjson.exe")
+    exe = os.path.join(build, "trigjson" + sb.EXE)
     for n in TRIG:
         ctx.run([exe, ctx.kh2, n, ctx.workp("fxtrig/trig_%s.json" % n)])
     shutil.rmtree(src, ignore_errors=True)
@@ -290,6 +290,20 @@ def sfx_mickey(ctx):
     swap(ctx, new, cur_sfx(ctx))
 
 
+def sfx_botwsteps(ctx):
+    """(kh2steps) BotW's own per-surface footstep sounds (the player's romfs Sound/Resource M_Mt_*.bars + the water steps),
+    appended last; the exe plays them on Sora's KH2 step frames by the surface under him (fx/botwsteps.py)."""
+    vgm = ctx.cfg.get("vgmstream") or shutil.which("vgmstream-cli")
+    if not vgm:
+        raise SystemExit("[sorabuild] sfx_botwsteps needs vgmstream-cli (config 'vgmstream' or the kit): it decodes BotW's step sounds")
+    ctx.need(os.path.join(ctx.romfs, "Sound", "Resource", "M_Mt_Grass.bars"))
+    new = cur_sfx(ctx) + ".new"
+    if os.path.exists(new):
+        os.remove(new)
+    ctx.py(T(ctx, "botwsteps.py"), cur_sfx(ctx), new, ctx.romfs, vgm, ctx.workp("fxtmp/botwsteps/x")[:-2], env=envs(ctx))
+    swap(ctx, new, cur_sfx(ctx))
+
+
 def sfx_final(ctx):
     tmp = ctx.outp("sfx/sfx.bin") + ".tmp"
     shutil.copyfile(cur_sfx(ctx), tmp)
@@ -332,14 +346,16 @@ STEPS = [
     # fx/kbswingse.py, reads SB_KH2's a.us + Sora's weapon msets)
     Step("sfx_kbswingse", _sfx_tool("kbswingse.py"), deps=["sfx_kbhitse"]),
     Step("fx_final", fx_final, deps=["fxsfx_kbown2"], outputs=["fx/fx.bin"]),
-    Step("sfx_final", sfx_final, deps=["sfx_kbswingse"], outputs=["sfx/sfx.bin"]),
+    # (kh2steps) BotW's per-surface footstep sounds from the player's romfs, appended last (fx/botwsteps.py)
+    Step("sfx_botwsteps", sfx_botwsteps, deps=["sfx_kbswingse"]),
+    Step("sfx_final", sfx_final, deps=["sfx_botwsteps"], outputs=["sfx/sfx.bin"]),
 ]
 
 # (s154 review M1/M2) the running packs make these steps ONE chain: if any of them has to run, sorabuild re-runs all of them
 # from fx_base / sfx_base (2 min). A half-done step or a lone re-run can then never leave a pack with missing or doubled elements.
 CHAIN = {"fx_base", "fx_prize", "fx_magic", "fx_limits", "sfx_base", "sfx_potion", "sfx_abil", "sfx_roxas", "sfx_mickey",
          "sfx_skate", "fxsfx_chick", "fx_fps", "fxsfx_stitch", "fx_ohana", "fxsfx_sumdata", "fxsfx_knock", "fxsfx_duck",
-         "fxsfx_kbown", "sfx_party2", "fx_party", "fxsfx_kbown2", "sfx_kbhitse", "sfx_kbswingse", "fx_final", "sfx_final"}
+         "fxsfx_kbown", "sfx_party2", "fx_party", "fxsfx_kbown2", "sfx_kbhitse", "sfx_kbswingse", "sfx_botwsteps", "fx_final", "sfx_final"}
 for _s in STEPS:
     if _s.name in CHAIN:
         _s.chain = "fxpacks"
